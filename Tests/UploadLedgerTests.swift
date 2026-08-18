@@ -8,14 +8,16 @@ final class UploadLedgerTests: XCTestCase {
         try await ledger.markQueued(id: "asset-1", taskIdentifier: 7)
         try await ledger.markUploaded(id: "asset-1")
         try await ledger.markQueued(id: "asset-1", taskIdentifier: 8)
-        XCTAssertEqual(try await ledger.record(id: "asset-1")?.state, .uploaded)
+        let state = try await ledger.record(id: "asset-1")?.state
+        XCTAssertEqual(state, .uploaded)
     }
 
     func testFailureRemainsRetryable() async throws {
         let ledger = try UploadLedger(fileURL: temporaryLedgerURL())
         try await ledger.recordDiscovery(id: "asset-2", createdAt: .now)
         try await ledger.markFailed(id: "asset-2", category: .network)
-        XCTAssertEqual(try await ledger.retryableRecords().map(\.id), ["asset-2"])
+        let retryableIDs = try await ledger.retryableRecords().map(\.id)
+        XCTAssertEqual(retryableIDs, ["asset-2"])
     }
 
     func testBaselinePersistsAcrossInstances() async throws {
@@ -25,7 +27,8 @@ final class UploadLedgerTests: XCTestCase {
         try await first.setBaseline(expected)
 
         let reopened = try UploadLedger(fileURL: url)
-        XCTAssertEqual(try await reopened.baseline(), expected)
+        let actual = try await reopened.baseline()
+        XCTAssertEqual(actual, expected)
     }
 
     private func temporaryLedgerURL() -> URL {
