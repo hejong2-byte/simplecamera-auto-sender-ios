@@ -1,7 +1,11 @@
 import Foundation
 import ImageIO
 
-struct SimpleCameraMetadataMatcher: Sendable {
+protocol SimpleCameraMetadataMatching: Sendable {
+    func matches(fileURL: URL) -> Bool
+}
+
+struct SimpleCameraMetadataMatcher: SimpleCameraMetadataMatching {
     func matches(fileURL: URL) -> Bool {
         guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)

@@ -1,6 +1,6 @@
 import Foundation
 
-enum UploadConfigurationError: Error {
+enum UploadConfigurationError: Error, Equatable {
     case missingCredential
     case authenticationBlocked
 }
