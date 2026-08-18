@@ -1,0 +1,33 @@
+name: Release SideStore IPA
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: |
+          brew install xcodegen
+          python3 -m pip install 'qrcode[pil]'
+      - name: Run iOS tests
+        run: bash scripts/test-ios.sh
+      - name: Build unsigned IPA
+        run: bash scripts/build-unsigned-ipa.sh
+      - name: Generate SideStore QR
+        run: |
+          python3 scripts/generate-install-qr.py --check
+          python3 scripts/generate-install-qr.py --output docs/install-qr.png
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/SimpleCameraAutoSender.ipa
+            docs/install-qr.png
