@@ -9,4 +9,5 @@ xcuserdata/
 *.p12
 *.mobileprovision
 .env
+.release-venv/
 
