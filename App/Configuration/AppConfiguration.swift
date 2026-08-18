@@ -6,4 +6,5 @@ enum AppConfiguration {
     )!
     static let keychainService = AppIdentity.bundleIdentifier + ".relay"
     static let keychainAccount = "upload-authorization"
+    static let backgroundSessionIdentifier = AppIdentity.bundleIdentifier + ".background-upload"
 }
