@@ -41,4 +41,17 @@ final class AppDependencies: @unchecked Sendable {
         self.uploader = uploader
         self.syncService = syncService
     }
+
+    @MainActor
+    func makeContentViewModel() -> ContentViewModel {
+        ContentViewModel(
+            credentialStore: credentialStore,
+            ledger: uploader.ledger,
+            uploader: uploader,
+            now: Date.init,
+            send: { [syncService] trigger in
+                try await syncService.run(trigger: trigger)
+            }
+        )
+    }
 }

@@ -10,7 +10,7 @@ struct SimpleCameraAutoSenderApp: App {
 
     var body: some Scene {
         WindowGroup {
-            Text("SimpleCamera 업무사진 전송")
+            ContentView(model: AppDependencies.shared.makeContentViewModel())
         }
     }
 }
