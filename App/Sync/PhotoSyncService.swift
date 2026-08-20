@@ -81,13 +81,13 @@ actor PhotoSyncService {
             withIntermediateDirectories: true
         )
 
-        var seen = Set<String>()
+        var discoveredIDs = Set<String>()
         var discovered = 0
         var matched = 0
         var queued = 0
         var failed = 0
 
-        for delay in scanDelaysNanoseconds {
+        for (scanIndex, delay) in scanDelaysNanoseconds.enumerated() {
             if delay > 0 {
                 try await Task.sleep(nanoseconds: delay)
             }
@@ -95,8 +95,10 @@ actor PhotoSyncService {
                 createdAfter: baseline.addingTimeInterval(-60)
             )
 
-            for candidate in candidates where seen.insert(candidate.localIdentifier).inserted {
-                discovered += 1
+            for candidate in candidates {
+                if discoveredIDs.insert(candidate.localIdentifier).inserted {
+                    discovered += 1
+                }
                 if let record = try await ledger.record(id: candidate.localIdentifier),
                    record.state == .queued || record.state == .uploaded || record.state == .ignored {
                     continue
@@ -116,7 +118,9 @@ actor PhotoSyncService {
                         to: fileURL
                     )
                     guard metadataMatcher.matches(fileURL: fileURL) else {
-                        try await ledger.markIgnored(id: candidate.localIdentifier)
+                        if scanIndex == scanDelaysNanoseconds.indices.last {
+                            try await ledger.markIgnored(id: candidate.localIdentifier)
+                        }
                         try? FileManager.default.removeItem(at: fileURL)
                         continue
                     }
