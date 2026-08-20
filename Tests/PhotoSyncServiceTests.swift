@@ -47,6 +47,33 @@ final class PhotoSyncServiceTests: XCTestCase {
         XCTAssertEqual(source.scanCount, 1)
     }
 
+    func testRetriesPhotoWhoseMetadataBecomesAvailableDuringScan() async throws {
+        let ledger = try await makeLedger()
+        let candidate = PhotoCandidate(
+            localIdentifier: "simple-saving",
+            creationDate: .now
+        )
+        let source = EventuallyReadyPhotoSource(candidate: candidate)
+        let uploader = RecordingUploader(ledger: ledger)
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("test-secret")
+        let service = PhotoSyncService(
+            credentialStore: credentials,
+            photoSource: source,
+            metadataMatcher: TextMetadataMatcher(),
+            ledger: ledger,
+            uploader: uploader,
+            uploadsDirectory: temporaryDirectory(),
+            scanDelaysNanoseconds: [0, 0]
+        )
+
+        let result = try await service.run(trigger: .automation)
+
+        XCTAssertEqual(result.queued, 1)
+        XCTAssertEqual(source.exportCount, 2)
+        XCTAssertEqual(uploader.recordedIDs, ["simple-saving"])
+    }
+
     func testMissingCredentialDoesNotScanOrUpload() async throws {
         let ledger = try await makeLedger()
         let source = FakePhotoSource(items: [])
@@ -129,6 +156,31 @@ private final class FakePhotoSource: PhotoAssetSourcing, @unchecked Sendable {
 
     func exportOriginal(localIdentifier: String, to destination: URL) async throws {
         let software = items.first { $0.0.localIdentifier == localIdentifier }!.1
+        try Data(software.utf8).write(to: destination)
+    }
+}
+
+private final class EventuallyReadyPhotoSource: PhotoAssetSourcing, @unchecked Sendable {
+    private let lock = NSLock()
+    private let candidate: PhotoCandidate
+    private var exportCountValue = 0
+
+    init(candidate: PhotoCandidate) {
+        self.candidate = candidate
+    }
+
+    var exportCount: Int { lock.withLock { exportCountValue } }
+
+    func candidates(createdAfter date: Date) async throws -> [PhotoCandidate] {
+        [candidate]
+    }
+
+    func exportOriginal(localIdentifier: String, to destination: URL) async throws {
+        let attempt = lock.withLock { () -> Int in
+            exportCountValue += 1
+            return exportCountValue
+        }
+        let software = attempt == 1 ? "metadata pending" : "Simple Camera 5.0.7"
         try Data(software.utf8).write(to: destination)
     }
 }
