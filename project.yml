@@ -14,10 +14,6 @@ targets:
     platform: iOS
     sources:
       - path: App
-        excludes:
-          - Resources
-    resources:
-      - path: App/Resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hejong2byte.simplecameraautosender
