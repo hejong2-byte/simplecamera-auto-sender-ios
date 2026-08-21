@@ -21,6 +21,9 @@ mkdir -p "$BUILD_ROOT/Payload" "$ROOT/dist"
 cp -R \
   "$BUILD_ROOT/build/Build/Products/Release-iphoneos/SimpleCameraAutoSender.app" \
   "$BUILD_ROOT/Payload/"
+APP_BUNDLE="$BUILD_ROOT/Payload/SimpleCameraAutoSender.app"
+test -f "$APP_BUNDLE/Assets.car"
+/usr/libexec/PlistBuddy -c 'Print :CFBundleIcons' "$APP_BUNDLE/Info.plist" >/dev/null
 rm -f "$ROOT/dist/SimpleCameraAutoSender.ipa"
 ditto -c -k --sequesterRsrc --keepParent \
   "$BUILD_ROOT/Payload" \
