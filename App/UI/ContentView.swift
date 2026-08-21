@@ -49,7 +49,7 @@ struct ContentView: View {
                 .foregroundStyle(.cyan, .black)
             Text("SimpleCamera 자동전송 ADD-ON")
                 .font(.headline)
-            Text("Simple Camera로 찍은 새 사진만 자동으로 전송합니다.")
+            Text("Simple Cam으로 찍은 새 사진만 자동으로 전송합니다.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -107,7 +107,7 @@ struct ContentView: View {
                 model.isMonitoringEnabled ? "새 사진 감시 시작됨" : "아직 시작하지 않음",
                 systemImage: model.isMonitoringEnabled ? "checkmark.circle.fill" : "record.circle"
             )
-            Text("이 버튼을 누른 시점 이전의 사진은 전송하지 않습니다. 이후 Simple Camera로 찍은 사진만 대상입니다.")
+            Text("이 버튼을 누른 시점 이전의 사진은 전송하지 않습니다. 이후 Simple Cam으로 찍은 사진만 대상입니다.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Button("이 시점부터 자동 전송") {
@@ -120,7 +120,7 @@ struct ContentView: View {
 
     private var automationCard: some View {
         setupCard(number: 4, title: "아이폰 자동화 1회 설정") {
-            Text("단축어 앱 → 자동화 → 앱 → The Simple Camera → 닫힐 때 → 즉시 실행 → 새 SimpleCamera 사진 전송")
+            Text("단축어 앱 → 자동화 → 앱 → Simple Cam → 닫힐 때 → 즉시 실행 → 새 SimpleCamera 사진 전송")
                 .font(.subheadline)
             Text("사진을 고르는 단축키는 만들 필요가 없습니다.")
                 .font(.caption)

@@ -3,7 +3,7 @@ import AppIntents
 struct SendNewSimpleCameraPhotosIntent: AppIntent {
     static let title: LocalizedStringResource = "새 SimpleCamera 사진 전송"
     static let description = IntentDescription(
-        "새로 촬영된 Simple Camera 업무사진을 모두 전송합니다."
+        "Simple Cam으로 새로 촬영한 업무사진을 모두 전송합니다."
     )
     static let openAppWhenRun = false
 
