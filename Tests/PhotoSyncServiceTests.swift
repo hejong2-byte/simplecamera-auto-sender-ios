@@ -74,6 +74,28 @@ final class PhotoSyncServiceTests: XCTestCase {
         XCTAssertEqual(uploader.recordedIDs, ["simple-saving"])
     }
 
+    func testAutomationWaitsForPhotoThatAppearsAfterInitialScans() async throws {
+        let ledger = try await makeLedger()
+        let source = DelayedCandidatePhotoSource(availableOnScan: 4)
+        let uploader = RecordingUploader(ledger: ledger)
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("test-secret")
+        let service = PhotoSyncService(
+            credentialStore: credentials,
+            photoSource: source,
+            metadataMatcher: TextMetadataMatcher(),
+            ledger: ledger,
+            uploader: uploader,
+            uploadsDirectory: temporaryDirectory()
+        )
+
+        let result = try await service.run(trigger: .automation)
+
+        XCTAssertEqual(result.queued, 1)
+        XCTAssertEqual(source.scanCount, 4)
+        XCTAssertEqual(uploader.recordedIDs, ["simple-delayed"])
+    }
+
     func testMissingCredentialDoesNotScanOrUpload() async throws {
         let ledger = try await makeLedger()
         let source = FakePhotoSource(items: [])
@@ -182,6 +204,34 @@ private final class EventuallyReadyPhotoSource: PhotoAssetSourcing, @unchecked S
         }
         let software = attempt == 1 ? "metadata pending" : "Simple Camera 5.0.7"
         try Data(software.utf8).write(to: destination)
+    }
+}
+
+private final class DelayedCandidatePhotoSource: PhotoAssetSourcing, @unchecked Sendable {
+    private let lock = NSLock()
+    private let availableOnScan: Int
+    private var scanCountValue = 0
+
+    init(availableOnScan: Int) {
+        self.availableOnScan = availableOnScan
+    }
+
+    var scanCount: Int { lock.withLock { scanCountValue } }
+
+    func candidates(createdAfter date: Date) async throws -> [PhotoCandidate] {
+        let attempt = lock.withLock { () -> Int in
+            scanCountValue += 1
+            return scanCountValue
+        }
+        guard attempt >= availableOnScan else { return [] }
+        return [PhotoCandidate(
+            localIdentifier: "simple-delayed",
+            creationDate: .now
+        )]
+    }
+
+    func exportOriginal(localIdentifier: String, to destination: URL) async throws {
+        try Data("Simple Camera 5.0.7".utf8).write(to: destination)
     }
 }
 
