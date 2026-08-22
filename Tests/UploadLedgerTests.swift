@@ -11,8 +11,9 @@ final class UploadLedgerTests: XCTestCase {
         try #"{"baseline":0,"records":{}}"#.data(using: .utf8)!.write(to: url)
 
         let ledger = try UploadLedger(fileURL: url)
+        let baseline = try await ledger.allPhotosBaseline()
 
-        XCTAssertNil(try await ledger.allPhotosBaseline())
+        XCTAssertNil(baseline)
     }
 
     func testStartingAllPhotosUsesNowAndClearsOldRecords() async throws {
@@ -22,8 +23,9 @@ final class UploadLedgerTests: XCTestCase {
 
         try await ledger.startAllPhotos(at: start)
 
-        XCTAssertEqual(try await ledger.allPhotosBaseline(), start)
+        let baseline = try await ledger.allPhotosBaseline()
         let records = await ledger.allRecords()
+        XCTAssertEqual(baseline, start)
         XCTAssertTrue(records.isEmpty)
     }
 
