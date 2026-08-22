@@ -3,7 +3,7 @@ import XCTest
 
 final class ProjectSmokeTests: XCTestCase {
     func testBundleIdentifierContract() {
-        XCTAssertEqual(AppIdentity.bundleIdentifier, "com.hejong2byte.simplecameraautosender")
+        XCTAssertEqual(AppIdentity.bundleIdentifier, "com.hejong2byte.photolibraryautosender")
     }
 }
 
