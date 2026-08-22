@@ -6,9 +6,9 @@ final class PhotoSyncServiceTests: XCTestCase {
     func testQueuesEveryNewImageWithoutInspectingMetadata() async throws {
         let ledger = try await makeLedger()
         let source = FakePhotoSource(items: [
-            (PhotoCandidate(localIdentifier: "camera", creationDate: .now), "Apple Camera"),
-            (PhotoCandidate(localIdentifier: "simple-cam", creationDate: .now), "metadata missing"),
-            (PhotoCandidate(localIdentifier: "screenshot", creationDate: .now), "Screenshot")
+            PhotoCandidate(localIdentifier: "camera", creationDate: .now),
+            PhotoCandidate(localIdentifier: "simple-cam", creationDate: .now),
+            PhotoCandidate(localIdentifier: "screenshot", creationDate: .now)
         ])
         let uploader = RecordingUploader(ledger: ledger)
         let service = makeService(ledger: ledger, source: source, uploader: uploader)
@@ -20,26 +20,26 @@ final class PhotoSyncServiceTests: XCTestCase {
         XCTAssertEqual(uploader.recordedIDs, ["camera", "simple-cam", "screenshot"])
     }
 
-    func testQueuesEveryNewMatchingPhotoAndIgnoresOthers() async throws {
+    func testQueuesEveryNewPhotoRegardlessOfSource() async throws {
         let ledger = try await makeLedger()
         let source = FakePhotoSource(items: [
-            (PhotoCandidate(localIdentifier: "simple-1", creationDate: .now), "Simple Camera 5.0.7"),
-            (PhotoCandidate(localIdentifier: "other-1", creationDate: .now), "Apple Camera"),
-            (PhotoCandidate(localIdentifier: "simple-2", creationDate: .now), "Simple Camera 6.0")
+            PhotoCandidate(localIdentifier: "simple-1", creationDate: .now),
+            PhotoCandidate(localIdentifier: "other-1", creationDate: .now),
+            PhotoCandidate(localIdentifier: "simple-2", creationDate: .now)
         ])
         let uploader = RecordingUploader(ledger: ledger)
         let service = makeService(ledger: ledger, source: source, uploader: uploader)
 
         let result = try await service.run(trigger: .automation)
 
-        XCTAssertEqual(result.queued, 2)
-        XCTAssertEqual(uploader.recordedIDs, ["simple-1", "simple-2"])
+        XCTAssertEqual(result.queued, 3)
+        XCTAssertEqual(uploader.recordedIDs, ["simple-1", "other-1", "simple-2"])
     }
 
     func testSecondInvocationDoesNotQueueQueuedAssetsAgain() async throws {
         let ledger = try await makeLedger()
         let source = FakePhotoSource(items: [
-            (PhotoCandidate(localIdentifier: "simple-1", creationDate: .now), "Simple Camera 5.0.7")
+            PhotoCandidate(localIdentifier: "simple-1", creationDate: .now)
         ])
         let uploader = RecordingUploader(ledger: ledger)
         let service = makeService(ledger: ledger, source: source, uploader: uploader)
@@ -64,20 +64,19 @@ final class PhotoSyncServiceTests: XCTestCase {
         XCTAssertEqual(source.scanCount, 1)
     }
 
-    func testRetriesPhotoWhoseMetadataBecomesAvailableDuringScan() async throws {
+    func testRetriesPhotoWhoseOriginalBecomesAvailableDuringScan() async throws {
         let ledger = try await makeLedger()
         let candidate = PhotoCandidate(
             localIdentifier: "simple-saving",
             creationDate: .now
         )
-        let source = EventuallyReadyPhotoSource(candidate: candidate)
+        let source = EventuallyReadablePhotoSource(candidate: candidate)
         let uploader = RecordingUploader(ledger: ledger)
         let credentials = InMemoryCredentialStore()
         try credentials.save("test-secret")
         let service = PhotoSyncService(
             credentialStore: credentials,
             photoSource: source,
-            metadataMatcher: TextMetadataMatcher(),
             ledger: ledger,
             uploader: uploader,
             uploadsDirectory: temporaryDirectory(),
@@ -98,7 +97,6 @@ final class PhotoSyncServiceTests: XCTestCase {
         let service = PhotoSyncService(
             credentialStore: InMemoryCredentialStore(),
             photoSource: source,
-            metadataMatcher: TextMetadataMatcher(),
             ledger: ledger,
             uploader: uploader,
             uploadsDirectory: temporaryDirectory(),
@@ -123,7 +121,6 @@ final class PhotoSyncServiceTests: XCTestCase {
         return PhotoSyncService(
             credentialStore: credentials,
             photoSource: source,
-            metadataMatcher: TextMetadataMatcher(),
             ledger: ledger,
             uploader: uploader,
             uploadsDirectory: temporaryDirectory(),
@@ -149,12 +146,12 @@ final class PhotoSyncServiceTests: XCTestCase {
 
 private final class FakePhotoSource: PhotoAssetSourcing, @unchecked Sendable {
     private let lock = NSLock()
-    private let items: [(PhotoCandidate, String)]
+    private let items: [PhotoCandidate]
     private let scanDelayNanoseconds: UInt64
     private var scanCountValue = 0
 
     init(
-        items: [(PhotoCandidate, String)],
+        items: [PhotoCandidate],
         scanDelayNanoseconds: UInt64 = 0
     ) {
         self.items = items
@@ -168,16 +165,15 @@ private final class FakePhotoSource: PhotoAssetSourcing, @unchecked Sendable {
         if scanDelayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: scanDelayNanoseconds)
         }
-        return items.map(\.0)
+        return items
     }
 
     func exportOriginal(localIdentifier: String, to destination: URL) async throws {
-        let software = items.first { $0.0.localIdentifier == localIdentifier }!.1
-        try Data(software.utf8).write(to: destination)
+        try Data(localIdentifier.utf8).write(to: destination)
     }
 }
 
-private final class EventuallyReadyPhotoSource: PhotoAssetSourcing, @unchecked Sendable {
+private final class EventuallyReadablePhotoSource: PhotoAssetSourcing, @unchecked Sendable {
     private let lock = NSLock()
     private let candidate: PhotoCandidate
     private var exportCountValue = 0
@@ -197,18 +193,10 @@ private final class EventuallyReadyPhotoSource: PhotoAssetSourcing, @unchecked S
             exportCountValue += 1
             return exportCountValue
         }
-        let software = attempt == 1 ? "metadata pending" : "Simple Camera 5.0.7"
-        try Data(software.utf8).write(to: destination)
-    }
-}
-
-private struct TextMetadataMatcher: SimpleCameraMetadataMatching {
-    func matches(fileURL: URL) -> Bool {
-        guard let data = try? Data(contentsOf: fileURL),
-              let value = String(data: data, encoding: .utf8)?.lowercased() else {
-            return false
+        if attempt == 1 {
+            throw PhotoAssetSourceError.originalResourceNotFound
         }
-        return value == "simple camera" || value.hasPrefix("simple camera ")
+        try Data(localIdentifier.utf8).write(to: destination)
     }
 }
 

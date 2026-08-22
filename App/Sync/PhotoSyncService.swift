@@ -8,7 +8,6 @@ enum SyncTrigger: Sendable {
 
 struct SyncEnqueueSummary: Sendable, Equatable {
     let discovered: Int
-    let matched: Int
     let queued: Int
     let failed: Int
 }
@@ -20,7 +19,6 @@ enum PhotoSyncError: Error {
 actor PhotoSyncService {
     private let credentialStore: CredentialStore
     private let photoSource: PhotoAssetSourcing
-    private let metadataMatcher: SimpleCameraMetadataMatching
     private let ledger: UploadLedger
     private let uploader: UploadCoordinating
     private let uploadsDirectory: URL
@@ -30,7 +28,6 @@ actor PhotoSyncService {
     init(
         credentialStore: CredentialStore,
         photoSource: PhotoAssetSourcing,
-        metadataMatcher: SimpleCameraMetadataMatching,
         ledger: UploadLedger,
         uploader: UploadCoordinating,
         uploadsDirectory: URL,
@@ -38,7 +35,6 @@ actor PhotoSyncService {
     ) {
         self.credentialStore = credentialStore
         self.photoSource = photoSource
-        self.metadataMatcher = metadataMatcher
         self.ledger = ledger
         self.uploader = uploader
         self.uploadsDirectory = uploadsDirectory
@@ -69,7 +65,7 @@ actor PhotoSyncService {
               !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw UploadConfigurationError.missingCredential
         }
-        guard let baseline = try await ledger.baseline() else {
+        guard let baseline = try await ledger.allPhotosBaseline() else {
             throw PhotoSyncError.monitoringNotEnabled
         }
         guard !uploader.authenticationBlocked() else {
@@ -83,11 +79,10 @@ actor PhotoSyncService {
 
         var discoveredIDs = Set<String>()
         var discovered = 0
-        var matched = 0
         var queued = 0
         var failed = 0
 
-        for (scanIndex, delay) in scanDelaysNanoseconds.enumerated() {
+        for delay in scanDelaysNanoseconds {
             if delay > 0 {
                 try await Task.sleep(nanoseconds: delay)
             }
@@ -100,7 +95,7 @@ actor PhotoSyncService {
                     discovered += 1
                 }
                 if let record = try await ledger.record(id: candidate.localIdentifier),
-                   record.state == .queued || record.state == .uploaded || record.state == .ignored {
+                   record.state == .queued || record.state == .uploaded {
                     continue
                 }
 
@@ -117,15 +112,6 @@ actor PhotoSyncService {
                         localIdentifier: candidate.localIdentifier,
                         to: fileURL
                     )
-                    guard metadataMatcher.matches(fileURL: fileURL) else {
-                        if scanIndex == scanDelaysNanoseconds.indices.last {
-                            try await ledger.markIgnored(id: candidate.localIdentifier)
-                        }
-                        try? FileManager.default.removeItem(at: fileURL)
-                        continue
-                    }
-
-                    matched += 1
                     try await uploader.enqueue(
                         assetID: candidate.localIdentifier,
                         fileURL: fileURL
@@ -154,7 +140,6 @@ actor PhotoSyncService {
 
         return SyncEnqueueSummary(
             discovered: discovered,
-            matched: matched,
             queued: queued,
             failed: failed
         )

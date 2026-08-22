@@ -16,7 +16,6 @@ final class AppDependencies: @unchecked Sendable {
         let syncService = PhotoSyncService(
             credentialStore: credentialStore,
             photoSource: PhotoKitAssetSource(),
-            metadataMatcher: SimpleCameraMetadataMatcher(),
             ledger: uploader.ledger,
             uploader: uploader,
             uploadsDirectory: uploadsDirectory

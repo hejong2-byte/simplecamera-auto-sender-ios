@@ -19,23 +19,22 @@ enum PhotoAssetSourceError: Error {
 struct PhotoKitAssetSource: PhotoAssetSourcing {
     func candidates(createdAfter date: Date) async throws -> [PhotoCandidate] {
         let options = PHFetchOptions()
-        options.predicate = NSPredicate(
-            format: "mediaType == %d AND creationDate > %@",
-            PHAssetMediaType.image.rawValue,
-            date as NSDate
-        )
-        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
 
-        let result = PHAsset.fetchAssets(with: options)
+        let result = PHAsset.fetchAssets(with: .image, options: options)
         var candidates: [PhotoCandidate] = []
-        result.enumerateObjects { asset, _, _ in
+        result.enumerateObjects { asset, _, stop in
             guard let creationDate = asset.creationDate else { return }
+            guard creationDate > date else {
+                stop.pointee = true
+                return
+            }
             candidates.append(PhotoCandidate(
                 localIdentifier: asset.localIdentifier,
                 creationDate: creationDate
             ))
         }
-        return candidates
+        return candidates.sorted { $0.creationDate < $1.creationDate }
     }
 
     func exportOriginal(localIdentifier: String, to destination: URL) async throws {

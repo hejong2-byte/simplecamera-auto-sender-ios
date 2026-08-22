@@ -1,11 +1,20 @@
 import Foundation
 
 actor UploadLedger {
+    private enum MonitoringMode: String, Codable {
+        case allPhotosV1
+    }
+
     private struct Snapshot: Codable {
         var baseline: Date?
         var records: [String: AssetRecord]
+        var monitoringMode: MonitoringMode?
 
-        static let empty = Snapshot(baseline: nil, records: [:])
+        static let empty = Snapshot(
+            baseline: nil,
+            records: [:],
+            monitoringMode: nil
+        )
     }
 
     private let fileURL: URL
@@ -34,11 +43,21 @@ actor UploadLedger {
     }
 
     func baseline() throws -> Date? {
-        snapshot.baseline
+        try allPhotosBaseline()
     }
 
     func setBaseline(_ date: Date) throws {
+        try startAllPhotos(at: date)
+    }
+
+    func allPhotosBaseline() throws -> Date? {
+        snapshot.monitoringMode == .allPhotosV1 ? snapshot.baseline : nil
+    }
+
+    func startAllPhotos(at date: Date) throws {
         snapshot.baseline = date
+        snapshot.monitoringMode = .allPhotosV1
+        snapshot.records = [:]
         try persist()
     }
 
