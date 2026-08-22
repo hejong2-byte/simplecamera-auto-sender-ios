@@ -34,7 +34,13 @@ actor PhotoSyncService {
         ledger: UploadLedger,
         uploader: UploadCoordinating,
         uploadsDirectory: URL,
-        scanDelaysNanoseconds: [UInt64] = [0, 2_000_000_000, 3_000_000_000]
+        scanDelaysNanoseconds: [UInt64] = [
+            0,
+            2_000_000_000,
+            3_000_000_000,
+            5_000_000_000,
+            5_000_000_000
+        ]
     ) {
         self.credentialStore = credentialStore
         self.photoSource = photoSource
