@@ -11,7 +11,7 @@
 - 자동화는 `Simple Cam이 닫힐 때` 즉시 `새 SimpleCamera 사진 전송`을 실행하도록 올바르게 설정되어 있다.
 - 확인한 Simple Cam 촬영 사진은 JPEG이고 픽셀 크기가 `6048 × 8064`이다.
 - iPhone 기본 카메라 사진은 사진 정보에 `Apple / iPhone 14`와 같은 카메라 제조사·모델 표식이 나타나며, Simple Cam 사진 정보는 다르게 표시된다.
-- 배포 버전 v0.1.3은 TIFF `Software` 값만 `Simple Camera…`인지 검사한다. 해당 값이 없거나 PhotoKit에서 내보낸 표현에 남지 않으면 사진을 발견해도 0장으로 처리하고 마지막 검사에서 영구 `ignored` 상태로 만든다.
+- 배포 버전 v0.1.3은 TIFF `Software` 값만 옛 이름인 `Simple Camera…`인지 검사한다. 현재 앱 이름·메타데이터가 `Simple Cam…`으로 바뀌면 사진을 발견해도 전부 0장으로 처리하고 마지막 검사에서 영구 `ignored` 상태로 만든다.
 - 현재 원본 내보내기 코드는 `.fullSizePhoto`를 `.photo`보다 먼저 선택한다. 판별은 편집 표현보다 원본 `.photo` 리소스를 우선 사용해야 한다.
 
 ## 판별 규칙
@@ -22,10 +22,10 @@
 2. 원본 형식이 JPEG이다.
 3. 원본 픽셀 크기가 `6048 × 8064` 또는 회전된 `8064 × 6048`이다.
 4. 다음 둘 중 하나에 해당한다.
-   - 정규화한 TIFF `Software` 값이 `Simple Camera`이거나 `Simple Camera `로 시작한다.
+   - 정규화한 TIFF `Software` 값이 현재 이름 `Simple Cam` 또는 호환 이름 `Simple Camera`, `The Simple Camera`와 정확히 같거나 해당 이름 뒤에 공백과 버전이 이어진다.
    - TIFF `Software`, `Make`, `Model`이 모두 없거나 빈 값이다.
 
-해상도가 일치해도 `Software`가 Simple Camera가 아니면서 `Software`, `Make`, `Model` 중 하나라도 다른 값으로 존재하면 제외한다. 특히 `Apple` 또는 `iPhone` 기본 카메라 표식이 있으면 반드시 제외한다. 이 규칙은 일반 카메라의 48MP 사진이 같은 해상도인 경우와 다른 앱에서 만든 이미지를 막기 위한 것이다.
+해상도가 일치해도 `Software`가 승인된 Simple Cam 이름이 아니면서 `Software`, `Make`, `Model` 중 하나라도 다른 값으로 존재하면 제외한다. 특히 `Apple` 또는 `iPhone` 기본 카메라 표식이 있으면 반드시 제외한다. 이 규칙은 일반 카메라의 48MP 사진이 같은 해상도인 경우와 다른 앱에서 만든 이미지를 막기 위한 것이다.
 
 판독할 수 없거나 위 조건이 애매하면 전송하지 않는다. 잘못된 사진을 보내는 것보다 Simple Cam 사진 한 장을 보류하는 것을 우선하는 fail-closed 정책을 사용한다.
 
@@ -57,9 +57,11 @@
 ## 테스트
 
 - `6048 × 8064`와 `8064 × 6048`을 모두 허용한다.
-- Simple Camera `Software`가 있으면 Apple/iPhone 모델 정보가 함께 있어도 허용한다.
-- Simple Camera `Software`가 없고 `Software`, `Make`, `Model`이 모두 비어 있으면 목표 해상도 JPEG를 허용한다.
-- 목표 해상도라도 Apple/iPhone 기본 카메라 표식이 있고 Simple Camera `Software`가 없으면 거부한다.
+- 현재 이름 `Simple Cam`과 버전 문자열을 허용한다.
+- 호환 이름 `Simple Camera`, `The Simple Camera`와 버전 문자열을 허용한다.
+- 승인된 Simple Cam `Software`가 있으면 Apple/iPhone 모델 정보가 함께 있어도 허용한다.
+- Simple Cam `Software`가 없고 `Software`, `Make`, `Model`이 모두 비어 있으면 목표 해상도 JPEG를 허용한다.
+- 목표 해상도라도 Apple/iPhone 기본 카메라 표식이 있고 승인된 Simple Cam `Software`가 없으면 거부한다.
 - 목표 해상도라도 다른 `Software`, `Make` 또는 `Model` 값이 있으면 거부한다.
 - HEIC·PNG 등 JPEG가 아닌 파일, 다른 해상도, 손상된 파일, 픽셀 정보를 읽을 수 없는 파일은 거부한다.
 - PhotoKit 리소스 우선순위가 `.photo` 다음 `.fullSizePhoto`인지 검증한다.
