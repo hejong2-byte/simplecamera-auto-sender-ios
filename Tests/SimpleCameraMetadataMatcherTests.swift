@@ -1,65 +1,54 @@
-import CoreGraphics
-import ImageIO
-import UniformTypeIdentifiers
+import Foundation
 import XCTest
 @testable import SimpleCameraAutoSender
 
 final class SimpleCameraMetadataMatcherTests: XCTestCase {
-    func testAcceptsObservedVersionedSoftware() throws {
-        let url = try makeJPEG(software: "Simple Camera 5.0.7")
-        XCTAssertTrue(SimpleCameraMetadataMatcher().matches(fileURL: url))
+    private let matcher = SimpleCameraMetadataMatcher()
+
+    func testAcceptsTargetResolutionWithoutIPhoneMarker() {
+        XCTAssertTrue(matcher.matches(properties: fixture()))
+        XCTAssertTrue(matcher.matches(properties: fixture(
+            width: 8064,
+            height: 6048
+        )))
     }
 
-    func testAcceptsFutureVersionAndCase() throws {
-        let url = try makeJPEG(software: "simple camera 6.2")
-        XCTAssertTrue(SimpleCameraMetadataMatcher().matches(fileURL: url))
+    func testRejectsIPhoneCameraModelAtSameResolution() {
+        XCTAssertFalse(matcher.matches(properties: fixture(
+            cameraModel: "Apple iPhone 14"
+        )))
     }
 
-    func testRejectsAppleCameraAndMissingSoftware() throws {
-        XCTAssertFalse(SimpleCameraMetadataMatcher().matches(
-            fileURL: try makeJPEG(software: "Apple Camera")
-        ))
-        XCTAssertFalse(SimpleCameraMetadataMatcher().matches(
-            fileURL: try makeJPEG(software: nil)
-        ))
+    func testRejectsIPhoneLensModelAtSameResolutionIgnoringCase() {
+        XCTAssertFalse(matcher.matches(properties: fixture(
+            lensModel: "IPHONE 14 back camera"
+        )))
     }
 
-    private func makeJPEG(software: String?) throws -> URL {
+    func testRejectsWrongResolution() {
+        XCTAssertFalse(matcher.matches(properties: fixture(
+            width: 4032,
+            height: 3024
+        )))
+    }
+
+    func testRejectsUnreadableFile() {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("jpg")
-        let pixel = Data([0, 128, 255, 255])
-        let provider = CGDataProvider(data: pixel as CFData)!
-        let image = CGImage(
-            width: 1,
-            height: 1,
-            bitsPerComponent: 8,
-            bitsPerPixel: 32,
-            bytesPerRow: 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
-            provider: provider,
-            decode: nil,
-            shouldInterpolate: false,
-            intent: .defaultIntent
-        )!
-        let destination = CGImageDestinationCreateWithURL(
-            url as CFURL,
-            UTType.jpeg.identifier as CFString,
-            1,
-            nil
-        )!
-        var properties: [CFString: Any] = [:]
-        if let software {
-            properties[kCGImagePropertyTIFFDictionary] = [
-                kCGImagePropertyTIFFSoftware: software
-            ]
-        }
-        CGImageDestinationAddImage(destination, image, properties as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else {
-            throw CocoaError(.fileWriteUnknown)
-        }
-        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
-        return url
+        XCTAssertFalse(matcher.matches(fileURL: url))
+    }
+
+    private func fixture(
+        width: Int = 6048,
+        height: Int = 8064,
+        cameraModel: String? = nil,
+        lensModel: String? = nil
+    ) -> SimpleCameraPhotoProperties {
+        .init(
+            pixelWidth: width,
+            pixelHeight: height,
+            cameraModel: cameraModel,
+            lensModel: lensModel
+        )
     }
 }
