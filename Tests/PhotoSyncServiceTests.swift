@@ -3,6 +3,23 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class PhotoSyncServiceTests: XCTestCase {
+    func testQueuesEveryNewImageWithoutInspectingMetadata() async throws {
+        let ledger = try await makeLedger()
+        let source = FakePhotoSource(items: [
+            (PhotoCandidate(localIdentifier: "camera", creationDate: .now), "Apple Camera"),
+            (PhotoCandidate(localIdentifier: "simple-cam", creationDate: .now), "metadata missing"),
+            (PhotoCandidate(localIdentifier: "screenshot", creationDate: .now), "Screenshot")
+        ])
+        let uploader = RecordingUploader(ledger: ledger)
+        let service = makeService(ledger: ledger, source: source, uploader: uploader)
+
+        let result = try await service.run(trigger: .manual)
+
+        XCTAssertEqual(result.discovered, 3)
+        XCTAssertEqual(result.queued, 3)
+        XCTAssertEqual(uploader.recordedIDs, ["camera", "simple-cam", "screenshot"])
+    }
+
     func testQueuesEveryNewMatchingPhotoAndIgnoresOthers() async throws {
         let ledger = try await makeLedger()
         let source = FakePhotoSource(items: [
