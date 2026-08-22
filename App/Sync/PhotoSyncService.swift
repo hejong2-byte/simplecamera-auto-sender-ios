@@ -6,15 +6,21 @@ enum SyncTrigger: Sendable {
     case retry
 }
 
-struct SyncEnqueueSummary: Sendable, Equatable {
+struct SyncTransferSummary: Sendable, Equatable {
     let discovered: Int
     let matched: Int
-    let queued: Int
+    let uploaded: Int
     let failed: Int
 }
 
 enum PhotoSyncError: Error {
     case monitoringNotEnabled
+}
+
+private struct CandidateTransferOutcome: Sendable {
+    let matched: Int
+    let uploaded: Int
+    let failed: Int
 }
 
 actor PhotoSyncService {
@@ -25,7 +31,7 @@ actor PhotoSyncService {
     private let uploader: UploadCoordinating
     private let uploadsDirectory: URL
     private let scanDelaysNanoseconds: [UInt64]
-    private var inFlight: Task<SyncEnqueueSummary, Error>?
+    private var inFlight: Task<SyncTransferSummary, Error>?
 
     init(
         credentialStore: CredentialStore,
@@ -46,7 +52,7 @@ actor PhotoSyncService {
         self.scanDelaysNanoseconds = scanDelaysNanoseconds
     }
 
-    func run(trigger: SyncTrigger) async throws -> SyncEnqueueSummary {
+    func run(trigger: SyncTrigger) async throws -> SyncTransferSummary {
         if let inFlight {
             return try await inFlight.value
         }
@@ -65,7 +71,7 @@ actor PhotoSyncService {
         }
     }
 
-    private func performRun(trigger: SyncTrigger) async throws -> SyncEnqueueSummary {
+    private func performRun(trigger: SyncTrigger) async throws -> SyncTransferSummary {
         guard let credential = try credentialStore.load(),
               !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw UploadConfigurationError.missingCredential
@@ -85,7 +91,7 @@ actor PhotoSyncService {
         var discoveredIDs = Set<String>()
         var discovered = 0
         var matched = 0
-        var queued = 0
+        var uploaded = 0
         var failed = 0
         var completedUploadInEarlierScan = false
 
@@ -96,7 +102,7 @@ actor PhotoSyncService {
             let candidates = try await photoSource.candidates(
                 createdAfter: baseline.addingTimeInterval(-60)
             )
-            let queuedBeforeScan = queued
+            var candidatesToTransfer: [PhotoCandidate] = []
 
             for candidate in candidates {
                 if discoveredIDs.insert(candidate.localIdentifier).inserted {
@@ -111,50 +117,18 @@ actor PhotoSyncService {
                     id: candidate.localIdentifier,
                     createdAt: candidate.creationDate
                 )
-                let fileURL = uploadsDirectory
-                    .appendingPathComponent(UUID().uuidString)
-                    .appendingPathExtension("original")
-
-                do {
-                    try await photoSource.exportOriginal(
-                        localIdentifier: candidate.localIdentifier,
-                        to: fileURL
-                    )
-                    guard metadataMatcher.matches(fileURL: fileURL) else {
-                        if scanIndex == scanDelaysNanoseconds.indices.last {
-                            try await ledger.markIgnored(id: candidate.localIdentifier)
-                        }
-                        try? FileManager.default.removeItem(at: fileURL)
-                        continue
-                    }
-
-                    matched += 1
-                    try await uploader.upload(
-                        assetID: candidate.localIdentifier,
-                        fileURL: fileURL
-                    )
-                    queued += 1
-                } catch {
-                    failed += 1
-                    let category: UploadErrorCategory
-                    if let configurationError = error as? UploadConfigurationError,
-                       configurationError == .missingCredential
-                        || configurationError == .authenticationBlocked {
-                        category = .authentication
-                    } else if error is URLError {
-                        category = .network
-                    } else {
-                        category = .unreadable
-                    }
-                    try? await ledger.markFailed(
-                        id: candidate.localIdentifier,
-                        category: category
-                    )
-                    try? FileManager.default.removeItem(at: fileURL)
-                }
+                candidatesToTransfer.append(candidate)
             }
 
-            let completedUploadsThisScan = queued - queuedBeforeScan
+            let outcomes = await transfer(
+                candidates: candidatesToTransfer,
+                isFinalScan: scanIndex == scanDelaysNanoseconds.indices.last
+            )
+            let completedUploadsThisScan = outcomes.reduce(0) { $0 + $1.uploaded }
+            matched += outcomes.reduce(0) { $0 + $1.matched }
+            uploaded += completedUploadsThisScan
+            failed += outcomes.reduce(0) { $0 + $1.failed }
+
             if completedUploadInEarlierScan && completedUploadsThisScan == 0 {
                 break
             }
@@ -163,11 +137,113 @@ actor PhotoSyncService {
             }
         }
 
-        return SyncEnqueueSummary(
+        return SyncTransferSummary(
             discovered: discovered,
             matched: matched,
-            queued: queued,
+            uploaded: uploaded,
             failed: failed
         )
+    }
+
+    private func transfer(
+        candidates: [PhotoCandidate],
+        isFinalScan: Bool
+    ) async -> [CandidateTransferOutcome] {
+        let photoSource = self.photoSource
+        let metadataMatcher = self.metadataMatcher
+        let ledger = self.ledger
+        let uploader = self.uploader
+        let uploadsDirectory = self.uploadsDirectory
+        return await withTaskGroup(
+            of: CandidateTransferOutcome.self,
+            returning: [CandidateTransferOutcome].self
+        ) { group in
+            for candidate in candidates {
+                group.addTask {
+                    await Self.transfer(
+                        candidate: candidate,
+                        isFinalScan: isFinalScan,
+                        photoSource: photoSource,
+                        metadataMatcher: metadataMatcher,
+                        ledger: ledger,
+                        uploader: uploader,
+                        uploadsDirectory: uploadsDirectory
+                    )
+                }
+            }
+
+            var outcomes: [CandidateTransferOutcome] = []
+            for await outcome in group {
+                outcomes.append(outcome)
+            }
+            return outcomes
+        }
+    }
+
+    private static func transfer(
+        candidate: PhotoCandidate,
+        isFinalScan: Bool,
+        photoSource: PhotoAssetSourcing,
+        metadataMatcher: SimpleCameraMetadataMatching,
+        ledger: UploadLedger,
+        uploader: UploadCoordinating,
+        uploadsDirectory: URL
+    ) async -> CandidateTransferOutcome {
+        let fileURL = uploadsDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("original")
+        var didMatch = false
+
+        do {
+            try await photoSource.exportOriginal(
+                localIdentifier: candidate.localIdentifier,
+                to: fileURL
+            )
+            didMatch = metadataMatcher.matches(fileURL: fileURL)
+            guard didMatch else {
+                if isFinalScan {
+                    try await ledger.markIgnored(id: candidate.localIdentifier)
+                }
+                try? FileManager.default.removeItem(at: fileURL)
+                return CandidateTransferOutcome(matched: 0, uploaded: 0, failed: 0)
+            }
+
+            try await uploader.upload(
+                assetID: candidate.localIdentifier,
+                fileURL: fileURL
+            )
+            return CandidateTransferOutcome(matched: 1, uploaded: 1, failed: 0)
+        } catch {
+            try? await ledger.markFailed(
+                id: candidate.localIdentifier,
+                category: errorCategory(for: error)
+            )
+            try? FileManager.default.removeItem(at: fileURL)
+            return CandidateTransferOutcome(
+                matched: didMatch ? 1 : 0,
+                uploaded: 0,
+                failed: 1
+            )
+        }
+    }
+
+    private static func errorCategory(for error: Error) -> UploadErrorCategory {
+        if let configurationError = error as? UploadConfigurationError,
+           configurationError == .missingCredential
+            || configurationError == .authenticationBlocked {
+            return .authentication
+        }
+        if error is URLError {
+            return .network
+        }
+        if let uploadError = error as? UploadHTTPError {
+            switch uploadError {
+            case .server:
+                return .server
+            case .invalidResponse:
+                return .unknown
+            }
+        }
+        return .unreadable
     }
 }

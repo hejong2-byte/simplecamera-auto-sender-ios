@@ -15,8 +15,8 @@ final class PhotoSyncServiceTests: XCTestCase {
 
         let result = try await service.run(trigger: .automation)
 
-        XCTAssertEqual(result.queued, 2)
-        XCTAssertEqual(uploader.recordedIDs, ["simple-1", "simple-2"])
+        XCTAssertEqual(result.uploaded, 2)
+        XCTAssertEqual(Set(uploader.recordedIDs), Set(["simple-1", "simple-2"]))
     }
 
     func testSecondInvocationDoesNotQueueQueuedAssetsAgain() async throws {
@@ -30,7 +30,7 @@ final class PhotoSyncServiceTests: XCTestCase {
         _ = try await service.run(trigger: .automation)
         let second = try await service.run(trigger: .automation)
 
-        XCTAssertEqual(second.queued, 0)
+        XCTAssertEqual(second.uploaded, 0)
         XCTAssertEqual(uploader.recordedIDs, ["simple-1"])
     }
 
@@ -69,7 +69,7 @@ final class PhotoSyncServiceTests: XCTestCase {
 
         let result = try await service.run(trigger: .automation)
 
-        XCTAssertEqual(result.queued, 1)
+        XCTAssertEqual(result.uploaded, 1)
         XCTAssertEqual(source.exportCount, 2)
         XCTAssertEqual(uploader.recordedIDs, ["simple-saving"])
     }
@@ -91,7 +91,7 @@ final class PhotoSyncServiceTests: XCTestCase {
 
         let result = try await service.run(trigger: .automation)
 
-        XCTAssertEqual(result.queued, 1)
+        XCTAssertEqual(result.uploaded, 1)
         XCTAssertEqual(source.scanCount, 6)
         XCTAssertEqual(uploader.recordedIDs, ["simple-delayed"])
     }
@@ -119,7 +119,7 @@ final class PhotoSyncServiceTests: XCTestCase {
 
         let result = try await service.run(trigger: .automation)
 
-        XCTAssertEqual(result.queued, 1)
+        XCTAssertEqual(result.uploaded, 1)
         XCTAssertEqual(source.scanCount, 2)
     }
 

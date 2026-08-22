@@ -11,7 +11,7 @@ final class ContentViewModelTests: XCTestCase {
             ledger: ledger,
             uploader: NoOpUploader(),
             now: { expected },
-            send: { _ in SyncEnqueueSummary(discovered: 0, matched: 0, queued: 0, failed: 0) }
+            send: { _ in SyncTransferSummary(discovered: 0, matched: 0, uploaded: 0, failed: 0) }
         )
 
         try await model.enableAutomaticSending()
@@ -27,7 +27,7 @@ final class ContentViewModelTests: XCTestCase {
             ledger: ledger,
             uploader: NoOpUploader(),
             now: Date.init,
-            send: { _ in SyncEnqueueSummary(discovered: 0, matched: 0, queued: 0, failed: 0) }
+            send: { _ in SyncTransferSummary(discovered: 0, matched: 0, uploaded: 0, failed: 0) }
         )
 
         try await model.saveCredential("secret-value")

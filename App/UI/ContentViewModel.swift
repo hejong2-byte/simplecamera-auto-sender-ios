@@ -3,7 +3,7 @@ import Photos
 
 @MainActor
 final class ContentViewModel: ObservableObject {
-    typealias SendAction = @Sendable (SyncTrigger) async throws -> SyncEnqueueSummary
+    typealias SendAction = @Sendable (SyncTrigger) async throws -> SyncTransferSummary
 
     @Published private(set) var photoAuthorizationStatus: PHAuthorizationStatus
     @Published private(set) var hasCredential = false
@@ -11,7 +11,7 @@ final class ContentViewModel: ObservableObject {
     @Published private(set) var queuedCount = 0
     @Published private(set) var uploadedCount = 0
     @Published private(set) var failedCount = 0
-    @Published private(set) var lastSummary: SyncEnqueueSummary?
+    @Published private(set) var lastSummary: SyncTransferSummary?
     @Published private(set) var lastError: String?
     @Published private(set) var isWorking = false
 

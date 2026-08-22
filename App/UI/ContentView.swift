@@ -137,7 +137,7 @@ struct ContentView: View {
                 statusValue("실패", model.failedCount)
             }
             if let summary = model.lastSummary {
-                Text("최근 실행: \(summary.matched)장 확인, \(summary.queued)장 전송 시작")
+                Text("최근 실행: \(summary.matched)장 확인, \(summary.uploaded)장 전송 완료")
                     .font(.caption)
             }
             if let error = model.lastError {
