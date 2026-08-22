@@ -31,13 +31,15 @@ final class DirectUploadCoordinatorTests: XCTestCase {
         }
         await transport.waitUntilStarted()
 
-        XCTAssertEqual(try await ledger.record(id: "simple-1")?.state, .queued)
+        let queuedState = try await ledger.record(id: "simple-1")?.state
+        XCTAssertEqual(queuedState, .queued)
         XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
 
         await transport.succeed(statusCode: 201)
         try await upload.value
 
-        XCTAssertEqual(try await ledger.record(id: "simple-1")?.state, .uploaded)
+        let uploadedState = try await ledger.record(id: "simple-1")?.state
+        XCTAssertEqual(uploadedState, .uploaded)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
     }
 
