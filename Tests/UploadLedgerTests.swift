@@ -23,7 +23,8 @@ final class UploadLedgerTests: XCTestCase {
         try await ledger.startAllPhotos(at: start)
 
         XCTAssertEqual(try await ledger.allPhotosBaseline(), start)
-        XCTAssertTrue(await ledger.allRecords().isEmpty)
+        let records = await ledger.allRecords()
+        XCTAssertTrue(records.isEmpty)
     }
 
     func testUploadedAssetCannotReturnToQueued() async throws {
