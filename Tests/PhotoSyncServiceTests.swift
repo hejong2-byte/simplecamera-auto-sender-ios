@@ -96,6 +96,33 @@ final class PhotoSyncServiceTests: XCTestCase {
         XCTAssertEqual(uploader.recordedIDs, ["simple-delayed"])
     }
 
+    func testStopsAfterSuccessfulUploadAndOneQuietScan() async throws {
+        let ledger = try await makeLedger()
+        let source = FakePhotoSource(items: [
+            (
+                PhotoCandidate(localIdentifier: "simple-fast", creationDate: .now),
+                "Simple Camera 5.0.7"
+            )
+        ])
+        let uploader = RecordingUploader(ledger: ledger)
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("test-secret")
+        let service = PhotoSyncService(
+            credentialStore: credentials,
+            photoSource: source,
+            metadataMatcher: TextMetadataMatcher(),
+            ledger: ledger,
+            uploader: uploader,
+            uploadsDirectory: temporaryDirectory(),
+            scanDelaysNanoseconds: [0, 0, 0, 0]
+        )
+
+        let result = try await service.run(trigger: .automation)
+
+        XCTAssertEqual(result.queued, 1)
+        XCTAssertEqual(source.scanCount, 2)
+    }
+
     func testMissingCredentialDoesNotScanOrUpload() async throws {
         let ledger = try await makeLedger()
         let source = FakePhotoSource(items: [])
