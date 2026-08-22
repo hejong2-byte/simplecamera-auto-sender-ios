@@ -2,7 +2,7 @@
 
 **Goal:** Add three user-initiated multi-select transfers to the iPhone app and carry selected photos, screenshots, MOV files, and MP4 files safely through the existing relay to the Windows receiver.
 
-**Architecture:** Keep the current automatic Simple Cam POST flow unchanged. Add a PhotoKit picker/export service and a metadata-aware explicit PUT upload for manual selections. Extend the relay and receiver with a 95MiB manual-media path while preserving the existing image-only 20MiB automatic path.
+**Architecture:** Keep the current automatic Simple Cam POST flow unchanged. Add a PhotoKit picker/export service and metadata-aware manual uploads. Use a single streamed PUT for small selected files and 32MiB R2 multipart chunks for large videos, while preserving the existing image-only 20MiB automatic path.
 
 **Tech stack:** Swift 5, SwiftUI, PhotosUI, PhotoKit, CryptoKit, XCTest, Cloudflare Workers/R2, TypeScript/Vitest, Python/Pytest/Pillow.
 
@@ -12,8 +12,8 @@
 - Preserve bundle ID, Keychain identity, App Intent type, automatic baseline and existing ledger records.
 - Keep automatic Simple Cam uploads backward compatible.
 - Accept only JPEG, PNG, HEIC, HEIF, QuickTime MOV and MP4.
-- Enforce 95MiB before a manual network request and in the relay/receiver.
-- Stream manual uploads to R2; do not buffer a whole video in Worker memory.
+- Enforce a 2GiB manual-file limit in the app, relay metadata and receiver.
+- Keep each multipart request at 32MiB and stream it to R2; never buffer a whole video in Worker memory.
 - Keep videos out of image clipboard preparation.
 - Do not publish an IPA, release, QR, or remote Worker deployment in this implementation pass.
 
@@ -45,9 +45,10 @@
 1. Add failing request tests for PUT URL, SHA-256, MIME type, encoded filename, captured time and size.
 2. Add streaming file SHA-256 and deterministic remote UUID generation.
 3. Add a manual upload descriptor without changing the existing automatic method behavior.
-4. Reject files over 95MiB before transport starts.
-5. Mark the shared ledger consistently and preserve HTTP/authentication error handling.
-6. Run tests and commit.
+4. Send files above the single-request threshold as 32MiB multipart chunks and reject only files over 2GiB.
+5. Abort an incomplete multipart upload when any chunk or completion request fails.
+6. Mark the shared ledger consistently and preserve HTTP/authentication error handling.
+7. Run tests and commit.
 
 ## Task 3: Rebuild the iPhone home/settings layout
 
@@ -72,11 +73,11 @@
 - Modify `SimpleCamera 업무사진 수신기/cloudflare/photo-relay/src/index.ts`
 - Modify `SimpleCamera 업무사진 수신기/cloudflare/photo-relay/test/index.test.ts`
 
-1. Add failing tests for MOV/MP4 metadata, 95MiB enforcement, stream upload, size mismatch and existing shortcut compatibility.
+1. Add failing tests for MOV/MP4 metadata, multipart create/part/complete/abort, 2GiB enforcement, size mismatch and existing shortcut compatibility.
 2. Generalize stored metadata and object extensions to supported media types.
 3. Keep POST buffering/signature detection and its 20MiB limit unchanged.
-4. Change explicit PUT to validate headers and stream the request body into R2.
-5. Compare the stored object size with the declared size and delete mismatches.
+4. Add authenticated multipart create, part, complete and abort endpoints backed by R2 multipart uploads.
+5. Compare the completed object size with the declared size and delete mismatches.
 6. Run Vitest and commit in the receiver repository.
 
 ## Task 5: Extend the Windows receiver safely
@@ -88,7 +89,7 @@
 - Modify receiver tests for relay, validation, receiving and thumbnails.
 
 1. Add failing tests for video metadata, MOV/MP4 extension safety and signature/hash validation.
-2. Accept supported video MIME types and the 95MiB manual size.
+2. Accept supported video MIME types and the 2GiB manual size.
 3. Dispatch image files to Pillow verification and videos to ISO-BMFF signature verification after common size/hash checks.
 4. Save and ACK videos but exclude them from image clipboard batches.
 5. Leave video thumbnails as safe placeholders while retaining metadata and default-app opening.

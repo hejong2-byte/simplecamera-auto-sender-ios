@@ -21,25 +21,36 @@ final class AppDependencies: @unchecked Sendable {
             uploader: uploader,
             uploadsDirectory: uploadsDirectory
         )
+        let manualTransferService = ManualMediaTransferService(
+            source: PhotoKitManualMediaSource(),
+            ledger: uploader.ledger,
+            uploader: uploader,
+            exportDirectory: uploadsDirectory
+                .appendingPathComponent("Manual", isDirectory: true)
+        )
         return AppDependencies(
             credentialStore: credentialStore,
             uploader: uploader,
-            syncService: syncService
+            syncService: syncService,
+            manualTransferService: manualTransferService
         )
     }()
 
     let credentialStore: CredentialStore
     let uploader: BackgroundUploadCoordinator
     let syncService: PhotoSyncService
+    let manualTransferService: ManualMediaTransferService
 
     private init(
         credentialStore: CredentialStore,
         uploader: BackgroundUploadCoordinator,
-        syncService: PhotoSyncService
+        syncService: PhotoSyncService,
+        manualTransferService: ManualMediaTransferService
     ) {
         self.credentialStore = credentialStore
         self.uploader = uploader
         self.syncService = syncService
+        self.manualTransferService = manualTransferService
     }
 
     @MainActor
@@ -51,6 +62,9 @@ final class AppDependencies: @unchecked Sendable {
             now: Date.init,
             send: { [syncService] trigger in
                 try await syncService.run(trigger: trigger)
+            },
+            manualSend: { [manualTransferService] selection, kind in
+                await manualTransferService.send(selection: selection, kind: kind)
             }
         )
     }

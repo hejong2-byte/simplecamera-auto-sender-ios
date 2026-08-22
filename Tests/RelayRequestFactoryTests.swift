@@ -19,4 +19,54 @@ final class RelayRequestFactoryTests: XCTestCase {
             try RelayRequestFactory().makeUploadRequest(credential: "  ")
         )
     }
+
+    func testManualRequestCarriesOriginalMetadataAndIntegrityHeaders() throws {
+        let fingerprint = UploadFileFingerprint(
+            sha256: String(repeating: "a", count: 64),
+            size: 400_000_000,
+            remoteID: "123e4567-e89b-42d3-a456-426614174000"
+        )
+        let capturedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let request = try RelayRequestFactory().makeManualMediaRequest(
+            credential: "Bearer test",
+            fingerprint: fingerprint,
+            metadata: ManualMediaUploadMetadata(
+                fileName: "업무 동영상.MOV",
+                contentType: "video/quicktime",
+                capturedAt: capturedAt
+            )
+        )
+
+        XCTAssertEqual(request.httpMethod, "PUT")
+        XCTAssertTrue(request.url?.absoluteString.hasSuffix(fingerprint.remoteID) == true)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "video/quicktime")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "X-Content-SHA256"), fingerprint.sha256)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "X-File-Size"), "400000000")
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "X-File-Name"),
+            "%EC%97%85%EB%AC%B4%20%EB%8F%99%EC%98%81%EC%83%81.MOV"
+        )
+        XCTAssertNotNil(request.value(forHTTPHeaderField: "X-Captured-At"))
+    }
+
+    func testMultipartPartRequestKeepsOpaqueUploadIDInQuery() throws {
+        let request = try RelayRequestFactory().makeMultipartPartRequest(
+            credential: "Bearer test",
+            remoteID: "123e4567-e89b-42d3-a456-426614174000",
+            uploadID: "opaque/upload+id",
+            partNumber: 3,
+            partSize: 32 * 1024 * 1024
+        )
+        let components = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+
+        XCTAssertEqual(request.httpMethod, "PUT")
+        XCTAssertTrue(request.url?.path.hasSuffix("/parts/3") == true)
+        XCTAssertEqual(
+            components?.queryItems?.first(where: { $0.name == "uploadId" })?.value,
+            "opaque/upload+id"
+        )
+        XCTAssertEqual(request.value(forHTTPHeaderField: "X-Part-Size"), "33554432")
+    }
 }

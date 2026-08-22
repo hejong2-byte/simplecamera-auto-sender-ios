@@ -3,8 +3,8 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var model: ContentViewModel
-    @State private var credential = ""
-    @State private var showingResetConfirmation = false
+    @State private var pickerKind: ManualMediaKind?
+    @State private var readinessMessage: String?
 
     init(model: ContentViewModel) {
         _model = StateObject(wrappedValue: model)
@@ -15,41 +15,61 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     header
-                    photoAccessCard
-                    credentialCard
-                    monitoringCard
-                    automationCard
-                    statusCard
-                    actionCard
+                    manualTransferCard
+                    manualStatusCard
+                    NavigationLink {
+                        SettingsView(model: model)
+                    } label: {
+                        Label("설정", systemImage: "gearshape.fill")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
                 }
                 .padding()
             }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("업무사진 자동전송")
+            .navigationTitle("업무사진 전송")
             .task { await model.refresh() }
-            .confirmationDialog(
-                "자동 전송 기록을 초기화할까요?",
-                isPresented: $showingResetConfirmation,
-                titleVisibility: .visible
+            .sheet(item: $pickerKind) { kind in
+                ManualMediaPicker(
+                    kind: kind,
+                    onSelection: { selection in
+                        pickerKind = nil
+                        Task {
+                            await model.sendSelectedMedia(
+                                selection: selection,
+                                kind: kind
+                            )
+                        }
+                    },
+                    onCancel: { pickerKind = nil }
+                )
+                .ignoresSafeArea()
+            }
+            .alert(
+                "전송 설정 필요",
+                isPresented: Binding(
+                    get: { readinessMessage != nil },
+                    set: { if !$0 { readinessMessage = nil } }
+                )
             ) {
-                Button("초기화", role: .destructive) {
-                    Task { await model.resetMonitoring() }
-                }
-                Button("취소", role: .cancel) {}
+                Button("확인", role: .cancel) {}
             } message: {
-                Text("초기화한 시점 이전 사진은 다시 전송되지 않습니다.")
+                Text(readinessMessage ?? "")
             }
         }
     }
 
     private var header: some View {
         VStack(spacing: 8) {
-            Image(systemName: "camera.circle.fill")
+            Image(systemName: "arrow.up.circle.fill")
                 .font(.system(size: 64))
                 .foregroundStyle(.cyan, .black)
-            Text("SimpleCamera 자동전송 ADD-ON")
+            Text("사진·스크린샷·동영상 전송")
                 .font(.headline)
-            Text("Simple Cam으로 찍은 새 사진만 자동으로 전송합니다.")
+            Text("보낼 항목을 직접 고르면 선택한 파일만 PC로 전송합니다.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -58,133 +78,52 @@ struct ContentView: View {
         .padding(.vertical, 8)
     }
 
-    private var photoAccessCard: some View {
-        setupCard(number: 1, title: "사진 접근") {
-            Label(photoAccessText, systemImage: model.hasFullPhotoAccess ? "checkmark.circle.fill" : "photo.badge.exclamationmark")
-                .foregroundStyle(model.hasFullPhotoAccess ? .green : .orange)
-            if !model.hasFullPhotoAccess {
-                Button("사진 전체 접근 허용") {
-                    Task { await model.requestPhotoAccess() }
+    private var manualTransferCard: some View {
+        VStack(spacing: 12) {
+            ForEach(ManualMediaKind.allCases) { kind in
+                Button {
+                    openPicker(kind)
+                } label: {
+                    Label(kind.title, systemImage: kind.systemImage)
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: 34)
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(model.isManualTransferWorking)
             }
+            Text("여러 개를 한 번에 선택할 수 있습니다. 100MB가 넘는 동영상은 자동으로 나눠 전송합니다.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
+        .cardStyle()
     }
 
-    private var credentialCard: some View {
-        setupCard(number: 2, title: "전송 인증 설정") {
-            Label(
-                model.hasCredential ? "인증값 저장됨" : "인증값 필요",
-                systemImage: model.hasCredential ? "checkmark.shield.fill" : "key.fill"
-            )
-            SecureField("인증값", text: $credential)
-                .textContentType(.password)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .textFieldStyle(.roundedBorder)
-            Button("인증값 저장") {
-                let value = credential
-                Task {
-                    do {
-                        try await model.saveCredential(value)
-                        credential = ""
-                    } catch {
-                        credential = ""
-                    }
+    private var manualStatusCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("수동 전송 상태").font(.headline)
+            if model.isManualTransferWorking {
+                ProgressView()
+            }
+            Text(model.manualTransferMessage ?? "전송할 종류를 선택하세요.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            if let summary = model.lastManualSummary {
+                HStack {
+                    statusValue("선택", summary.selected)
+                    statusValue("완료", summary.uploaded)
+                    statusValue("실패", summary.failed)
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Text("인증값은 이 아이폰의 보안 저장소에만 보관됩니다.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var monitoringCard: some View {
-        setupCard(number: 3, title: "자동 전송 시작") {
-            Label(
-                model.isMonitoringEnabled ? "새 사진 감시 시작됨" : "아직 시작하지 않음",
-                systemImage: model.isMonitoringEnabled ? "checkmark.circle.fill" : "record.circle"
-            )
-            Text("이 버튼을 누른 시점 이전의 사진은 전송하지 않습니다. 이후 Simple Cam으로 찍은 사진만 대상입니다.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Button("이 시점부터 자동 전송") {
-                Task { try? await model.enableAutomaticSending() }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.isMonitoringEnabled)
-        }
-    }
-
-    private var automationCard: some View {
-        setupCard(number: 4, title: "아이폰 자동화 1회 설정") {
-            Text("단축어 앱 → 자동화 → 앱 → Simple Cam → 닫힐 때 → 즉시 실행 → 새 SimpleCamera 사진 전송")
-                .font(.subheadline)
-            Text("사진을 고르는 단축키는 만들 필요가 없습니다.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var statusCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("전송 상태").font(.headline)
-            HStack {
-                statusValue("대기", model.queuedCount)
-                statusValue("완료", model.uploadedCount)
-                statusValue("실패", model.failedCount)
-            }
-            if let summary = model.lastSummary {
-                Text("최근 실행: \(summary.matched)장 확인, \(summary.uploaded)장 전송 완료")
-                    .font(.caption)
-            }
-            if let error = model.lastError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
         }
         .cardStyle()
     }
 
-    private var actionCard: some View {
-        VStack(spacing: 10) {
-            Text("평소에는 누를 필요가 없습니다. 아래 버튼은 자동화 오류 복구용입니다.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Button("지금 전송") {
-                Task { await model.sendNow() }
-            }
-            .buttonStyle(.borderedProminent)
-            .frame(maxWidth: .infinity)
-            .disabled(model.isWorking)
-
-            Button("실패 사진 재시도") {
-                Task { await model.retryFailed() }
-            }
-            .buttonStyle(.bordered)
-            .disabled(model.isWorking || model.failedCount == 0)
-
-            Button("자동 전송 초기화", role: .destructive) {
-                showingResetConfirmation = true
-            }
+    private func openPicker(_ kind: ManualMediaKind) {
+        if let message = model.manualTransferReadinessMessage {
+            readinessMessage = message
+            return
         }
-        .cardStyle()
-    }
-
-    private func setupCard<Content: View>(
-        number: Int,
-        title: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("\(number). \(title)").font(.headline)
-            content()
-        }
-        .cardStyle()
+        pickerKind = kind
     }
 
     private func statusValue(_ title: String, _ value: Int) -> some View {
@@ -194,19 +133,9 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity)
     }
-
-    private var photoAccessText: String {
-        switch model.photoAuthorizationStatus {
-        case .authorized: "사진 전체 접근 허용됨"
-        case .limited: "일부 사진만 허용됨 — 전체 접근이 필요합니다"
-        case .denied, .restricted: "사진 접근이 차단됨"
-        case .notDetermined: "사진 접근 허용이 필요합니다"
-        @unknown default: "사진 접근 상태를 확인해 주세요"
-        }
-    }
 }
 
-private extension View {
+extension View {
     func cardStyle() -> some View {
         self
             .padding(16)
