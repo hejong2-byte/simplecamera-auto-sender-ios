@@ -151,6 +151,10 @@ struct ContentView: View {
 
     private var actionCard: some View {
         VStack(spacing: 10) {
+            Text("평소에는 누를 필요가 없습니다. 아래 버튼은 자동화 오류 복구용입니다.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             Button("지금 전송") {
                 Task { await model.sendNow() }
             }
