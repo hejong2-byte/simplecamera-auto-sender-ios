@@ -5,5 +5,9 @@ final class ProjectSmokeTests: XCTestCase {
     func testBundleIdentifierContract() {
         XCTAssertEqual(AppIdentity.bundleIdentifier, "com.hejong2byte.simplecameraautosender")
     }
+
+    func testAutomationOpensAppWithoutUserInteraction() {
+        XCTAssertTrue(SendNewSimpleCameraPhotosIntent.openAppWhenRun)
+    }
 }
 

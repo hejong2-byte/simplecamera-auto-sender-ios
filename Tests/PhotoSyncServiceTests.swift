@@ -123,6 +123,70 @@ final class PhotoSyncServiceTests: XCTestCase {
         XCTAssertEqual(source.scanCount, 2)
     }
 
+    func testFailedUploadIsNotReportedAsCompleted() async throws {
+        let ledger = try await makeLedger()
+        let source = FakePhotoSource(items: [
+            (
+                PhotoCandidate(localIdentifier: "simple-failed", creationDate: .now),
+                "Simple Camera 5.0.7"
+            )
+        ])
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("test-secret")
+        let service = PhotoSyncService(
+            credentialStore: credentials,
+            photoSource: source,
+            metadataMatcher: TextMetadataMatcher(),
+            ledger: ledger,
+            uploader: FailingUploader(),
+            uploadsDirectory: temporaryDirectory(),
+            scanDelaysNanoseconds: [0]
+        )
+
+        let result = try await service.run(trigger: .automation)
+
+        XCTAssertEqual(result.uploaded, 0)
+        XCTAssertEqual(result.failed, 1)
+    }
+
+    func testMatchingPhotosBeginUploadingWithoutWaitingForEarlierUploads() async throws {
+        let ledger = try await makeLedger()
+        let source = FakePhotoSource(items: (1...4).map { index in
+            (
+                PhotoCandidate(
+                    localIdentifier: "simple-\(index)",
+                    creationDate: .now
+                ),
+                "Simple Camera 5.0.7"
+            )
+        })
+        let uploader = BlockingUploader()
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("test-secret")
+        let service = PhotoSyncService(
+            credentialStore: credentials,
+            photoSource: source,
+            metadataMatcher: TextMetadataMatcher(),
+            ledger: ledger,
+            uploader: uploader,
+            uploadsDirectory: temporaryDirectory(),
+            scanDelaysNanoseconds: [0]
+        )
+        let run = Task {
+            try await service.run(trigger: .automation)
+        }
+
+        for _ in 0..<100 where uploader.startedCount < 4 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let startedBeforeRelease = uploader.startedCount
+        uploader.releaseAll()
+        let result = try await run.value
+
+        XCTAssertEqual(startedBeforeRelease, 4)
+        XCTAssertEqual(result.uploaded, 4)
+    }
+
     func testMissingCredentialDoesNotScanOrUpload() async throws {
         let ledger = try await makeLedger()
         let source = FakePhotoSource(items: [])
@@ -289,6 +353,52 @@ private final class RecordingUploader: UploadCoordinating, @unchecked Sendable {
             return IDs.count
         }
         try await ledger.markQueued(id: assetID, taskIdentifier: taskID)
+    }
+
+    func authenticationBlocked() -> Bool { false }
+    func credentialDidChange() {}
+}
+
+private final class FailingUploader: UploadCoordinating, @unchecked Sendable {
+    func upload(assetID: String, fileURL: URL) async throws {
+        throw URLError(.notConnectedToInternet)
+    }
+
+    func authenticationBlocked() -> Bool { false }
+    func credentialDidChange() {}
+}
+
+private final class BlockingUploader: UploadCoordinating, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+    private var startedCountValue = 0
+    private var released = false
+
+    var startedCount: Int { lock.withLock { startedCountValue } }
+
+    func upload(assetID: String, fileURL: URL) async throws {
+        await withCheckedContinuation { continuation in
+            let resumeImmediately = lock.withLock { () -> Bool in
+                startedCountValue += 1
+                if released {
+                    return true
+                }
+                continuations.append(continuation)
+                return false
+            }
+            if resumeImmediately {
+                continuation.resume()
+            }
+        }
+    }
+
+    func releaseAll() {
+        let pending = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            released = true
+            defer { continuations.removeAll() }
+            return continuations
+        }
+        pending.forEach { $0.resume() }
     }
 
     func authenticationBlocked() -> Bool { false }
