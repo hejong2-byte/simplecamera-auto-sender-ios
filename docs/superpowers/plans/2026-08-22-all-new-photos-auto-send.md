@@ -1,4 +1,6 @@
-# All New Photos Auto Send Implementation Plan
+# All New Photos Auto Send Implementation Plan (폐기됨)
+
+> 이 계획은 사용자의 최종 요구사항과 달라 실행하지 않는다. Simple Cam 사진만 전송하는 `2026-08-22-simple-cam-resolution-origin-filter-design.md`를 기준으로 새 구현 계획을 사용한다.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -383,4 +385,3 @@ Download the exact release asset, verify its SHA-256 against GitHub's asset dige
 - [ ] **Step 6: Final device acceptance test**
 
 On the iPhone: install with SideStore, grant full photo access, confirm the credential, press `지금부터 모든 새 사진 전송`, then create one Camera photo and one screenshot. With the app active, both must appear as discovered and queued exactly once; after PC receipt, the completion count must become 2.
-

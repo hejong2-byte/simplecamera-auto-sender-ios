@@ -1,4 +1,6 @@
-# 모든 새 사진 자동전송 설계
+# 모든 새 사진 자동전송 설계 (폐기됨)
+
+> 이 설계는 사용자의 최종 요구사항과 달라 폐기됐다. 구현 기준은 `2026-08-22-simple-cam-resolution-origin-filter-design.md`이며, Simple Cam 사진만 전송해야 한다.
 
 ## 목표
 
