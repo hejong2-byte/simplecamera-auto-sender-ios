@@ -283,7 +283,7 @@ private final class RecordingUploader: UploadCoordinating, @unchecked Sendable {
 
     var recordedIDs: [String] { lock.withLock { IDs } }
 
-    func enqueue(assetID: String, fileURL: URL) async throws {
+    func upload(assetID: String, fileURL: URL) async throws {
         let taskID = lock.withLock { () -> Int in
             IDs.append(assetID)
             return IDs.count
@@ -291,7 +291,6 @@ private final class RecordingUploader: UploadCoordinating, @unchecked Sendable {
         try await ledger.markQueued(id: assetID, taskIdentifier: taskID)
     }
 
-    func reconnect() async {}
     func authenticationBlocked() -> Bool { false }
     func credentialDidChange() {}
 }

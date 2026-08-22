@@ -45,8 +45,7 @@ final class ContentViewModelTests: XCTestCase {
 }
 
 private final class NoOpUploader: UploadCoordinating, @unchecked Sendable {
-    func enqueue(assetID: String, fileURL: URL) async throws {}
-    func reconnect() async {}
+    func upload(assetID: String, fileURL: URL) async throws {}
     func authenticationBlocked() -> Bool { false }
     func credentialDidChange() {}
 }

@@ -132,7 +132,7 @@ actor PhotoSyncService {
                     }
 
                     matched += 1
-                    try await uploader.enqueue(
+                    try await uploader.upload(
                         assetID: candidate.localIdentifier,
                         fileURL: fileURL
                     )

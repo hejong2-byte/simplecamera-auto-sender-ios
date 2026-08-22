@@ -72,7 +72,7 @@ actor UploadLedger {
         }
     }
 
-    func markQueued(id: String, taskIdentifier: Int) throws {
+    func markQueued(id: String, taskIdentifier: Int?) throws {
         try update(id: id) { record in
             guard !record.state.isTerminal else { return }
             record.state = .queued
