@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum AppIdentity {
-    static let bundleIdentifier = "com.hejong2byte.simplecameraautosender"
+    static let bundleIdentifier = "com.hejong2byte.photolibraryautosender"
 }
 
 @main
