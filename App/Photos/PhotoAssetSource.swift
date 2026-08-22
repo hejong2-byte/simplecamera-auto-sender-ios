@@ -16,6 +16,20 @@ enum PhotoAssetSourceError: Error {
     case originalResourceNotFound
 }
 
+enum PhotoAssetResourceSelection {
+    static func preferredType(
+        in types: [PHAssetResourceType]
+    ) -> PHAssetResourceType? {
+        if types.contains(.photo) {
+            return .photo
+        }
+        if types.contains(.fullSizePhoto) {
+            return .fullSizePhoto
+        }
+        return nil
+    }
+}
+
 struct PhotoKitAssetSource: PhotoAssetSourcing {
     func candidates(createdAfter date: Date) async throws -> [PhotoCandidate] {
         let options = PHFetchOptions()
@@ -47,8 +61,9 @@ struct PhotoKitAssetSource: PhotoAssetSourcing {
         }
 
         let resources = PHAssetResource.assetResources(for: asset)
-        guard let resource = resources.first(where: { $0.type == .fullSizePhoto })
-                ?? resources.first(where: { $0.type == .photo }) else {
+        guard let preferredType = PhotoAssetResourceSelection.preferredType(
+            in: resources.map(\.type)
+        ), let resource = resources.first(where: { $0.type == preferredType }) else {
             throw PhotoAssetSourceError.originalResourceNotFound
         }
 
