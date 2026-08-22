@@ -34,13 +34,8 @@ actor PhotoSyncService {
         ledger: UploadLedger,
         uploader: UploadCoordinating,
         uploadsDirectory: URL,
-        scanDelaysNanoseconds: [UInt64] = [
-            0,
-            2_000_000_000,
-            3_000_000_000,
-            5_000_000_000,
-            5_000_000_000
-        ]
+        scanDelaysNanoseconds: [UInt64] = [0]
+            + Array(repeating: 500_000_000, count: 20)
     ) {
         self.credentialStore = credentialStore
         self.photoSource = photoSource
@@ -92,6 +87,7 @@ actor PhotoSyncService {
         var matched = 0
         var queued = 0
         var failed = 0
+        var completedUploadInEarlierScan = false
 
         for (scanIndex, delay) in scanDelaysNanoseconds.enumerated() {
             if delay > 0 {
@@ -100,6 +96,7 @@ actor PhotoSyncService {
             let candidates = try await photoSource.candidates(
                 createdAfter: baseline.addingTimeInterval(-60)
             )
+            let queuedBeforeScan = queued
 
             for candidate in candidates {
                 if discoveredIDs.insert(candidate.localIdentifier).inserted {
@@ -155,6 +152,14 @@ actor PhotoSyncService {
                     )
                     try? FileManager.default.removeItem(at: fileURL)
                 }
+            }
+
+            let completedUploadsThisScan = queued - queuedBeforeScan
+            if completedUploadInEarlierScan && completedUploadsThisScan == 0 {
+                break
+            }
+            if completedUploadsThisScan > 0 {
+                completedUploadInEarlierScan = true
             }
         }
 

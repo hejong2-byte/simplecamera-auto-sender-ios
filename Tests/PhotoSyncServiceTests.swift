@@ -92,7 +92,7 @@ final class PhotoSyncServiceTests: XCTestCase {
         let result = try await service.run(trigger: .automation)
 
         XCTAssertEqual(result.queued, 1)
-        XCTAssertEqual(source.scanCount, 5)
+        XCTAssertEqual(source.scanCount, 6)
         XCTAssertEqual(uploader.recordedIDs, ["simple-delayed"])
     }
 
