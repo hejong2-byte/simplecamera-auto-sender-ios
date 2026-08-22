@@ -45,6 +45,10 @@ final class DirectUploadCoordinatorTests: XCTestCase {
 
     func testFingerprintIsStableAndUsesUUIDVersionFourShape() throws {
         let directory = temporaryDirectory()
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
         let fileURL = directory.appendingPathComponent("media.mov")
         try Data("same media".utf8).write(to: fileURL)
 
