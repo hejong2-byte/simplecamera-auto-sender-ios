@@ -76,7 +76,7 @@ final class PhotoSyncServiceTests: XCTestCase {
 
     func testAutomationWaitsForPhotoThatAppearsAfterInitialScans() async throws {
         let ledger = try await makeLedger()
-        let source = DelayedCandidatePhotoSource(availableOnScan: 4)
+        let source = DelayedCandidatePhotoSource(availableOnScan: 5)
         let uploader = RecordingUploader(ledger: ledger)
         let credentials = InMemoryCredentialStore()
         try credentials.save("test-secret")
@@ -92,7 +92,7 @@ final class PhotoSyncServiceTests: XCTestCase {
         let result = try await service.run(trigger: .automation)
 
         XCTAssertEqual(result.queued, 1)
-        XCTAssertEqual(source.scanCount, 4)
+        XCTAssertEqual(source.scanCount, 5)
         XCTAssertEqual(uploader.recordedIDs, ["simple-delayed"])
     }
 
