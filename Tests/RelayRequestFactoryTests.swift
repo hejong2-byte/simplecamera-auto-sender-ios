@@ -69,4 +69,11 @@ final class RelayRequestFactoryTests: XCTestCase {
         )
         XCTAssertEqual(request.value(forHTTPHeaderField: "X-Part-Size"), "33554432")
     }
+
+    func testDecodesOnlyStableRelayErrorCode() {
+        let body = Data(#"{"error":"size_mismatch","details":"do not display"}"#.utf8)
+
+        XCTAssertEqual(RelayRequestFactory().decodeErrorCode(from: body), "size_mismatch")
+        XCTAssertNil(RelayRequestFactory().decodeErrorCode(from: Data("not-json".utf8)))
+    }
 }
