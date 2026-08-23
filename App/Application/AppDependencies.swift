@@ -13,6 +13,22 @@ final class AppDependencies: @unchecked Sendable {
         let uploadsDirectory = root
             .appendingPathComponent("SimpleCameraAutoSender", isDirectory: true)
             .appendingPathComponent("Uploads", isDirectory: true)
+        let manualStateDirectory = root
+            .appendingPathComponent("SimpleCameraAutoSender", isDirectory: true)
+            .appendingPathComponent("ManualTransfers", isDirectory: true)
+        let manualJobStore = ManualTransferJobStore(
+            fileURL: manualStateDirectory.appendingPathComponent("queue.json")
+        )
+        let backgroundCompletionRegistry = BackgroundSessionCompletionRegistry.shared
+        let backgroundManualSession = BackgroundManualUploadSession(
+            completionRegistry: backgroundCompletionRegistry
+        )
+        let manualTransferEngine = ManualBackgroundTransferEngine(
+            scheduler: backgroundManualSession,
+            jobStore: manualJobStore,
+            credentialStore: credentialStore
+        )
+        backgroundManualSession.bind(engine: manualTransferEngine)
         let syncService = PhotoSyncService(
             credentialStore: credentialStore,
             photoSource: PhotoKitAssetSource(),
@@ -32,7 +48,11 @@ final class AppDependencies: @unchecked Sendable {
             credentialStore: credentialStore,
             uploader: uploader,
             syncService: syncService,
-            manualTransferService: manualTransferService
+            manualTransferService: manualTransferService,
+            manualJobStore: manualJobStore,
+            backgroundCompletionRegistry: backgroundCompletionRegistry,
+            backgroundManualSession: backgroundManualSession,
+            manualTransferEngine: manualTransferEngine
         )
     }()
 
@@ -40,17 +60,30 @@ final class AppDependencies: @unchecked Sendable {
     let uploader: BackgroundUploadCoordinator
     let syncService: PhotoSyncService
     let manualTransferService: ManualMediaTransferService
+    let manualJobStore: ManualTransferJobStore
+    let backgroundCompletionRegistry: BackgroundSessionCompletionRegistry
+    let backgroundManualSession: BackgroundManualUploadSession
+    let manualTransferEngine: ManualBackgroundTransferEngine
 
     private init(
         credentialStore: CredentialStore,
         uploader: BackgroundUploadCoordinator,
         syncService: PhotoSyncService,
-        manualTransferService: ManualMediaTransferService
+        manualTransferService: ManualMediaTransferService,
+        manualJobStore: ManualTransferJobStore,
+        backgroundCompletionRegistry: BackgroundSessionCompletionRegistry,
+        backgroundManualSession: BackgroundManualUploadSession,
+        manualTransferEngine: ManualBackgroundTransferEngine
     ) {
         self.credentialStore = credentialStore
         self.uploader = uploader
         self.syncService = syncService
         self.manualTransferService = manualTransferService
+        self.manualJobStore = manualJobStore
+        self.backgroundCompletionRegistry = backgroundCompletionRegistry
+        self.backgroundManualSession = backgroundManualSession
+        self.manualTransferEngine = manualTransferEngine
+        Task { await manualTransferEngine.restore() }
     }
 
     @MainActor

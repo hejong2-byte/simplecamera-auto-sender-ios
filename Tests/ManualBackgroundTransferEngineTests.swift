@@ -112,7 +112,7 @@ final class ManualBackgroundTransferEngineTests: XCTestCase {
 
         await engine.taskCompleted(
             descriptor,
-            response: .init(statusCode: 422),
+            response: .status(422),
             body: Data(#"{"error":"size_mismatch"}"#.utf8),
             error: nil
         )
@@ -291,11 +291,11 @@ private actor FakeManualUploadScheduler: ManualUploadTaskScheduling {
 
 private extension HTTPURLResponse {
     static func success() -> HTTPURLResponse {
-        .init(statusCode: 200)
+        status(200)
     }
 
-    convenience init(statusCode: Int) {
-        self.init(
+    static func status(_ statusCode: Int) -> HTTPURLResponse {
+        HTTPURLResponse(
             url: URL(string: "https://relay.example")!,
             statusCode: statusCode,
             httpVersion: nil,
