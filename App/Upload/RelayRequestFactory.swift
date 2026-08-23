@@ -11,12 +11,6 @@ struct ManualMediaUploadMetadata: Sendable, Equatable {
     let capturedAt: Date?
 }
 
-struct UploadFileFingerprint: Sendable, Equatable {
-    let sha256: String
-    let size: Int64
-    let remoteID: String
-}
-
 struct RelayRequestFactory: Sendable {
     func makeUploadRequest(credential: String) throws -> URLRequest {
         let value = credential.trimmingCharacters(in: .whitespacesAndNewlines)
