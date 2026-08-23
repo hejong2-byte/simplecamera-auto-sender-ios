@@ -79,7 +79,8 @@ final class ManualTransferJobStoreTests: XCTestCase {
 
         try await store.replace(expected)
 
-        XCTAssertEqual(try await store.load(), expected)
+        let loaded = try await store.load()
+        XCTAssertEqual(loaded, expected)
         XCTAssertNoThrow(try JSONSerialization.jsonObject(with: Data(contentsOf: storeURL)))
     }
 
