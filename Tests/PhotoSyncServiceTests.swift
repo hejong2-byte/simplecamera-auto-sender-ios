@@ -236,18 +236,16 @@ final class PhotoSyncServiceTests: XCTestCase {
         )
     }
 
-    func testMatchingPhotosBeginUploadingWithoutWaitingForEarlierUploads() async throws {
+    func testMatchingPhotosUploadOneAtATimeInCreationDateOrder() async throws {
         let ledger = try await makeLedger()
-        let source = FakePhotoSource(items: (1...4).map { index in
-            (
-                PhotoCandidate(
-                    localIdentifier: "simple-\(index)",
-                    creationDate: .now
-                ),
-                "Simple Camera 5.0.7"
-            )
+        let origin = Date(timeIntervalSince1970: 1_000)
+        let source = FakePhotoSource(items: [3, 1, 4, 2].map { index in
+            (PhotoCandidate(
+                localIdentifier: "simple-\(index)",
+                creationDate: origin.addingTimeInterval(Double(index))
+            ), "Simple Camera 5.0.7")
         })
-        let uploader = BlockingUploader()
+        let uploader = TrackingUploader()
         let credentials = InMemoryCredentialStore()
         try credentials.save("test-secret")
         let service = PhotoSyncService(
@@ -259,19 +257,54 @@ final class PhotoSyncServiceTests: XCTestCase {
             uploadsDirectory: temporaryDirectory(),
             scanDelaysNanoseconds: [0]
         )
-        let run = Task {
-            try await service.run(trigger: .automation)
-        }
+        let result = try await service.run(trigger: .automation)
 
-        for _ in 0..<100 where uploader.startedCount < 4 {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        let startedBeforeRelease = uploader.startedCount
-        uploader.releaseAll()
-        let result = try await run.value
-
-        XCTAssertEqual(startedBeforeRelease, 4)
         XCTAssertEqual(result.uploaded, 4)
+        XCTAssertEqual(
+            uploader.uploadedIDs,
+            ["simple-1", "simple-2", "simple-3", "simple-4"]
+        )
+        XCTAssertEqual(uploader.maximumActiveUploadCount, 1)
+    }
+
+    func testAutomaticProgressUsesAggregateActualBytesUntilCompletion() async throws {
+        let ledger = try await makeLedger()
+        let source = FixedSizePhotoSource(fileBytes: 10, count: 2)
+        let uploader = ProgressReportingUploader()
+        let progressStore = AutomaticTransferProgressStore()
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("test-secret")
+        let service = PhotoSyncService(
+            credentialStore: credentials,
+            photoSource: source,
+            metadataMatcher: AlwaysMatchingMetadataMatcher(),
+            ledger: ledger,
+            uploader: uploader,
+            uploadsDirectory: temporaryDirectory(),
+            scanDelaysNanoseconds: [0],
+            automaticProgressStore: progressStore
+        )
+        let collector = Task {
+            var values: [AutomaticTransferProgress] = []
+            for await value in progressStore.updates() {
+                values.append(value)
+                if value.stage == .completed || value.stage == .failed {
+                    return values
+                }
+            }
+            return values
+        }
+
+        let result = try await service.run(trigger: .automation)
+        let values = await collector.value
+
+        XCTAssertEqual(result.uploaded, 2)
+        XCTAssertTrue(values.contains {
+            $0.stage == .uploading && $0.percent == 25
+        })
+        XCTAssertEqual(values.last?.stage, .completed)
+        XCTAssertEqual(values.last?.percent, 100)
+        XCTAssertEqual(values.last?.uploadedCount, 2)
     }
 
     func testMissingCredentialDoesNotScanOrUpload() async throws {
@@ -413,6 +446,33 @@ private final class DelayedCandidatePhotoSource: PhotoAssetSourcing, @unchecked 
     }
 }
 
+private final class FixedSizePhotoSource: PhotoAssetSourcing, @unchecked Sendable {
+    private let fileBytes: Int
+    private let items: [PhotoCandidate]
+
+    init(fileBytes: Int, count: Int) {
+        self.fileBytes = fileBytes
+        self.items = (1...count).map { index in
+            PhotoCandidate(
+                localIdentifier: "fixed-\(index)",
+                creationDate: Date(timeIntervalSince1970: Double(index))
+            )
+        }
+    }
+
+    func candidates(createdAfter date: Date) async throws -> [PhotoCandidate] {
+        items
+    }
+
+    func exportOriginal(localIdentifier: String, to destination: URL) async throws {
+        try Data(repeating: 1, count: fileBytes).write(to: destination)
+    }
+}
+
+private struct AlwaysMatchingMetadataMatcher: SimpleCameraMetadataMatching {
+    func matches(fileURL: URL) -> Bool { true }
+}
+
 private struct TextMetadataMatcher: SimpleCameraMetadataMatching {
     func matches(fileURL: URL) -> Bool {
         guard let data = try? Data(contentsOf: fileURL),
@@ -507,41 +567,48 @@ private final class FailOnceUploader: UploadCoordinating, @unchecked Sendable {
     func credentialDidChange() {}
 }
 
-private final class BlockingUploader: UploadCoordinating, @unchecked Sendable {
+private final class TrackingUploader: UploadCoordinating, @unchecked Sendable {
     private let lock = NSLock()
-    private var continuations: [CheckedContinuation<Void, Never>] = []
-    private var startedCountValue = 0
-    private var released = false
+    private var activeUploadCount = 0
+    private var maximumActiveUploadCountValue = 0
+    private var uploadedIDsValue: [String] = []
 
-    var startedCount: Int { lock.withLock { startedCountValue } }
+    var maximumActiveUploadCount: Int {
+        lock.withLock { maximumActiveUploadCountValue }
+    }
+
+    var uploadedIDs: [String] { lock.withLock { uploadedIDsValue } }
 
     func upload(
         assetID: String,
         fileURL: URL,
         onProgress: @escaping @Sendable (Int64, Int64) -> Void
     ) async throws {
-        await withCheckedContinuation { continuation in
-            let resumeImmediately = lock.withLock { () -> Bool in
-                startedCountValue += 1
-                if released {
-                    return true
-                }
-                continuations.append(continuation)
-                return false
-            }
-            if resumeImmediately {
-                continuation.resume()
-            }
+        lock.withLock {
+            activeUploadCount += 1
+            maximumActiveUploadCountValue = max(
+                maximumActiveUploadCountValue,
+                activeUploadCount
+            )
+            uploadedIDsValue.append(assetID)
         }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        lock.withLock { activeUploadCount -= 1 }
     }
 
-    func releaseAll() {
-        let pending = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
-            released = true
-            defer { continuations.removeAll() }
-            return continuations
-        }
-        pending.forEach { $0.resume() }
+    func authenticationBlocked() -> Bool { false }
+    func credentialDidChange() {}
+}
+
+private final class ProgressReportingUploader: UploadCoordinating, @unchecked Sendable {
+    func upload(
+        assetID: String,
+        fileURL: URL,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
+    ) async throws {
+        onProgress(5, 10)
+        await Task.yield()
+        onProgress(10, 10)
     }
 
     func authenticationBlocked() -> Bool { false }

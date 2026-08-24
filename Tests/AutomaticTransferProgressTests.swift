@@ -31,4 +31,26 @@ final class AutomaticTransferProgressTests: XCTestCase {
 
         XCTAssertEqual(received, latest)
     }
+
+    func testReporterAggregatesCompletedAndCurrentFileBytes() async {
+        let store = AutomaticTransferProgressStore()
+        let reporter = AutomaticTransferProgressReporter(store: store)
+
+        reporter.beginScanning()
+        reporter.beginPreparing(currentIndex: 1, knownCount: 2)
+        reporter.registerPreparedFile(bytes: 10)
+        reporter.registerPreparedFile(bytes: 10)
+        reporter.beginUpload(currentIndex: 1, fileBytes: 10)
+        reporter.reportUpload(sent: 5, total: 10)
+
+        var iterator = store.updates().makeAsyncIterator()
+        let received = await iterator.next()
+
+        XCTAssertEqual(received?.stage, .uploading)
+        XCTAssertEqual(received?.currentIndex, 1)
+        XCTAssertEqual(received?.totalCount, 2)
+        XCTAssertEqual(received?.totalBytes, 20)
+        XCTAssertEqual(received?.displayedBytesSent, 5)
+        XCTAssertEqual(received?.percent, 25)
+    }
 }
