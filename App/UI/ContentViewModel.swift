@@ -252,22 +252,22 @@ final class ContentViewModel: ObservableObject {
         case .preparing:
             return "\(progress.kind.title) 준비 중 · \(progress.currentIndex)/\(progress.selectedCount)"
         case .starting:
-            return "\(progress.kind.title) 백그라운드 전송 시작 중"
+            return "\(progress.kind.title) 백그라운드 시작 중"
         case .uploading:
-            return "\(progress.kind.title) 전송 중 · \(progress.percent)%"
+            return "\(progress.kind.title) 중 · \(progress.percent)%"
         case .retrying:
-            return "\(progress.kind.title) 전송 재시도 중 · \(progress.retryAttempt)/3"
+            return "\(progress.kind.title) 재시도 중 · \(progress.retryAttempt)/3"
         case .verifying:
             return "\(progress.kind.title) 저장 확인 중 · \(progress.percent)%"
         case .completed:
-            return "\(progress.kind.title) 전송 완료 · \(progress.uploadedCount)개"
+            return "\(progress.kind.title) 완료 · \(progress.uploadedCount)개"
         case .failed:
             return failureMessage(progress)
         }
     }
 
     private static func failureMessage(_ progress: ManualTransferProgress) -> String {
-        let prefix = "\(progress.kind.title) 전송 실패"
+        let prefix = "\(progress.kind.title) 실패"
         switch progress.failure {
         case .network?:
             return prefix + " · 네트워크 연결을 확인해 주세요."
