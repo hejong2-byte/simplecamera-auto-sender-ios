@@ -128,8 +128,13 @@ actor PhotoSyncService {
             let completedUploadsThisScan = outcomes.reduce(0) { $0 + $1.uploaded }
             for outcome in outcomes {
                 if outcome.matched > 0 { _ = matchedIDs.insert(outcome.candidateID) }
-                if outcome.uploaded > 0 { _ = uploadedIDs.insert(outcome.candidateID) }
-                if outcome.failed > 0 { _ = failedIDs.insert(outcome.candidateID) }
+                if outcome.uploaded > 0 {
+                    _ = uploadedIDs.insert(outcome.candidateID)
+                    failedIDs.remove(outcome.candidateID)
+                }
+                if outcome.failed > 0, !uploadedIDs.contains(outcome.candidateID) {
+                    _ = failedIDs.insert(outcome.candidateID)
+                }
             }
 
             if completedUploadInEarlierScan && completedUploadsThisScan == 0 {
