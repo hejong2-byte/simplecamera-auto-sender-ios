@@ -11,6 +11,35 @@ struct SyncTransferSummary: Sendable, Equatable {
     let matched: Int
     let uploaded: Int
     let failed: Int
+    let failureCategories: Set<UploadErrorCategory>
+
+    init(
+        discovered: Int,
+        matched: Int,
+        uploaded: Int,
+        failed: Int,
+        failureCategories: Set<UploadErrorCategory> = []
+    ) {
+        self.discovered = discovered
+        self.matched = matched
+        self.uploaded = uploaded
+        self.failed = failed
+        self.failureCategories = failureCategories
+    }
+
+    var failureDescription: String? {
+        let labels: [(UploadErrorCategory, String)] = [
+            (.authentication, "인증 오류"),
+            (.server, "서버 오류"),
+            (.network, "네트워크 오류"),
+            (.unreadable, "원본 읽기 오류"),
+            (.unknown, "알 수 없는 오류"),
+        ]
+        let descriptions = labels.compactMap { category, label in
+            failureCategories.contains(category) ? label : nil
+        }
+        return descriptions.isEmpty ? nil : descriptions.joined(separator: " · ")
+    }
 }
 
 enum PhotoSyncError: Error {
@@ -22,6 +51,7 @@ private struct CandidateTransferOutcome: Sendable {
     let matched: Int
     let uploaded: Int
     let failed: Int
+    let failureCategory: UploadErrorCategory?
 }
 
 actor PhotoSyncService {
@@ -93,7 +123,7 @@ actor PhotoSyncService {
         var discovered = 0
         var matchedIDs = Set<String>()
         var uploadedIDs = Set<String>()
-        var failedIDs = Set<String>()
+        var failuresByID: [String: UploadErrorCategory] = [:]
         var completedUploadInEarlierScan = false
 
         for (scanIndex, delay) in scanDelaysNanoseconds.enumerated() {
@@ -130,10 +160,12 @@ actor PhotoSyncService {
                 if outcome.matched > 0 { _ = matchedIDs.insert(outcome.candidateID) }
                 if outcome.uploaded > 0 {
                     _ = uploadedIDs.insert(outcome.candidateID)
-                    failedIDs.remove(outcome.candidateID)
+                    failuresByID.removeValue(forKey: outcome.candidateID)
                 }
-                if outcome.failed > 0, !uploadedIDs.contains(outcome.candidateID) {
-                    _ = failedIDs.insert(outcome.candidateID)
+                if outcome.failed > 0,
+                   !uploadedIDs.contains(outcome.candidateID),
+                   let category = outcome.failureCategory {
+                    failuresByID[outcome.candidateID] = category
                 }
             }
 
@@ -149,7 +181,8 @@ actor PhotoSyncService {
             discovered: discovered,
             matched: matchedIDs.count,
             uploaded: uploadedIDs.count,
-            failed: failedIDs.count
+            failed: failuresByID.count,
+            failureCategories: Set(failuresByID.values)
         )
     }
 
@@ -217,7 +250,8 @@ actor PhotoSyncService {
                     candidateID: candidate.localIdentifier,
                     matched: 0,
                     uploaded: 0,
-                    failed: 0
+                    failed: 0,
+                    failureCategory: nil
                 )
             }
 
@@ -229,19 +263,22 @@ actor PhotoSyncService {
                 candidateID: candidate.localIdentifier,
                 matched: 1,
                 uploaded: 1,
-                failed: 0
+                failed: 0,
+                failureCategory: nil
             )
         } catch {
+            let category = errorCategory(for: error)
             try? await ledger.markFailed(
                 id: candidate.localIdentifier,
-                category: errorCategory(for: error)
+                category: category
             )
             try? FileManager.default.removeItem(at: fileURL)
             return CandidateTransferOutcome(
                 candidateID: candidate.localIdentifier,
                 matched: didMatch ? 1 : 0,
                 uploaded: 0,
-                failed: 1
+                failed: 1,
+                failureCategory: category
             )
         }
     }

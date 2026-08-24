@@ -8,7 +8,7 @@ enum AssetState: String, Codable, Sendable {
     case failed
 }
 
-enum UploadErrorCategory: String, Codable, Sendable {
+enum UploadErrorCategory: String, Codable, Sendable, Hashable {
     case network
     case authentication
     case server
