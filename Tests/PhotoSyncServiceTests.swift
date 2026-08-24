@@ -176,6 +176,35 @@ final class PhotoSyncServiceTests: XCTestCase {
         XCTAssertEqual(result.failed, 1)
     }
 
+    func testLaterSuccessClearsEarlierFailureForSamePhoto() async throws {
+        let ledger = try await makeLedger()
+        let source = FakePhotoSource(items: [
+            (
+                PhotoCandidate(localIdentifier: "simple-eventual", creationDate: .now),
+                "Simple Camera 5.0.7"
+            )
+        ])
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("test-secret")
+        let uploader = FailOnceUploader(ledger: ledger)
+        let service = PhotoSyncService(
+            credentialStore: credentials,
+            photoSource: source,
+            metadataMatcher: TextMetadataMatcher(),
+            ledger: ledger,
+            uploader: uploader,
+            uploadsDirectory: temporaryDirectory(),
+            scanDelaysNanoseconds: [0, 0, 0]
+        )
+
+        let result = try await service.run(trigger: .automation)
+
+        XCTAssertEqual(uploader.attemptCount, 2)
+        XCTAssertEqual(result.matched, 1)
+        XCTAssertEqual(result.uploaded, 1)
+        XCTAssertEqual(result.failed, 0)
+    }
+
     func testMatchingPhotosBeginUploadingWithoutWaitingForEarlierUploads() async throws {
         let ledger = try await makeLedger()
         let source = FakePhotoSource(items: (1...4).map { index in
@@ -389,6 +418,33 @@ private final class RecordingUploader: UploadCoordinating, @unchecked Sendable {
 private final class FailingUploader: UploadCoordinating, @unchecked Sendable {
     func upload(assetID: String, fileURL: URL) async throws {
         throw URLError(.notConnectedToInternet)
+    }
+
+    func authenticationBlocked() -> Bool { false }
+    func credentialDidChange() {}
+}
+
+private final class FailOnceUploader: UploadCoordinating, @unchecked Sendable {
+    private let lock = NSLock()
+    private let ledger: UploadLedger
+    private var attempts = 0
+
+    init(ledger: UploadLedger) {
+        self.ledger = ledger
+    }
+
+    var attemptCount: Int { lock.withLock { attempts } }
+
+    func upload(assetID: String, fileURL: URL) async throws {
+        let attempt = lock.withLock { () -> Int in
+            attempts += 1
+            return attempts
+        }
+        if attempt == 1 {
+            throw URLError(.networkConnectionLost)
+        }
+        try await ledger.markQueued(id: assetID, taskIdentifier: attempt)
+        try await ledger.markUploaded(id: assetID)
     }
 
     func authenticationBlocked() -> Bool { false }
