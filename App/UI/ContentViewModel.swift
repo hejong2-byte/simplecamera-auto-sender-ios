@@ -198,14 +198,14 @@ final class ContentViewModel: ObservableObject {
     var manualStageTitle: String {
         guard let progress = manualProgress else { return "수동 전송 상태" }
         switch progress.stage {
-        case .idle: "전송 대기"
-        case .preparing: "파일 준비 중"
-        case .starting: "백그라운드 전송 시작 중"
-        case .uploading: "PC로 전송 중"
-        case .retrying: "연결 재시도 중"
-        case .verifying: "서버 저장 확인 중"
-        case .completed: "전송 완료"
-        case .failed: "전송 실패"
+        case .idle: return "전송 대기"
+        case .preparing: return "파일 준비 중"
+        case .starting: return "백그라운드 전송 시작 중"
+        case .uploading: return "PC로 전송 중"
+        case .retrying: return "연결 재시도 중"
+        case .verifying: return "서버 저장 확인 중"
+        case .completed: return "전송 완료"
+        case .failed: return "전송 실패"
         }
     }
 
