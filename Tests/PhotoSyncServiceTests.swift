@@ -149,6 +149,33 @@ final class PhotoSyncServiceTests: XCTestCase {
         XCTAssertEqual(result.failed, 1)
     }
 
+    func testRepeatedScansCountOneFailedPhotoOncePerRun() async throws {
+        let ledger = try await makeLedger()
+        let source = FakePhotoSource(items: [
+            (
+                PhotoCandidate(localIdentifier: "simple-failed", creationDate: .now),
+                "Simple Camera 5.0.7"
+            )
+        ])
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("test-secret")
+        let service = PhotoSyncService(
+            credentialStore: credentials,
+            photoSource: source,
+            metadataMatcher: TextMetadataMatcher(),
+            ledger: ledger,
+            uploader: FailingUploader(),
+            uploadsDirectory: temporaryDirectory(),
+            scanDelaysNanoseconds: [0, 0, 0]
+        )
+
+        let result = try await service.run(trigger: .automation)
+
+        XCTAssertEqual(result.matched, 1)
+        XCTAssertEqual(result.uploaded, 0)
+        XCTAssertEqual(result.failed, 1)
+    }
+
     func testMatchingPhotosBeginUploadingWithoutWaitingForEarlierUploads() async throws {
         let ledger = try await makeLedger()
         let source = FakePhotoSource(items: (1...4).map { index in
