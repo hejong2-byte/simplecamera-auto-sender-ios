@@ -275,7 +275,10 @@ actor PhotoSyncService {
                     fileURL: fileURL,
                     fileBytes: fileBytes
                 ))
-                progressReporter.registerPreparedFile(bytes: fileBytes)
+                progressReporter.registerPreparedFile(
+                    id: candidate.localIdentifier,
+                    bytes: fileBytes
+                )
             } catch {
                 let category = Self.errorCategory(for: error)
                 try? await ledger.markFailed(
@@ -284,6 +287,7 @@ actor PhotoSyncService {
                 )
                 try? FileManager.default.removeItem(at: fileURL)
                 progressReporter.finishCurrentFileFailed(
+                    id: candidate.localIdentifier,
                     category: category,
                     bytes: 0
                 )
@@ -299,6 +303,7 @@ actor PhotoSyncService {
 
         for (offset, item) in prepared.enumerated() {
             progressReporter.beginUpload(
+                id: item.candidate.localIdentifier,
                 currentIndex: offset + 1,
                 fileBytes: item.fileBytes
             )
@@ -313,7 +318,10 @@ actor PhotoSyncService {
                     }
                 }
                 try? FileManager.default.removeItem(at: item.fileURL)
-                progressReporter.finishCurrentFileUploaded(bytes: item.fileBytes)
+                progressReporter.finishCurrentFileUploaded(
+                    id: item.candidate.localIdentifier,
+                    bytes: item.fileBytes
+                )
                 outcomes.append(CandidateTransferOutcome(
                     candidateID: item.candidate.localIdentifier,
                     matched: 1,
@@ -329,6 +337,7 @@ actor PhotoSyncService {
                 )
                 try? FileManager.default.removeItem(at: item.fileURL)
                 progressReporter.finishCurrentFileFailed(
+                    id: item.candidate.localIdentifier,
                     category: category,
                     bytes: item.fileBytes
                 )

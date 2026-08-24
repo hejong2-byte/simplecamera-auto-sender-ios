@@ -187,6 +187,7 @@ final class PhotoSyncServiceTests: XCTestCase {
         let credentials = InMemoryCredentialStore()
         try credentials.save("test-secret")
         let uploader = FailOnceUploader(ledger: ledger)
+        let progressStore = AutomaticTransferProgressStore()
         let service = PhotoSyncService(
             credentialStore: credentials,
             photoSource: source,
@@ -194,15 +195,22 @@ final class PhotoSyncServiceTests: XCTestCase {
             ledger: ledger,
             uploader: uploader,
             uploadsDirectory: temporaryDirectory(),
-            scanDelaysNanoseconds: [0, 0, 0]
+            scanDelaysNanoseconds: [0, 0, 0],
+            automaticProgressStore: progressStore
         )
 
         let result = try await service.run(trigger: .automation)
+        var progressIterator = progressStore.updates().makeAsyncIterator()
+        let progress = await progressIterator.next()
 
         XCTAssertEqual(uploader.attemptCount, 2)
         XCTAssertEqual(result.matched, 1)
         XCTAssertEqual(result.uploaded, 1)
         XCTAssertEqual(result.failed, 0)
+        XCTAssertEqual(progress?.totalCount, 1)
+        XCTAssertEqual(progress?.uploadedCount, 1)
+        XCTAssertEqual(progress?.failedCount, 0)
+        XCTAssertEqual(progress?.percent, 100)
     }
 
     func testServerFailureIsReportedAsServerError() async throws {

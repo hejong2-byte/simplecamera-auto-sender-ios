@@ -106,8 +106,13 @@ final class AutomaticTransferProgressReporter: @unchecked Sendable {
     private let store: AutomaticTransferProgressStore
     private let lock = NSLock()
     private var progress: AutomaticTransferProgress
-    private var preparedFileCount = 0
+    private var preparedBytesByID: [String: Int64] = [:]
+    private var preparedOrder: [String] = []
+    private var uploadedIDs = Set<String>()
+    private var failuresByID: [String: UploadErrorCategory] = [:]
+    private var currentFileID: String?
     private var preparationBatchBase = 0
+    private var anonymousFileNumber = 0
 
     init(
         store: AutomaticTransferProgressStore,
@@ -119,7 +124,8 @@ final class AutomaticTransferProgressReporter: @unchecked Sendable {
 
     func beginScanning() {
         update { value in
-            preparationBatchBase = preparedFileCount
+            preparationBatchBase = preparedBytesByID.count
+            currentFileID = nil
             value.stage = .scanning
             value.currentIndex = 0
             value.currentBytesSent = 0
@@ -141,21 +147,57 @@ final class AutomaticTransferProgressReporter: @unchecked Sendable {
     }
 
     func registerPreparedFile(bytes: Int64) {
+        let id = lock.withLock { () -> String in
+            anonymousFileNumber += 1
+            return "automatic-anonymous-\(anonymousFileNumber)"
+        }
+        registerPreparedFile(id: id, bytes: bytes)
+    }
+
+    func registerPreparedFile(id: String, bytes: Int64) {
         update { value in
-            preparedFileCount += 1
-            value.totalCount = max(value.totalCount, preparedFileCount)
-            value.totalBytes += max(bytes, 0)
+            let fileBytes = max(bytes, 0)
+            if preparedBytesByID[id] == nil {
+                preparedOrder.append(id)
+            }
+            let previousBytes = preparedBytesByID.updateValue(
+                fileBytes,
+                forKey: id
+            ) ?? 0
+            value.totalBytes = max(
+                value.totalBytes + fileBytes - previousBytes,
+                0
+            )
+            value.totalCount = max(
+                value.totalCount,
+                preparedBytesByID.count
+            )
         }
     }
 
     func beginUpload(currentIndex: Int, fileBytes: Int64) {
+        beginUpload(
+            id: nil,
+            currentIndex: currentIndex,
+            fileBytes: fileBytes
+        )
+    }
+
+    func beginUpload(
+        id: String?,
+        currentIndex: Int,
+        fileBytes: Int64
+    ) {
         update { value in
+            currentFileID = id
             value.stage = .uploading
-            value.currentIndex = max(
-                value.uploadedCount + value.failedCount + 1,
-                max(currentIndex, 1)
+            value.currentIndex = id.flatMap { preparedOrder.firstIndex(of: $0) }
+                .map { $0 + 1 }
+                ?? max(currentIndex, 1)
+            value.totalCount = max(
+                preparedBytesByID.count,
+                value.currentIndex
             )
-            value.totalCount = max(preparedFileCount, value.currentIndex)
             value.currentBytesSent = 0
             value.currentBytesTotal = max(fileBytes, 0)
         }
@@ -170,6 +212,9 @@ final class AutomaticTransferProgressReporter: @unchecked Sendable {
                     value.totalBytes + reportedTotal - value.currentBytesTotal,
                     0
                 )
+                if let currentFileID {
+                    preparedBytesByID[currentFileID] = reportedTotal
+                }
                 value.currentBytesTotal = reportedTotal
             }
             value.currentBytesSent = min(
@@ -186,17 +231,23 @@ final class AutomaticTransferProgressReporter: @unchecked Sendable {
     }
 
     func finishCurrentFileUploaded(bytes: Int64) {
+        let id = lock.withLock { currentFileID }
+        finishCurrentFileUploaded(id: id, bytes: bytes)
+    }
+
+    func finishCurrentFileUploaded(id: String?, bytes: Int64) {
         update { value in
-            let completedFileBytes = value.currentBytesTotal > 0
-                ? value.currentBytesTotal
-                : max(bytes, 0)
-            value.completedBytes = min(
-                value.completedBytes + completedFileBytes,
-                value.totalBytes
-            )
-            value.uploadedCount += 1
+            if let id {
+                uploadedIDs.insert(id)
+                failuresByID.removeValue(forKey: id)
+            }
+            value.completedBytes = completedBytes()
+            value.uploadedCount = uploadedIDs.count
+            value.failedCount = failuresByID.count
+            value.failureCategories = Set(failuresByID.values)
             value.currentBytesSent = 0
             value.currentBytesTotal = 0
+            currentFileID = nil
         }
     }
 
@@ -204,14 +255,38 @@ final class AutomaticTransferProgressReporter: @unchecked Sendable {
         category: UploadErrorCategory,
         bytes: Int64
     ) {
+        let id = lock.withLock { currentFileID }
+        finishCurrentFileFailed(
+            id: id,
+            category: category,
+            bytes: bytes
+        )
+    }
+
+    func finishCurrentFileFailed(
+        id: String?,
+        category: UploadErrorCategory,
+        bytes: Int64
+    ) {
         update { value in
-            if value.currentBytesTotal == 0 && bytes > 0 {
-                value.totalBytes += bytes
+            if let id {
+                let fileBytes = max(bytes, 0)
+                if preparedBytesByID[id] == nil {
+                    preparedBytesByID[id] = fileBytes
+                    preparedOrder.append(id)
+                    value.totalBytes += fileBytes
+                }
+                if !uploadedIDs.contains(id) {
+                    failuresByID[id] = category
+                }
             }
-            value.failedCount += 1
-            value.failureCategories.insert(category)
+            value.totalCount = preparedBytesByID.count
+            value.uploadedCount = uploadedIDs.count
+            value.failedCount = failuresByID.count
+            value.failureCategories = Set(failuresByID.values)
             value.currentBytesSent = 0
             value.currentBytesTotal = 0
+            currentFileID = nil
         }
     }
 
@@ -225,17 +300,25 @@ final class AutomaticTransferProgressReporter: @unchecked Sendable {
             value.failedCount = max(failedCount, 0)
             value.failureCategories = failureCategories
             value.totalCount = max(
-                preparedFileCount,
+                preparedBytesByID.count,
                 value.uploadedCount + value.failedCount
             )
             value.currentBytesSent = 0
             value.currentBytesTotal = 0
+            currentFileID = nil
             if value.failedCount == 0 {
                 value.completedBytes = value.totalBytes
                 value.stage = .completed
             } else {
+                value.completedBytes = completedBytes()
                 value.stage = .failed
             }
+        }
+    }
+
+    private func completedBytes() -> Int64 {
+        uploadedIDs.reduce(0) { result, id in
+            result + (preparedBytesByID[id] ?? 0)
         }
     }
 
