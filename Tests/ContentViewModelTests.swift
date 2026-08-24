@@ -178,6 +178,68 @@ final class ContentViewModelTests: XCTestCase {
         XCTAssertEqual(model.automaticFailureMessage, "서버 오류")
     }
 
+    func testAutomaticProgressReplaysByteStatusAndServerFailure() async throws {
+        let ledger = try UploadLedger(fileURL: temporaryLedgerURL())
+        let progressStore = AutomaticTransferProgressStore()
+        progressStore.publish(AutomaticTransferProgress(
+            runID: UUID(),
+            stage: .uploading,
+            currentIndex: 2,
+            totalCount: 3,
+            uploadedCount: 1,
+            failedCount: 0,
+            totalBytes: 1_000,
+            completedBytes: 400,
+            currentBytesSent: 250,
+            currentBytesTotal: 300,
+            failureCategories: []
+        ))
+        let model = ContentViewModel(
+            credentialStore: InMemoryCredentialStore(),
+            ledger: ledger,
+            uploader: NoOpUploader(),
+            now: Date.init,
+            send: { _ in
+                SyncTransferSummary(
+                    discovered: 0,
+                    matched: 0,
+                    uploaded: 0,
+                    failed: 0
+                )
+            },
+            automaticUpdates: { progressStore.updates() },
+            photoAuthorizationStatus: .authorized
+        )
+
+        await waitUntil { model.automaticProgress?.percent == 65 }
+
+        XCTAssertEqual(model.automaticStageTitle, "PC로 자동전송 중 · 2/3장")
+        XCTAssertEqual(
+            model.automaticByteProgressText,
+            "650바이트 / 1000바이트"
+        )
+
+        progressStore.publish(AutomaticTransferProgress(
+            runID: UUID(),
+            stage: .failed,
+            currentIndex: 3,
+            totalCount: 3,
+            uploadedCount: 2,
+            failedCount: 1,
+            totalBytes: 1_000,
+            completedBytes: 700,
+            currentBytesSent: 0,
+            currentBytesTotal: 0,
+            failureCategories: [.server]
+        ))
+        await waitUntil { model.automaticProgress?.stage == .failed }
+
+        XCTAssertEqual(
+            model.automaticTransferMessage,
+            "자동전송 실패 포함 · 서버 오류"
+        )
+    }
+
     private func temporaryLedgerURL() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
