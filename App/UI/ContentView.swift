@@ -15,6 +15,7 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     header
+                    automaticStatusCard
                     manualTransferCard
                     manualStatusCard
                     NavigationLink {
@@ -98,6 +99,65 @@ struct ContentView: View {
         .cardStyle()
     }
 
+    private var automaticStatusCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(model.automaticStageTitle)
+                .font(.headline)
+
+            if let progress = model.automaticProgress {
+                switch progress.stage {
+                case .scanning, .preparing:
+                    ProgressView()
+                        .tint(.cyan)
+                case .uploading, .verifying, .completed, .failed:
+                    if progress.totalBytes > 0 {
+                        ProgressView(
+                            value: Double(progress.percent),
+                            total: 100
+                        )
+                        .tint(automaticTint(for: progress.stage))
+                        HStack {
+                            Text("\(progress.percent)%")
+                                .font(.title3.monospacedDigit().bold())
+                            Spacer()
+                            Text(model.automaticByteProgressText)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                case .idle:
+                    EmptyView()
+                }
+
+                if progress.totalCount > 0
+                    || progress.uploadedCount > 0
+                    || progress.failedCount > 0 {
+                    HStack {
+                        statusValue("전체", progress.totalCount)
+                        statusValue("완료", progress.uploadedCount)
+                        statusValue("실패", progress.failedCount)
+                    }
+                }
+            }
+
+            Text(model.automaticTransferMessage)
+                .font(.subheadline)
+                .foregroundStyle(
+                    model.automaticProgress?.stage == .failed
+                        ? Color.red
+                        : Color.secondary
+                )
+
+            if model.automaticProgress?.stage != .failed,
+               let failure = model.automaticFailureMessage {
+                Text("재시도 대기 · \(failure)")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+        .cardStyle()
+    }
+
     private var manualStatusCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(model.manualStageTitle).font(.headline)
@@ -145,6 +205,14 @@ struct ContentView: View {
             Text(title).font(.caption).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func automaticTint(for stage: AutomaticTransferStage) -> Color {
+        switch stage {
+        case .completed: return .green
+        case .failed: return .red
+        default: return .cyan
+        }
     }
 }
 

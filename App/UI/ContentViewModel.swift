@@ -9,6 +9,7 @@ final class ContentViewModel: ObservableObject {
         ManualMediaKind
     ) async -> ManualMediaTransferSummary
     typealias ManualUpdatesAction = @Sendable () async -> AsyncStream<ManualTransferProgress>
+    typealias AutomaticUpdatesAction = @Sendable () -> AsyncStream<AutomaticTransferProgress>
 
     @Published private(set) var photoAuthorizationStatus: PHAuthorizationStatus
     @Published private(set) var hasCredential = false
@@ -24,6 +25,7 @@ final class ContentViewModel: ObservableObject {
     @Published private(set) var lastManualSummary: ManualMediaTransferSummary?
     @Published private(set) var manualTransferMessage: String?
     @Published private(set) var manualProgress: ManualTransferProgress?
+    @Published private(set) var automaticProgress: AutomaticTransferProgress?
 
     private let credentialStore: CredentialStore
     private let ledger: UploadLedger
@@ -32,6 +34,7 @@ final class ContentViewModel: ObservableObject {
     private let send: SendAction
     private let manualEnqueue: ManualEnqueueAction
     private var manualProgressTask: Task<Void, Never>?
+    private var automaticProgressTask: Task<Void, Never>?
 
     init(
         credentialStore: CredentialStore,
@@ -41,6 +44,9 @@ final class ContentViewModel: ObservableObject {
         send: @escaping SendAction,
         manualEnqueue: @escaping ManualEnqueueAction = { _, _ in .empty },
         manualUpdates: @escaping ManualUpdatesAction = {
+            AsyncStream { continuation in continuation.finish() }
+        },
+        automaticUpdates: @escaping AutomaticUpdatesAction = {
             AsyncStream { continuation in continuation.finish() }
         },
         photoAuthorizationStatus initialPhotoAuthorizationStatus: PHAuthorizationStatus? = nil
@@ -60,10 +66,17 @@ final class ContentViewModel: ObservableObject {
                 self?.apply(progress)
             }
         }
+        automaticProgressTask = Task { [weak self] in
+            for await progress in automaticUpdates() {
+                guard !Task.isCancelled else { break }
+                self?.automaticProgress = progress
+            }
+        }
     }
 
     deinit {
         manualProgressTask?.cancel()
+        automaticProgressTask?.cancel()
     }
 
     var hasFullPhotoAccess: Bool {
@@ -218,6 +231,51 @@ final class ContentViewModel: ObservableObject {
     var manualByteProgressText: String {
         guard let progress = manualProgress else { return "" }
         return "\(Self.byteText(progress.displayedBytesSent)) / \(Self.byteText(progress.totalBytes))"
+    }
+
+    var automaticStageTitle: String {
+        guard let progress = automaticProgress else {
+            return "자동전송 대기"
+        }
+        let position = "\(progress.currentIndex)/\(progress.totalCount)장"
+        switch progress.stage {
+        case .idle: return "자동전송 대기"
+        case .scanning: return "새 사진 확인 중"
+        case .preparing: return "원본 준비 중 · \(position)"
+        case .uploading: return "PC로 자동전송 중 · \(position)"
+        case .verifying: return "서버 저장 확인 중 · \(position)"
+        case .completed: return "자동전송 완료"
+        case .failed: return "자동전송 완료 · 실패 있음"
+        }
+    }
+
+    var automaticByteProgressText: String {
+        guard let progress = automaticProgress else { return "" }
+        return "\(Self.byteText(progress.displayedBytesSent)) / \(Self.byteText(progress.totalBytes))"
+    }
+
+    var automaticTransferMessage: String {
+        guard let progress = automaticProgress else {
+            return "Simple Cam을 닫으면 새 사진을 자동으로 전송합니다."
+        }
+        switch progress.stage {
+        case .idle:
+            return "Simple Cam을 닫으면 새 사진을 자동으로 전송합니다."
+        case .scanning:
+            return "Simple Cam으로 촬영한 새 사진을 확인하고 있습니다."
+        case .preparing:
+            return "전송할 원본 파일을 준비하고 있습니다."
+        case .uploading:
+            return "\(progress.uploadedCount)장 완료 · \(progress.failedCount)장 실패"
+        case .verifying:
+            return "PC 수신 서버의 저장 응답을 확인하고 있습니다."
+        case .completed:
+            return "자동전송 완료 · \(progress.uploadedCount)장"
+        case .failed:
+            let reason = progress.failureCategories.uploadFailureDescription
+                ?? "알 수 없는 오류"
+            return "자동전송 실패 포함 · \(reason)"
+        }
     }
 
     private func apply(_ progress: ManualTransferProgress) {

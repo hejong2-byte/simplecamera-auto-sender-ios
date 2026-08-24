@@ -29,13 +29,15 @@ final class AppDependencies: @unchecked Sendable {
             credentialStore: credentialStore
         )
         backgroundManualSession.bind(engine: manualTransferEngine)
+        let automaticProgressStore = AutomaticTransferProgressStore()
         let syncService = PhotoSyncService(
             credentialStore: credentialStore,
             photoSource: PhotoKitAssetSource(),
             metadataMatcher: SimpleCameraMetadataMatcher(),
             ledger: uploader.ledger,
             uploader: uploader,
-            uploadsDirectory: uploadsDirectory
+            uploadsDirectory: uploadsDirectory,
+            automaticProgressStore: automaticProgressStore
         )
         let manualTransferService = ManualMediaTransferService(
             source: PhotoKitManualMediaSource(),
@@ -52,7 +54,8 @@ final class AppDependencies: @unchecked Sendable {
             manualJobStore: manualJobStore,
             backgroundCompletionRegistry: backgroundCompletionRegistry,
             backgroundManualSession: backgroundManualSession,
-            manualTransferEngine: manualTransferEngine
+            manualTransferEngine: manualTransferEngine,
+            automaticProgressStore: automaticProgressStore
         )
     }()
 
@@ -64,6 +67,7 @@ final class AppDependencies: @unchecked Sendable {
     let backgroundCompletionRegistry: BackgroundSessionCompletionRegistry
     let backgroundManualSession: BackgroundManualUploadSession
     let manualTransferEngine: ManualBackgroundTransferEngine
+    let automaticProgressStore: AutomaticTransferProgressStore
 
     private init(
         credentialStore: CredentialStore,
@@ -73,7 +77,8 @@ final class AppDependencies: @unchecked Sendable {
         manualJobStore: ManualTransferJobStore,
         backgroundCompletionRegistry: BackgroundSessionCompletionRegistry,
         backgroundManualSession: BackgroundManualUploadSession,
-        manualTransferEngine: ManualBackgroundTransferEngine
+        manualTransferEngine: ManualBackgroundTransferEngine,
+        automaticProgressStore: AutomaticTransferProgressStore
     ) {
         self.credentialStore = credentialStore
         self.uploader = uploader
@@ -83,6 +88,7 @@ final class AppDependencies: @unchecked Sendable {
         self.backgroundCompletionRegistry = backgroundCompletionRegistry
         self.backgroundManualSession = backgroundManualSession
         self.manualTransferEngine = manualTransferEngine
+        self.automaticProgressStore = automaticProgressStore
         Task { await manualTransferEngine.restore() }
     }
 
@@ -101,6 +107,9 @@ final class AppDependencies: @unchecked Sendable {
             },
             manualUpdates: { [manualTransferService] in
                 await manualTransferService.updates()
+            },
+            automaticUpdates: { [automaticProgressStore] in
+                automaticProgressStore.updates()
             }
         )
     }
