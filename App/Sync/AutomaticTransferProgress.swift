@@ -101,3 +101,151 @@ final class AutomaticTransferProgressStore: @unchecked Sendable {
         }
     }
 }
+
+final class AutomaticTransferProgressReporter: @unchecked Sendable {
+    private let store: AutomaticTransferProgressStore
+    private let lock = NSLock()
+    private var progress: AutomaticTransferProgress
+    private var preparedFileCount = 0
+    private var preparationBatchBase = 0
+
+    init(
+        store: AutomaticTransferProgressStore,
+        runID: UUID = UUID()
+    ) {
+        self.store = store
+        self.progress = .idle(runID: runID)
+    }
+
+    func beginScanning() {
+        update { value in
+            preparationBatchBase = preparedFileCount
+            value.stage = .scanning
+            value.currentIndex = 0
+            value.currentBytesSent = 0
+            value.currentBytesTotal = 0
+        }
+    }
+
+    func beginPreparing(currentIndex: Int, knownCount: Int) {
+        update { value in
+            value.stage = .preparing
+            value.currentIndex = preparationBatchBase + max(currentIndex, 0)
+            value.totalCount = max(
+                value.totalCount,
+                preparationBatchBase + max(knownCount, 0)
+            )
+            value.currentBytesSent = 0
+            value.currentBytesTotal = 0
+        }
+    }
+
+    func registerPreparedFile(bytes: Int64) {
+        update { value in
+            preparedFileCount += 1
+            value.totalCount = max(value.totalCount, preparedFileCount)
+            value.totalBytes += max(bytes, 0)
+        }
+    }
+
+    func beginUpload(currentIndex: Int, fileBytes: Int64) {
+        update { value in
+            value.stage = .uploading
+            value.currentIndex = max(
+                value.uploadedCount + value.failedCount + 1,
+                max(currentIndex, 1)
+            )
+            value.totalCount = max(preparedFileCount, value.currentIndex)
+            value.currentBytesSent = 0
+            value.currentBytesTotal = max(fileBytes, 0)
+        }
+    }
+
+    func reportUpload(sent: Int64, total: Int64) {
+        update { value in
+            value.stage = .uploading
+            let reportedTotal = max(total, 0)
+            if reportedTotal > 0 && reportedTotal != value.currentBytesTotal {
+                value.totalBytes = max(
+                    value.totalBytes + reportedTotal - value.currentBytesTotal,
+                    0
+                )
+                value.currentBytesTotal = reportedTotal
+            }
+            value.currentBytesSent = min(
+                max(value.currentBytesSent, max(sent, 0)),
+                value.currentBytesTotal
+            )
+        }
+    }
+
+    func markVerifying() {
+        update { value in
+            value.stage = .verifying
+        }
+    }
+
+    func finishCurrentFileUploaded(bytes: Int64) {
+        update { value in
+            let completedFileBytes = value.currentBytesTotal > 0
+                ? value.currentBytesTotal
+                : max(bytes, 0)
+            value.completedBytes = min(
+                value.completedBytes + completedFileBytes,
+                value.totalBytes
+            )
+            value.uploadedCount += 1
+            value.currentBytesSent = 0
+            value.currentBytesTotal = 0
+        }
+    }
+
+    func finishCurrentFileFailed(
+        category: UploadErrorCategory,
+        bytes: Int64
+    ) {
+        update { value in
+            if value.currentBytesTotal == 0 && bytes > 0 {
+                value.totalBytes += bytes
+            }
+            value.failedCount += 1
+            value.failureCategories.insert(category)
+            value.currentBytesSent = 0
+            value.currentBytesTotal = 0
+        }
+    }
+
+    func finishRun(
+        uploadedCount: Int,
+        failedCount: Int,
+        failureCategories: Set<UploadErrorCategory>
+    ) {
+        update { value in
+            value.uploadedCount = max(uploadedCount, 0)
+            value.failedCount = max(failedCount, 0)
+            value.failureCategories = failureCategories
+            value.totalCount = max(
+                preparedFileCount,
+                value.uploadedCount + value.failedCount
+            )
+            value.currentBytesSent = 0
+            value.currentBytesTotal = 0
+            if value.failedCount == 0 {
+                value.completedBytes = value.totalBytes
+                value.stage = .completed
+            } else {
+                value.stage = .failed
+            }
+        }
+    }
+
+    private func update(
+        _ mutate: (inout AutomaticTransferProgress) -> Void
+    ) {
+        let snapshot = lock.withLock { () -> AutomaticTransferProgress in
+            mutate(&progress)
+            return progress
+        }
+        store.publish(snapshot)
+    }
+}

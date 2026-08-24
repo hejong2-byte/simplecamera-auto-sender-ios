@@ -284,9 +284,10 @@ final class PhotoSyncServiceTests: XCTestCase {
             scanDelaysNanoseconds: [0],
             automaticProgressStore: progressStore
         )
+        let updates = progressStore.updates()
         let collector = Task {
             var values: [AutomaticTransferProgress] = []
-            for await value in progressStore.updates() {
+            for await value in updates {
                 values.append(value)
                 if value.stage == .completed || value.stage == .failed {
                     return values
