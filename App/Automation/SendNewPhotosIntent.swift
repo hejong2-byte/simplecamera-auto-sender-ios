@@ -11,11 +11,6 @@ struct SendNewSimpleCameraPhotosIntent: AppIntent {
         let summary = try await AppDependencies.shared.syncService.run(
             trigger: .automation
         )
-        if summary.failed > 0 {
-            return .result(
-                dialog: "\(summary.uploaded)장 완료, \(summary.failed)장 재시도 대기"
-            )
-        }
-        return .result(dialog: "\(summary.uploaded)장 전송 완료")
+        return .result(dialog: "\(summary.automationResultDescription)")
     }
 }

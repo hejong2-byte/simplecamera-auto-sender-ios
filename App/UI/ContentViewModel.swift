@@ -16,6 +16,7 @@ final class ContentViewModel: ObservableObject {
     @Published private(set) var queuedCount = 0
     @Published private(set) var uploadedCount = 0
     @Published private(set) var failedCount = 0
+    @Published private(set) var automaticFailureMessage: String?
     @Published private(set) var lastSummary: SyncTransferSummary?
     @Published private(set) var lastError: String?
     @Published private(set) var isWorking = false
@@ -90,6 +91,11 @@ final class ContentViewModel: ObservableObject {
         queuedCount = records.filter { $0.state == .queued }.count
         uploadedCount = records.filter { $0.state == .uploaded }.count
         failedCount = records.filter { $0.state == .failed }.count
+        automaticFailureMessage = Set(
+            records.compactMap { record in
+                record.state == .failed ? record.lastError : nil
+            }
+        ).uploadFailureDescription
     }
 
     func requestPhotoAccess() async {

@@ -117,6 +117,11 @@ struct SettingsView: View {
                 Text("최근 실행: \(summary.matched)장 확인, \(summary.uploaded)장 전송 완료")
                     .font(.caption)
             }
+            if let failure = model.automaticFailureMessage {
+                Label("실패 원인: \(failure)", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
             if let error = model.lastError {
                 Text(error).font(.caption).foregroundStyle(.red)
             }

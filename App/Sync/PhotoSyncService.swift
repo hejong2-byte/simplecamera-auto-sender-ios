@@ -28,17 +28,15 @@ struct SyncTransferSummary: Sendable, Equatable {
     }
 
     var failureDescription: String? {
-        let labels: [(UploadErrorCategory, String)] = [
-            (.authentication, "인증 오류"),
-            (.server, "서버 오류"),
-            (.network, "네트워크 오류"),
-            (.unreadable, "원본 읽기 오류"),
-            (.unknown, "알 수 없는 오류"),
-        ]
-        let descriptions = labels.compactMap { category, label in
-            failureCategories.contains(category) ? label : nil
+        failureCategories.uploadFailureDescription
+    }
+
+    var automationResultDescription: String {
+        if failed > 0 {
+            let reason = failureDescription.map { " (\($0))" } ?? ""
+            return "\(uploaded)장 완료, \(failed)장 재시도 대기\(reason)"
         }
-        return descriptions.isEmpty ? nil : descriptions.joined(separator: " · ")
+        return "\(uploaded)장 전송 완료"
     }
 }
 
