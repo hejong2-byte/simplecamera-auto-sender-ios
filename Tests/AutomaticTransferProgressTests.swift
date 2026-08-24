@@ -27,7 +27,8 @@ final class AutomaticTransferProgressTests: XCTestCase {
         store.publish(latest)
 
         var iterator = store.updates().makeAsyncIterator()
+        let received = await iterator.next()
 
-        XCTAssertEqual(await iterator.next(), latest)
+        XCTAssertEqual(received, latest)
     }
 }
