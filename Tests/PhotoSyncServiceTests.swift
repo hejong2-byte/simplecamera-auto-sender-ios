@@ -230,6 +230,10 @@ final class PhotoSyncServiceTests: XCTestCase {
         XCTAssertEqual(result.failed, 1)
         XCTAssertEqual(result.failureCategories, [.server])
         XCTAssertEqual(result.failureDescription, "서버 오류")
+        XCTAssertEqual(
+            result.automationResultDescription,
+            "0장 완료, 1장 재시도 대기 (서버 오류)"
+        )
     }
 
     func testMatchingPhotosBeginUploadingWithoutWaitingForEarlierUploads() async throws {

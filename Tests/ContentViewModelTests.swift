@@ -160,6 +160,24 @@ final class ContentViewModelTests: XCTestCase {
         XCTAssertEqual(model.manualTransferMessage, "사진 전송 완료 · 1개")
     }
 
+    func testRefreshPublishesAutomaticServerFailureMessage() async throws {
+        let ledger = try UploadLedger(fileURL: temporaryLedgerURL())
+        try await ledger.recordDiscovery(id: "server-photo", createdAt: .now)
+        try await ledger.markFailed(id: "server-photo", category: .server)
+        let model = ContentViewModel(
+            credentialStore: InMemoryCredentialStore(),
+            ledger: ledger,
+            uploader: NoOpUploader(),
+            now: Date.init,
+            send: { _ in SyncTransferSummary(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
+            photoAuthorizationStatus: .authorized
+        )
+
+        await model.refresh()
+
+        XCTAssertEqual(model.automaticFailureMessage, "서버 오류")
+    }
+
     private func temporaryLedgerURL() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
