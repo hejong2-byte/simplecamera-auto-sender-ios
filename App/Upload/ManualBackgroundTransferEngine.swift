@@ -14,7 +14,12 @@ private struct ManualMultipartCompleteRequestBody: Encodable {
     let parts: [ManualMultipartPartResponse]
 }
 
-actor ManualBackgroundTransferEngine {
+protocol ManualTransferQueueing: Sendable {
+    func enqueue(_ jobs: [ManualTransferJob]) async throws
+    func updates() async -> AsyncStream<ManualTransferProgress>
+}
+
+actor ManualBackgroundTransferEngine: ManualTransferQueueing {
     typealias Sleeper = @Sendable (UInt64) async -> Void
 
     private let scheduler: ManualUploadTaskScheduling
@@ -85,7 +90,7 @@ actor ManualBackgroundTransferEngine {
         }
     }
 
-    func updates() -> AsyncStream<ManualTransferProgress> {
+    func updates() async -> AsyncStream<ManualTransferProgress> {
         let id = UUID()
         let pair = AsyncStream.makeStream(of: ManualTransferProgress.self)
         continuations[id] = pair.continuation

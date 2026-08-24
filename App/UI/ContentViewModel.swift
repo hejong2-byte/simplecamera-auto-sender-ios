@@ -4,10 +4,11 @@ import Photos
 @MainActor
 final class ContentViewModel: ObservableObject {
     typealias SendAction = @Sendable (SyncTrigger) async throws -> SyncTransferSummary
-    typealias ManualSendAction = @Sendable (
+    typealias ManualEnqueueAction = @Sendable (
         ManualMediaSelection,
         ManualMediaKind
     ) async -> ManualMediaTransferSummary
+    typealias ManualUpdatesAction = @Sendable () async -> AsyncStream<ManualTransferProgress>
 
     @Published private(set) var photoAuthorizationStatus: PHAuthorizationStatus
     @Published private(set) var hasCredential = false
@@ -21,13 +22,15 @@ final class ContentViewModel: ObservableObject {
     @Published private(set) var isManualTransferWorking = false
     @Published private(set) var lastManualSummary: ManualMediaTransferSummary?
     @Published private(set) var manualTransferMessage: String?
+    @Published private(set) var manualProgress: ManualTransferProgress?
 
     private let credentialStore: CredentialStore
     private let ledger: UploadLedger
     private let uploader: UploadCoordinating
     private let now: @Sendable () -> Date
     private let send: SendAction
-    private let manualSend: ManualSendAction
+    private let manualEnqueue: ManualEnqueueAction
+    private var manualProgressTask: Task<Void, Never>?
 
     init(
         credentialStore: CredentialStore,
@@ -35,7 +38,10 @@ final class ContentViewModel: ObservableObject {
         uploader: UploadCoordinating,
         now: @escaping @Sendable () -> Date,
         send: @escaping SendAction,
-        manualSend: @escaping ManualSendAction = { _, _ in .empty },
+        manualEnqueue: @escaping ManualEnqueueAction = { _, _ in .empty },
+        manualUpdates: @escaping ManualUpdatesAction = {
+            AsyncStream { continuation in continuation.finish() }
+        },
         photoAuthorizationStatus initialPhotoAuthorizationStatus: PHAuthorizationStatus? = nil
     ) {
         self.credentialStore = credentialStore
@@ -43,9 +49,20 @@ final class ContentViewModel: ObservableObject {
         self.uploader = uploader
         self.now = now
         self.send = send
-        self.manualSend = manualSend
+        self.manualEnqueue = manualEnqueue
         photoAuthorizationStatus = initialPhotoAuthorizationStatus
             ?? PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        manualProgressTask = Task { [weak self] in
+            let updates = await manualUpdates()
+            for await progress in updates {
+                guard !Task.isCancelled else { break }
+                self?.apply(progress)
+            }
+        }
+    }
+
+    deinit {
+        manualProgressTask?.cancel()
     }
 
     var hasFullPhotoAccess: Bool {
@@ -111,10 +128,14 @@ final class ContentViewModel: ObservableObject {
         }
         isManualTransferWorking = true
         manualTransferMessage = "\(selection.assetIdentifiers.count + selection.unavailableCount)개 항목 전송 중…"
-        let summary = await manualSend(selection, kind)
+        let summary = await manualEnqueue(selection, kind)
         lastManualSummary = summary
-        manualTransferMessage = Self.manualMessage(kind: kind, summary: summary)
-        isManualTransferWorking = false
+        if summary.selected == 0 || summary.failed == summary.selected {
+            manualTransferMessage = Self.manualMessage(kind: kind, summary: summary)
+            isManualTransferWorking = false
+        } else {
+            manualTransferMessage = "\(kind.title) 백그라운드 전송을 시작했습니다."
+        }
         await refresh()
     }
 
@@ -172,5 +193,113 @@ final class ContentViewModel: ObservableObject {
             detail += " (지원하지 않는 형식 포함)"
         }
         return detail
+    }
+
+    var manualStageTitle: String {
+        guard let progress = manualProgress else { return "수동 전송 상태" }
+        switch progress.stage {
+        case .idle: "전송 대기"
+        case .preparing: "파일 준비 중"
+        case .starting: "백그라운드 전송 시작 중"
+        case .uploading: "PC로 전송 중"
+        case .retrying: "연결 재시도 중"
+        case .verifying: "서버 저장 확인 중"
+        case .completed: "전송 완료"
+        case .failed: "전송 실패"
+        }
+    }
+
+    var manualByteProgressText: String {
+        guard let progress = manualProgress else { return "" }
+        return "\(Self.byteText(progress.displayedBytesSent)) / \(Self.byteText(progress.totalBytes))"
+    }
+
+    private func apply(_ progress: ManualTransferProgress) {
+        manualProgress = progress
+        let categories: Set<ManualTransferFailureCategory>
+        switch progress.failure {
+        case .network?: categories = [.network]
+        case .authentication?: categories = [.authentication]
+        case .server?: categories = [.server]
+        case .unsupported?: categories = [.unsupported]
+        case .tooLarge?: categories = [.tooLarge]
+        case .other?: categories = [.other]
+        case nil: categories = []
+        }
+        lastManualSummary = ManualMediaTransferSummary(
+            selected: progress.selectedCount,
+            uploaded: progress.uploadedCount,
+            failed: progress.failedCount,
+            failureCategories: categories
+        )
+        isManualTransferWorking = progress.completedCount < progress.selectedCount
+            || Self.activeManualStages.contains(progress.stage)
+        manualTransferMessage = Self.progressMessage(progress)
+    }
+
+    private static let activeManualStages: Set<ManualTransferStage> = [
+        .preparing,
+        .starting,
+        .uploading,
+        .retrying,
+        .verifying,
+    ]
+
+    private static func progressMessage(_ progress: ManualTransferProgress) -> String {
+        switch progress.stage {
+        case .idle:
+            return "전송할 종류를 선택하세요."
+        case .preparing:
+            return "\(progress.kind.title) 준비 중 · \(progress.currentIndex)/\(progress.selectedCount)"
+        case .starting:
+            return "\(progress.kind.title) 백그라운드 전송 시작 중"
+        case .uploading:
+            return "\(progress.kind.title) 전송 중 · \(progress.percent)%"
+        case .retrying:
+            return "\(progress.kind.title) 전송 재시도 중 · \(progress.retryAttempt)/3"
+        case .verifying:
+            return "\(progress.kind.title) 저장 확인 중 · \(progress.percent)%"
+        case .completed:
+            return "\(progress.kind.title) 전송 완료 · \(progress.uploadedCount)개"
+        case .failed:
+            return failureMessage(progress)
+        }
+    }
+
+    private static func failureMessage(_ progress: ManualTransferProgress) -> String {
+        let prefix = "\(progress.kind.title) 전송 실패"
+        switch progress.failure {
+        case .network?:
+            return prefix + " · 네트워크 연결을 확인해 주세요."
+        case .authentication?:
+            return prefix + " · 전송 인증 설정을 확인해 주세요."
+        case let .server(statusCode, code)?:
+            let detail: String
+            switch code {
+            case "size_mismatch": detail = "서버 크기 검증 실패"
+            case "id_mismatch": detail = "서버 파일 식별 검증 실패"
+            case "metadata_missing": detail = "서버 파일 정보 검증 실패"
+            default: detail = "서버 오류"
+            }
+            return prefix + " · \(detail) (HTTP \(statusCode))"
+        case .unsupported?:
+            return prefix + " · 지원하지 않는 형식입니다."
+        case .tooLarge?:
+            return prefix + " · 2GiB를 초과한 파일입니다."
+        case .other?, nil:
+            return prefix + " · 파일을 전송하지 못했습니다."
+        }
+    }
+
+    private static func byteText(_ bytes: Int64) -> String {
+        let value = max(bytes, 0)
+        if value < 1_024 { return "\(value)바이트" }
+        if value < 1_024 * 1_024 {
+            return String(format: "%.1fKB", Double(value) / 1_024)
+        }
+        if value < 1_024 * 1_024 * 1_024 {
+            return String(format: "%.1fMB", Double(value) / Double(1_024 * 1_024))
+        }
+        return String(format: "%.2fGB", Double(value) / Double(1_024 * 1_024 * 1_024))
     }
 }

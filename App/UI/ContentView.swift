@@ -91,7 +91,7 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(model.isManualTransferWorking)
             }
-            Text("여러 개를 한 번에 선택할 수 있습니다. 100MB가 넘는 동영상은 자동으로 나눠 전송합니다.")
+            Text("여러 개를 한 번에 선택할 수 있습니다. 큰 동영상은 32MB 단위로 나눠 백그라운드에서 전송합니다.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -100,9 +100,22 @@ struct ContentView: View {
 
     private var manualStatusCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("수동 전송 상태").font(.headline)
-            if model.isManualTransferWorking {
-                ProgressView()
+            Text(model.manualStageTitle).font(.headline)
+            if let progress = model.manualProgress, progress.stage != .idle {
+                if progress.totalBytes > 0 {
+                    ProgressView(value: Double(progress.percent), total: 100)
+                        .tint(progress.stage == .failed ? .red : .cyan)
+                    HStack {
+                        Text("\(progress.percent)%")
+                            .font(.title3.monospacedDigit().bold())
+                        Spacer()
+                        Text(model.manualByteProgressText)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                } else if model.isManualTransferWorking {
+                    ProgressView()
+                }
             }
             Text(model.manualTransferMessage ?? "전송할 종류를 선택하세요.")
                 .font(.subheadline)

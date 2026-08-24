@@ -44,6 +44,10 @@ struct ManualTransferQueueState: Codable, Sendable, Equatable {
     static let empty = ManualTransferQueueState(batches: [], jobs: [])
 }
 
+enum ManualTransferJobStoreError: Error {
+    case batchNotFound
+}
+
 actor ManualTransferJobStore {
     private let fileURL: URL
     private let encoder: JSONEncoder
@@ -98,6 +102,22 @@ actor ManualTransferJobStore {
             state.batches.append(batch)
         }
         try replace(state)
+    }
+
+    func advanceBatch(
+        id: UUID,
+        preparedBy preparedDelta: Int,
+        failedBy failedDelta: Int
+    ) throws -> ManualTransferBatch {
+        var state = try load()
+        guard let index = state.batches.firstIndex(where: { $0.id == id }) else {
+            throw ManualTransferJobStoreError.batchNotFound
+        }
+        state.batches[index].preparedCount += preparedDelta
+        state.batches[index].failedCount += failedDelta
+        let batch = state.batches[index]
+        try replace(state)
+        return batch
     }
 
     func upsertJob(_ job: ManualTransferJob) throws {

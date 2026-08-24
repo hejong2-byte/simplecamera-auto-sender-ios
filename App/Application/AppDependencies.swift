@@ -39,8 +39,8 @@ final class AppDependencies: @unchecked Sendable {
         )
         let manualTransferService = ManualMediaTransferService(
             source: PhotoKitManualMediaSource(),
-            ledger: uploader.ledger,
-            uploader: uploader,
+            jobStore: manualJobStore,
+            engine: manualTransferEngine,
             exportDirectory: uploadsDirectory
                 .appendingPathComponent("Manual", isDirectory: true)
         )
@@ -96,8 +96,11 @@ final class AppDependencies: @unchecked Sendable {
             send: { [syncService] trigger in
                 try await syncService.run(trigger: trigger)
             },
-            manualSend: { [manualTransferService] selection, kind in
-                await manualTransferService.send(selection: selection, kind: kind)
+            manualEnqueue: { [manualTransferService] selection, kind in
+                await manualTransferService.enqueue(selection: selection, kind: kind)
+            },
+            manualUpdates: { [manualTransferService] in
+                await manualTransferService.updates()
             }
         )
     }
