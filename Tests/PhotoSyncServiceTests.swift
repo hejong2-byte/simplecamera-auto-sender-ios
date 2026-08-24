@@ -205,6 +205,33 @@ final class PhotoSyncServiceTests: XCTestCase {
         XCTAssertEqual(result.failed, 0)
     }
 
+    func testServerFailureIsReportedAsServerError() async throws {
+        let ledger = try await makeLedger()
+        let source = FakePhotoSource(items: [
+            (
+                PhotoCandidate(localIdentifier: "simple-server-failed", creationDate: .now),
+                "Simple Camera 5.0.7"
+            )
+        ])
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("test-secret")
+        let service = PhotoSyncService(
+            credentialStore: credentials,
+            photoSource: source,
+            metadataMatcher: TextMetadataMatcher(),
+            ledger: ledger,
+            uploader: ServerFailingUploader(),
+            uploadsDirectory: temporaryDirectory(),
+            scanDelaysNanoseconds: [0]
+        )
+
+        let result = try await service.run(trigger: .automation)
+
+        XCTAssertEqual(result.failed, 1)
+        XCTAssertEqual(result.failureCategories, [.server])
+        XCTAssertEqual(result.failureDescription, "서버 오류")
+    }
+
     func testMatchingPhotosBeginUploadingWithoutWaitingForEarlierUploads() async throws {
         let ledger = try await makeLedger()
         let source = FakePhotoSource(items: (1...4).map { index in
@@ -418,6 +445,15 @@ private final class RecordingUploader: UploadCoordinating, @unchecked Sendable {
 private final class FailingUploader: UploadCoordinating, @unchecked Sendable {
     func upload(assetID: String, fileURL: URL) async throws {
         throw URLError(.notConnectedToInternet)
+    }
+
+    func authenticationBlocked() -> Bool { false }
+    func credentialDidChange() {}
+}
+
+private final class ServerFailingUploader: UploadCoordinating, @unchecked Sendable {
+    func upload(assetID: String, fileURL: URL) async throws {
+        throw UploadHTTPError.server(statusCode: 503)
     }
 
     func authenticationBlocked() -> Bool { false }
