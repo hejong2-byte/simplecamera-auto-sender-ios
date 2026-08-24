@@ -434,7 +434,11 @@ private final class RecordingUploader: UploadCoordinating, @unchecked Sendable {
 
     var recordedIDs: [String] { lock.withLock { IDs } }
 
-    func upload(assetID: String, fileURL: URL) async throws {
+    func upload(
+        assetID: String,
+        fileURL: URL,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
+    ) async throws {
         let taskID = lock.withLock { () -> Int in
             IDs.append(assetID)
             return IDs.count
@@ -447,7 +451,11 @@ private final class RecordingUploader: UploadCoordinating, @unchecked Sendable {
 }
 
 private final class FailingUploader: UploadCoordinating, @unchecked Sendable {
-    func upload(assetID: String, fileURL: URL) async throws {
+    func upload(
+        assetID: String,
+        fileURL: URL,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
+    ) async throws {
         throw URLError(.notConnectedToInternet)
     }
 
@@ -456,7 +464,11 @@ private final class FailingUploader: UploadCoordinating, @unchecked Sendable {
 }
 
 private final class ServerFailingUploader: UploadCoordinating, @unchecked Sendable {
-    func upload(assetID: String, fileURL: URL) async throws {
+    func upload(
+        assetID: String,
+        fileURL: URL,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
+    ) async throws {
         throw UploadHTTPError.server(statusCode: 503)
     }
 
@@ -475,7 +487,11 @@ private final class FailOnceUploader: UploadCoordinating, @unchecked Sendable {
 
     var attemptCount: Int { lock.withLock { attempts } }
 
-    func upload(assetID: String, fileURL: URL) async throws {
+    func upload(
+        assetID: String,
+        fileURL: URL,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
+    ) async throws {
         let attempt = lock.withLock { () -> Int in
             attempts += 1
             return attempts
@@ -499,7 +515,11 @@ private final class BlockingUploader: UploadCoordinating, @unchecked Sendable {
 
     var startedCount: Int { lock.withLock { startedCountValue } }
 
-    func upload(assetID: String, fileURL: URL) async throws {
+    func upload(
+        assetID: String,
+        fileURL: URL,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
+    ) async throws {
         await withCheckedContinuation { continuation in
             let resumeImmediately = lock.withLock { () -> Bool in
                 startedCountValue += 1

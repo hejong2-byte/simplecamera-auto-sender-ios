@@ -239,7 +239,11 @@ private final class ManualProgressFeed: @unchecked Sendable {
 }
 
 private final class NoOpUploader: UploadCoordinating, @unchecked Sendable {
-    func upload(assetID: String, fileURL: URL) async throws {}
+    func upload(
+        assetID: String,
+        fileURL: URL,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
+    ) async throws {}
     func authenticationBlocked() -> Bool { false }
     func credentialDidChange() {}
 }

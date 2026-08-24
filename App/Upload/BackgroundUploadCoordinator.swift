@@ -1,15 +1,33 @@
 import Foundation
 
 protocol UploadCoordinating: Sendable {
-    func upload(assetID: String, fileURL: URL) async throws
+    func upload(
+        assetID: String,
+        fileURL: URL,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
+    ) async throws
     func authenticationBlocked() -> Bool
     func credentialDidChange()
+}
+
+extension UploadCoordinating {
+    func upload(
+        assetID: String,
+        fileURL: URL
+    ) async throws {
+        try await upload(
+            assetID: assetID,
+            fileURL: fileURL,
+            onProgress: { _, _ in }
+        )
+    }
 }
 
 protocol HTTPFileUploading: Sendable {
     func upload(
         for request: URLRequest,
-        fromFile fileURL: URL
+        fromFile fileURL: URL,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
     ) async throws -> (Data, URLResponse)
 }
 
@@ -28,14 +46,89 @@ enum ManualMediaUploadLimit {
     static let multipartPartBytes = 32 * 1024 * 1024
 }
 
-private struct URLSessionFileUploader: HTTPFileUploading, @unchecked Sendable {
-    let session: URLSession
+private final class URLSessionFileUploader: NSObject,
+    HTTPFileUploading,
+    URLSessionDataDelegate,
+    URLSessionTaskDelegate,
+    @unchecked Sendable {
+    private struct TaskState {
+        var responseData = Data()
+        let continuation: CheckedContinuation<(Data, URLResponse), Error>
+        let onProgress: @Sendable (Int64, Int64) -> Void
+    }
+
+    private let configuration: URLSessionConfiguration
+    private let lock = NSLock()
+    private var states: [Int: TaskState] = [:]
+    private lazy var session = URLSession(
+        configuration: configuration,
+        delegate: self,
+        delegateQueue: nil
+    )
+
+    init(configuration: URLSessionConfiguration) {
+        self.configuration = configuration
+        super.init()
+    }
 
     func upload(
         for request: URLRequest,
-        fromFile fileURL: URL
+        fromFile fileURL: URL,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
     ) async throws -> (Data, URLResponse) {
-        try await session.upload(for: request, fromFile: fileURL)
+        try await withCheckedThrowingContinuation { continuation in
+            let task = session.uploadTask(with: request, fromFile: fileURL)
+            lock.withLock {
+                states[task.taskIdentifier] = TaskState(
+                    continuation: continuation,
+                    onProgress: onProgress
+                )
+            }
+            task.resume()
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        let handler = lock.withLock {
+            states[task.taskIdentifier]?.onProgress
+        }
+        handler?(totalBytesSent, totalBytesExpectedToSend)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive data: Data
+    ) {
+        lock.withLock {
+            states[dataTask.taskIdentifier]?.responseData.append(data)
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        let state = lock.withLock {
+            states.removeValue(forKey: task.taskIdentifier)
+        }
+        guard let state else { return }
+        if let error {
+            state.continuation.resume(throwing: error)
+            return
+        }
+        guard let response = task.response else {
+            state.continuation.resume(throwing: UploadHTTPError.invalidResponse)
+            return
+        }
+        state.continuation.resume(returning: (state.responseData, response))
     }
 }
 
@@ -69,7 +162,11 @@ final class BackgroundUploadCoordinator: UploadCoordinating, @unchecked Sendable
         self.transport = transport ?? Self.makeTransport()
     }
 
-    func upload(assetID: String, fileURL: URL) async throws {
+    func upload(
+        assetID: String,
+        fileURL: URL,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
+    ) async throws {
         guard !authenticationBlocked() else {
             throw UploadConfigurationError.authenticationBlocked
         }
@@ -81,19 +178,22 @@ final class BackgroundUploadCoordinator: UploadCoordinating, @unchecked Sendable
         try await performUpload(
             assetID: assetID,
             fileURL: fileURL,
-            request: request
+            request: request,
+            onProgress: onProgress
         )
     }
 
     private func performUpload(
         assetID: String,
         fileURL: URL,
-        request: URLRequest
+        request: URLRequest,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
     ) async throws {
         try await ledger.markQueued(id: assetID, taskIdentifier: nil)
         let (_, response) = try await transport.upload(
             for: request,
-            fromFile: fileURL
+            fromFile: fileURL,
+            onProgress: onProgress
         )
         try validate(response: response)
         try await ledger.markUploaded(id: assetID)
@@ -127,8 +227,6 @@ final class BackgroundUploadCoordinator: UploadCoordinating, @unchecked Sendable
         let configuration = URLSessionConfiguration.default
         configuration.waitsForConnectivity = true
         configuration.httpMaximumConnectionsPerHost = 3
-        return URLSessionFileUploader(
-            session: URLSession(configuration: configuration)
-        )
+        return URLSessionFileUploader(configuration: configuration)
     }
 }
