@@ -18,6 +18,7 @@ enum PhotoSyncError: Error {
 }
 
 private struct CandidateTransferOutcome: Sendable {
+    let candidateID: String
     let matched: Int
     let uploaded: Int
     let failed: Int
@@ -90,9 +91,9 @@ actor PhotoSyncService {
 
         var discoveredIDs = Set<String>()
         var discovered = 0
-        var matched = 0
-        var uploaded = 0
-        var failed = 0
+        var matchedIDs = Set<String>()
+        var uploadedIDs = Set<String>()
+        var failedIDs = Set<String>()
         var completedUploadInEarlierScan = false
 
         for (scanIndex, delay) in scanDelaysNanoseconds.enumerated() {
@@ -125,9 +126,11 @@ actor PhotoSyncService {
                 isFinalScan: scanIndex == scanDelaysNanoseconds.indices.last
             )
             let completedUploadsThisScan = outcomes.reduce(0) { $0 + $1.uploaded }
-            matched += outcomes.reduce(0) { $0 + $1.matched }
-            uploaded += completedUploadsThisScan
-            failed += outcomes.reduce(0) { $0 + $1.failed }
+            for outcome in outcomes {
+                if outcome.matched > 0 { _ = matchedIDs.insert(outcome.candidateID) }
+                if outcome.uploaded > 0 { _ = uploadedIDs.insert(outcome.candidateID) }
+                if outcome.failed > 0 { _ = failedIDs.insert(outcome.candidateID) }
+            }
 
             if completedUploadInEarlierScan && completedUploadsThisScan == 0 {
                 break
@@ -139,9 +142,9 @@ actor PhotoSyncService {
 
         return SyncTransferSummary(
             discovered: discovered,
-            matched: matched,
-            uploaded: uploaded,
-            failed: failed
+            matched: matchedIDs.count,
+            uploaded: uploadedIDs.count,
+            failed: failedIDs.count
         )
     }
 
@@ -205,14 +208,24 @@ actor PhotoSyncService {
                     try await ledger.markIgnored(id: candidate.localIdentifier)
                 }
                 try? FileManager.default.removeItem(at: fileURL)
-                return CandidateTransferOutcome(matched: 0, uploaded: 0, failed: 0)
+                return CandidateTransferOutcome(
+                    candidateID: candidate.localIdentifier,
+                    matched: 0,
+                    uploaded: 0,
+                    failed: 0
+                )
             }
 
             try await uploader.upload(
                 assetID: candidate.localIdentifier,
                 fileURL: fileURL
             )
-            return CandidateTransferOutcome(matched: 1, uploaded: 1, failed: 0)
+            return CandidateTransferOutcome(
+                candidateID: candidate.localIdentifier,
+                matched: 1,
+                uploaded: 1,
+                failed: 0
+            )
         } catch {
             try? await ledger.markFailed(
                 id: candidate.localIdentifier,
@@ -220,6 +233,7 @@ actor PhotoSyncService {
             )
             try? FileManager.default.removeItem(at: fileURL)
             return CandidateTransferOutcome(
+                candidateID: candidate.localIdentifier,
                 matched: didMatch ? 1 : 0,
                 uploaded: 0,
                 failed: 1
