@@ -121,7 +121,7 @@ private actor ControlledHTTPFileUploader: HTTPFileUploading {
         onProgress: @escaping @Sendable (Int64, Int64) -> Void
     ) async throws -> (Data, URLResponse) {
         progressHandler = onProgress
-        try await withCheckedThrowingContinuation { continuation in
+        return try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
         }
     }
