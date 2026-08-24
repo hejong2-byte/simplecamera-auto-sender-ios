@@ -6,8 +6,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    CURRENT_PROJECT_VERSION: 5
-    MARKETING_VERSION: 0.1.7
+    CURRENT_PROJECT_VERSION: 6
+    MARKETING_VERSION: 0.1.8
 targets:
   SimpleCameraAutoSender:
     type: application
