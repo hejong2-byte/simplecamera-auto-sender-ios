@@ -120,12 +120,41 @@ final class USBReceiveServiceTests: XCTestCase {
         XCTAssertEqual(acknowledgedIDs, [])
     }
 
+    func testAckFailureRetriesAckWithoutDownloadingFileAgain() async throws {
+        let fixture = try makeFixture(
+            payload: zipPayload(count: 25),
+            chunkSize: 8,
+            ackFailures: 1
+        )
+
+        do {
+            _ = try await fixture.service.runOnce()
+            XCTFail("Expected the first ACK to fail")
+        } catch StubReceiverError.ackFailed {
+            // Expected.
+        }
+        let firstRanges = await fixture.client.requestedRanges()
+        XCTAssertEqual(
+            fixture.ledger.checkpoint(for: fixture.delivery.deliveryID)?.state,
+            .ackPending
+        )
+
+        _ = try await fixture.service.runOnce()
+        let ackAttempts = await fixture.client.ackAttemptCount()
+        let secondRanges = await fixture.client.requestedRanges()
+
+        XCTAssertEqual(ackAttempts, 2)
+        XCTAssertEqual(secondRanges, firstRanges)
+        XCTAssertNil(fixture.ledger.checkpoint(for: fixture.delivery.deliveryID))
+    }
+
     private func makeFixture(
         payload: Data,
         fileName: String = "업무.zip",
         expectedSHA256: String? = nil,
         chunkSize: Int64,
-        responseMode: StubReceiverClient.ResponseMode = .partial
+        responseMode: StubReceiverClient.ResponseMode = .partial,
+        ackFailures: Int = 0
     ) throws -> Fixture {
         let destination = temporaryDirectory()
         let delivery = IPhoneDelivery(
@@ -142,7 +171,8 @@ final class USBReceiveServiceTests: XCTestCase {
         let client = StubReceiverClient(
             delivery: delivery,
             payload: payload,
-            responseMode: responseMode
+            responseMode: responseMode,
+            ackFailures: ackFailures
         )
         let ledger = try USBReceiveLedger(
             fileURL: temporaryDirectory().appendingPathComponent("ledger.json")
@@ -167,7 +197,8 @@ final class USBReceiveServiceTests: XCTestCase {
                     isStale: false
                 )
             },
-            chunkSize: chunkSize
+            chunkSize: chunkSize,
+            volumeIdentity: { _ in "test-volume" }
         )
         return Fixture(
             client: client,
@@ -221,11 +252,19 @@ private actor StubReceiverClient: IPhoneReceiverServing {
     private let responseMode: ResponseMode
     private var ranges: [ClosedRange<Int64>] = []
     private var acknowledgements: [UUID] = []
+    private var remainingAckFailures: Int
+    private var ackAttempts = 0
 
-    init(delivery: IPhoneDelivery, payload: Data, responseMode: ResponseMode) {
+    init(
+        delivery: IPhoneDelivery,
+        payload: Data,
+        responseMode: ResponseMode,
+        ackFailures: Int
+    ) {
         self.delivery = delivery
         self.payload = payload
         self.responseMode = responseMode
+        remainingAckFailures = ackFailures
     }
 
     func list(receiverID: UUID, receiveSecret: String) async throws -> [IPhoneDelivery] {
@@ -273,9 +312,19 @@ private actor StubReceiverClient: IPhoneReceiverServing {
         receiveSecret: String,
         sha256: String
     ) async throws {
+        ackAttempts += 1
+        if remainingAckFailures > 0 {
+            remainingAckFailures -= 1
+            throw StubReceiverError.ackFailed
+        }
         acknowledgements.append(deliveryID)
     }
 
     func requestedRanges() -> [ClosedRange<Int64>] { ranges }
     func acknowledgedIDs() -> [UUID] { acknowledgements }
+    func ackAttemptCount() -> Int { ackAttempts }
+}
+
+private enum StubReceiverError: Error {
+    case ackFailed
 }
