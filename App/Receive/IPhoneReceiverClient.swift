@@ -5,6 +5,153 @@ enum IPhoneReceiverRequestError: Error, Equatable {
     case invalidRange
 }
 
+enum IPhoneReceiverClientError: Error, Equatable {
+    case invalidResponse
+    case server(statusCode: Int, code: String?)
+}
+
+protocol IPhoneReceiverTransport: Sendable {
+    func data(for request: URLRequest) async throws -> (Data, URLResponse)
+}
+
+struct URLSessionIPhoneReceiverTransport: IPhoneReceiverTransport, @unchecked Sendable {
+    let session: URLSession
+
+    init(session: URLSession = .shared) {
+        self.session = session
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        try await session.data(for: request)
+    }
+}
+
+struct IPhoneReceiverRangeChunk: Sendable {
+    let data: Data
+    let statusCode: Int
+    let contentRange: String?
+    let contentLength: Int64
+}
+
+struct IPhoneReceiverClient: Sendable {
+    private let requests: IPhoneReceiverRequestFactory
+    private let transport: any IPhoneReceiverTransport
+
+    init(
+        baseURL: URL = AppConfiguration.relayAPIBaseURL,
+        transport: any IPhoneReceiverTransport = URLSessionIPhoneReceiverTransport()
+    ) {
+        requests = IPhoneReceiverRequestFactory(baseURL: baseURL)
+        self.transport = transport
+    }
+
+    func register(
+        uploadCredential: String,
+        deviceName: String
+    ) async throws -> IPhoneReceiverRegistration {
+        let request = try requests.registration(
+            uploadCredential: uploadCredential,
+            deviceName: deviceName
+        )
+        let data = try await successfulData(for: request)
+        return try IPhoneReceiverJSON.decoder.decode(
+            IPhoneReceiverRegistration.self,
+            from: data
+        )
+    }
+
+    func list(
+        receiverID: UUID,
+        receiveSecret: String
+    ) async throws -> [IPhoneDelivery] {
+        let request = try requests.list(
+            receiverID: receiverID.uuidString.lowercased(),
+            receiveSecret: receiveSecret
+        )
+        return try IPhoneReceiverJSON.decoder.decode(
+            [IPhoneDelivery].self,
+            from: try await successfulData(for: request)
+        )
+    }
+
+    func lease(
+        receiverID: UUID,
+        deliveryID: UUID,
+        receiveSecret: String
+    ) async throws -> IPhoneDelivery {
+        let request = try requests.lease(
+            receiverID: receiverID.uuidString.lowercased(),
+            deliveryID: deliveryID.uuidString.lowercased(),
+            receiveSecret: receiveSecret
+        )
+        return try IPhoneReceiverJSON.decoder.decode(
+            IPhoneDelivery.self,
+            from: try await successfulData(for: request)
+        )
+    }
+
+    func range(
+        receiverID: UUID,
+        deliveryID: UUID,
+        receiveSecret: String,
+        start: Int64,
+        end: Int64
+    ) async throws -> IPhoneReceiverRangeChunk {
+        let request = try requests.range(
+            receiverID: receiverID.uuidString.lowercased(),
+            deliveryID: deliveryID.uuidString.lowercased(),
+            receiveSecret: receiveSecret,
+            start: start,
+            end: end
+        )
+        let (data, response) = try await transport.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw IPhoneReceiverClientError.invalidResponse
+        }
+        return IPhoneReceiverRangeChunk(
+            data: data,
+            statusCode: http.statusCode,
+            contentRange: http.value(forHTTPHeaderField: "Content-Range"),
+            contentLength: Int64(
+                http.value(forHTTPHeaderField: "Content-Length") ?? ""
+            ) ?? Int64(data.count)
+        )
+    }
+
+    func acknowledge(
+        receiverID: UUID,
+        deliveryID: UUID,
+        receiveSecret: String,
+        sha256: String
+    ) async throws {
+        let request = try requests.ack(
+            receiverID: receiverID.uuidString.lowercased(),
+            deliveryID: deliveryID.uuidString.lowercased(),
+            receiveSecret: receiveSecret,
+            sha256: sha256
+        )
+        _ = try await successfulData(for: request)
+    }
+
+    private func successfulData(for request: URLRequest) async throws -> Data {
+        let (data, response) = try await transport.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw IPhoneReceiverClientError.invalidResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let code = (try? JSONDecoder().decode(
+                [String: String].self,
+                from: data
+            ))?["error"]
+            throw IPhoneReceiverClientError.server(
+                statusCode: http.statusCode,
+                code: code
+            )
+        }
+        return data
+    }
+}
+
 struct IPhoneReceiverRequestFactory: Sendable {
     let baseURL: URL
 
