@@ -3,11 +3,13 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var model: ContentViewModel
+    @StateObject private var receiverModel: USBReceiverViewModel
     @State private var pickerKind: ManualMediaKind?
     @State private var readinessMessage: String?
 
-    init(model: ContentViewModel) {
+    init(model: ContentViewModel, receiverModel: USBReceiverViewModel) {
         _model = StateObject(wrappedValue: model)
+        _receiverModel = StateObject(wrappedValue: receiverModel)
     }
 
     var body: some View {
@@ -15,11 +17,12 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     header
+                    receiverCard
                     automaticStatusCard
                     manualTransferCard
                     manualStatusCard
                     NavigationLink {
-                        SettingsView(model: model)
+                        SettingsView(model: model, receiverModel: receiverModel)
                     } label: {
                         Label("설정", systemImage: "gearshape.fill")
                             .font(.headline)
@@ -97,6 +100,30 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
         }
         .cardStyle()
+    }
+
+    private var receiverCard: some View {
+        NavigationLink {
+            USBReceiverView(model: receiverModel)
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("PC ZIP 수신", systemImage: "externaldrive.badge.icloud")
+                    .font(.headline)
+                Text("PC에서 보낸 ZIP을 연결된 USB 메모리에 직접 저장")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Text(receiverModel.registrationCode.map { "코드 \($0)" } ?? "기기 등록 필요")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+            .cardStyle()
+        }
+        .buttonStyle(.plain)
+        .task { await receiverModel.refresh() }
     }
 
     private var automaticStatusCard: some View {
