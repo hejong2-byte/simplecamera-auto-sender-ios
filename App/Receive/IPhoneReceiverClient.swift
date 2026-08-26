@@ -33,6 +33,28 @@ struct IPhoneReceiverRangeChunk: Sendable {
     let contentLength: Int64
 }
 
+protocol IPhoneReceiverServing: Sendable {
+    func list(receiverID: UUID, receiveSecret: String) async throws -> [IPhoneDelivery]
+    func lease(
+        receiverID: UUID,
+        deliveryID: UUID,
+        receiveSecret: String
+    ) async throws -> IPhoneDelivery
+    func range(
+        receiverID: UUID,
+        deliveryID: UUID,
+        receiveSecret: String,
+        start: Int64,
+        end: Int64
+    ) async throws -> IPhoneReceiverRangeChunk
+    func acknowledge(
+        receiverID: UUID,
+        deliveryID: UUID,
+        receiveSecret: String,
+        sha256: String
+    ) async throws
+}
+
 struct IPhoneReceiverClient: Sendable {
     private let requests: IPhoneReceiverRequestFactory
     private let transport: any IPhoneReceiverTransport
@@ -151,6 +173,8 @@ struct IPhoneReceiverClient: Sendable {
         return data
     }
 }
+
+extension IPhoneReceiverClient: IPhoneReceiverServing {}
 
 struct IPhoneReceiverRequestFactory: Sendable {
     let baseURL: URL

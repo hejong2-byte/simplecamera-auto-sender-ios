@@ -16,7 +16,7 @@ struct USBReceiveCheckpoint: Codable, Equatable, Sendable {
     let totalBytes: Int64
     var confirmedOffset: Int64
     let destinationVolumeID: String
-    let finalFileName: String
+    var finalFileName: String
     var state: USBReceiveState
 
     static func safeResumeOffset(
@@ -52,6 +52,14 @@ final class USBReceiveLedger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return checkpoints[deliveryID]
+    }
+
+    func allCheckpoints() -> [USBReceiveCheckpoint] {
+        lock.lock()
+        defer { lock.unlock() }
+        return checkpoints.values.sorted {
+            $0.deliveryID.uuidString < $1.deliveryID.uuidString
+        }
     }
 
     func save(_ checkpoint: USBReceiveCheckpoint) throws {
