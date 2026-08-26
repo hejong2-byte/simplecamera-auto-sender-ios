@@ -8,6 +8,7 @@ enum USBReceiveServiceError: Error, Equatable {
     case destinationChanged
     case destinationNotWritable
     case insufficientSpace
+    case fat32FileTooLarge
     case invalidZIPMetadata
     case invalidZIPSignature
     case sizeMismatch
@@ -24,6 +25,7 @@ actor USBReceiveService {
     typealias CredentialsProvider = @Sendable () throws -> IPhoneReceiverCredentials?
     typealias DestinationProvider = @Sendable () throws -> USBBookmarkDestination?
     typealias VolumeIdentityProvider = @Sendable (URL) throws -> String?
+    typealias VolumeFormatProvider = @Sendable (URL) throws -> String?
 
     static let defaultChunkSize: Int64 = 8 * 1_024 * 1_024
     static let partialDirectoryName = ".SimpleCameraReceiver"
@@ -34,6 +36,7 @@ actor USBReceiveService {
     private let destination: DestinationProvider
     private let chunkSize: Int64
     private let volumeIdentity: VolumeIdentityProvider
+    private let volumeFormat: VolumeFormatProvider
     private let now: @Sendable () -> Date
     private let fileManager: FileManager
     private let progressStore: USBReceiveProgressStore
@@ -45,6 +48,7 @@ actor USBReceiveService {
         destination: @escaping DestinationProvider,
         chunkSize: Int64 = USBReceiveService.defaultChunkSize,
         volumeIdentity: @escaping VolumeIdentityProvider = USBReceiveService.systemVolumeIdentity,
+        volumeFormat: @escaping VolumeFormatProvider = USBReceiveService.systemVolumeFormat,
         now: @escaping @Sendable () -> Date = Date.init,
         fileManager: FileManager = .default,
         progressStore: USBReceiveProgressStore = USBReceiveProgressStore()
@@ -56,6 +60,7 @@ actor USBReceiveService {
         self.destination = destination
         self.chunkSize = chunkSize
         self.volumeIdentity = volumeIdentity
+        self.volumeFormat = volumeFormat
         self.now = now
         self.fileManager = fileManager
         self.progressStore = progressStore
@@ -228,6 +233,10 @@ actor USBReceiveService {
     ) async throws {
         let startedAt = now()
         let safeName = try validatedFileName(delivery)
+        try USBVolumePolicy.validate(
+            fileSize: delivery.size,
+            formatDescription: try volumeFormat(destination.url)
+        )
         var checkpoint = try checkpoint(
             for: delivery,
             safeName: safeName,
@@ -638,6 +647,11 @@ actor USBReceiveService {
         try url.resourceValues(forKeys: [.volumeIdentifierKey])
             .volumeIdentifier
             .map { String(describing: $0) }
+    }
+
+    private static func systemVolumeFormat(_ url: URL) throws -> String? {
+        try url.resourceValues(forKeys: [.volumeLocalizedFormatDescriptionKey])
+            .volumeLocalizedFormatDescription
     }
 
     private static func errorMessage(_ error: Error) -> String {

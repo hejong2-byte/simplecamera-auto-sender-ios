@@ -12,6 +12,7 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var receiveProgress: USBReceiveProgress?
     @Published private(set) var isPolling = false
     @Published private(set) var lastError: String?
+    @Published private(set) var allowsCellular: Bool
 
     private let uploadCredentialStore: CredentialStore
     private let registrationStore: IPhoneReceiverRegistrationStore
@@ -20,6 +21,7 @@ final class USBReceiverViewModel: ObservableObject {
     private let receiveOnce: ReceiveOnce
     private let defaultDeviceName: String
     private let sleep: Sleep
+    private let preferences: USBReceiverPreferences
     private var progressTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
 
@@ -31,6 +33,7 @@ final class USBReceiverViewModel: ObservableObject {
         receiveOnce: @escaping ReceiveOnce,
         progressUpdates: @escaping ProgressUpdates,
         defaultDeviceName: String,
+        preferences: USBReceiverPreferences = USBReceiverPreferences(),
         sleep: @escaping Sleep = { try await Task.sleep(for: .seconds(2)) }
     ) {
         self.uploadCredentialStore = uploadCredentialStore
@@ -39,6 +42,8 @@ final class USBReceiverViewModel: ObservableObject {
         self.registrar = registrar
         self.receiveOnce = receiveOnce
         self.defaultDeviceName = defaultDeviceName
+        self.preferences = preferences
+        allowsCellular = preferences.allowsCellular
         self.sleep = sleep
         progressTask = Task { [weak self] in
             for await progress in progressUpdates() {
@@ -158,6 +163,11 @@ final class USBReceiverViewModel: ObservableObject {
         isPolling = false
     }
 
+    func setAllowsCellular(_ allowed: Bool) {
+        preferences.allowsCellular = allowed
+        allowsCellular = allowed
+    }
+
     var receiveStageTitle: String {
         guard let progress = receiveProgress else { return "PC ZIP 수신 대기" }
         let position = progress.totalCount > 0
@@ -215,6 +225,8 @@ final class USBReceiverViewModel: ObservableObject {
             return "선택한 USB와 현재 연결된 USB가 다릅니다."
         case USBReceiveServiceError.insufficientSpace:
             return "USB 저장 공간이 부족합니다."
+        case USBReceiveServiceError.fat32FileTooLarge:
+            return "FAT32 USB에는 4GiB 초과 파일을 저장할 수 없습니다. exFAT을 사용해 주세요."
         case USBReceiveServiceError.shaMismatch:
             return "파일 무결성 검증에 실패했습니다. 서버 파일을 다시 확인합니다."
         case let IPhoneReceiverClientError.server(statusCode, code):
