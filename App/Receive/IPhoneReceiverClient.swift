@@ -55,6 +55,13 @@ protocol IPhoneReceiverServing: Sendable {
     ) async throws
 }
 
+protocol IPhoneReceiverRegistering: Sendable {
+    func register(
+        uploadCredential: String,
+        deviceName: String
+    ) async throws -> IPhoneReceiverRegistration
+}
+
 struct IPhoneReceiverClient: Sendable {
     private let requests: IPhoneReceiverRequestFactory
     private let transport: any IPhoneReceiverTransport
@@ -174,7 +181,7 @@ struct IPhoneReceiverClient: Sendable {
     }
 }
 
-extension IPhoneReceiverClient: IPhoneReceiverServing {}
+extension IPhoneReceiverClient: IPhoneReceiverServing, IPhoneReceiverRegistering {}
 
 struct IPhoneReceiverRequestFactory: Sendable {
     let baseURL: URL

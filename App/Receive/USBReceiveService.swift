@@ -36,6 +36,7 @@ actor USBReceiveService {
     private let volumeIdentity: VolumeIdentityProvider
     private let now: @Sendable () -> Date
     private let fileManager: FileManager
+    private let progressStore: USBReceiveProgressStore
 
     init(
         client: any IPhoneReceiverServing,
@@ -45,7 +46,8 @@ actor USBReceiveService {
         chunkSize: Int64 = USBReceiveService.defaultChunkSize,
         volumeIdentity: @escaping VolumeIdentityProvider = USBReceiveService.systemVolumeIdentity,
         now: @escaping @Sendable () -> Date = Date.init,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        progressStore: USBReceiveProgressStore = USBReceiveProgressStore()
     ) {
         precondition(chunkSize > 0)
         self.client = client
@@ -56,9 +58,34 @@ actor USBReceiveService {
         self.volumeIdentity = volumeIdentity
         self.now = now
         self.fileManager = fileManager
+        self.progressStore = progressStore
     }
 
     func runOnce() async throws -> USBReceiveSummary {
+        do {
+            return try await performRunOnce()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            progressStore.publishFailure(Self.errorMessage(error))
+            throw error
+        }
+    }
+
+    private func performRunOnce() async throws -> USBReceiveSummary {
+        progressStore.publish(USBReceiveProgress(
+            stage: .discovering,
+            deliveryID: nil,
+            fileName: nil,
+            currentIndex: 0,
+            totalCount: 0,
+            completedCount: 0,
+            bytesReceived: 0,
+            totalBytes: 0,
+            startedAt: now(),
+            expiresAt: nil,
+            errorMessage: nil
+        ))
         guard let credentials = try credentials() else {
             throw USBReceiveServiceError.missingRegistration
         }
@@ -84,7 +111,8 @@ actor USBReceiveService {
             receiveSecret: credentials.secret
         )
         var completed = acknowledged.count
-        for delivery in deliveries where !acknowledged.contains(delivery.deliveryID) {
+        for (offset, delivery) in deliveries.enumerated()
+            where !acknowledged.contains(delivery.deliveryID) {
             try Task.checkCancellation()
             if delivery.state == .ackDeleting { continue }
             _ = try await client.lease(
@@ -95,10 +123,26 @@ actor USBReceiveService {
             try await receive(
                 delivery,
                 credentials: credentials,
-                destination: destination
+                destination: destination,
+                currentIndex: offset + 1,
+                totalCount: deliveries.count,
+                completedCount: completed
             )
             completed += 1
         }
+        progressStore.publish(USBReceiveProgress(
+            stage: .completed,
+            deliveryID: nil,
+            fileName: nil,
+            currentIndex: deliveries.count,
+            totalCount: deliveries.count,
+            completedCount: completed,
+            bytesReceived: 0,
+            totalBytes: 0,
+            startedAt: nil,
+            expiresAt: nil,
+            errorMessage: nil
+        ))
         return USBReceiveSummary(discovered: deliveries.count, completed: completed)
     }
 
@@ -135,7 +179,8 @@ actor USBReceiveService {
         destination: USBBookmarkDestination
     ) async throws -> Set<UUID> {
         var acknowledged: Set<UUID> = []
-        for checkpoint in ledger.allCheckpoints() where checkpoint.state == .ackPending {
+        let pending = ledger.allCheckpoints().filter { $0.state == .ackPending }
+        for (offset, checkpoint) in pending.enumerated() {
             let finalURL = destination.url.appendingPathComponent(checkpoint.finalFileName)
             guard try fileMatches(
                 finalURL,
@@ -148,6 +193,19 @@ actor USBReceiveService {
                 try ledger.save(reset)
                 continue
             }
+            progressStore.publish(USBReceiveProgress(
+                stage: .acknowledging,
+                deliveryID: checkpoint.deliveryID,
+                fileName: checkpoint.fileName,
+                currentIndex: offset + 1,
+                totalCount: pending.count,
+                completedCount: acknowledged.count,
+                bytesReceived: checkpoint.totalBytes,
+                totalBytes: checkpoint.totalBytes,
+                startedAt: now(),
+                expiresAt: nil,
+                errorMessage: nil
+            ))
             try await client.acknowledge(
                 receiverID: credentials.identity.receiverID,
                 deliveryID: checkpoint.deliveryID,
@@ -163,8 +221,12 @@ actor USBReceiveService {
     private func receive(
         _ delivery: IPhoneDelivery,
         credentials: IPhoneReceiverCredentials,
-        destination: USBBookmarkDestination
+        destination: USBBookmarkDestination,
+        currentIndex: Int,
+        totalCount: Int,
+        completedCount: Int
     ) async throws {
+        let startedAt = now()
         let safeName = try validatedFileName(delivery)
         var checkpoint = try checkpoint(
             for: delivery,
@@ -177,6 +239,15 @@ actor USBReceiveService {
             checkpoint.confirmedOffset = delivery.size
             checkpoint.state = .ackPending
             try ledger.save(checkpoint)
+            publish(
+                .acknowledging,
+                delivery: delivery,
+                currentIndex: currentIndex,
+                totalCount: totalCount,
+                completedCount: completedCount,
+                bytesReceived: delivery.size,
+                startedAt: startedAt
+            )
             try await acknowledge(delivery, credentials: credentials)
             try ledger.remove(deliveryID: delivery.deliveryID)
             return
@@ -198,6 +269,15 @@ actor USBReceiveService {
         checkpoint.confirmedOffset = resumeOffset
         checkpoint.state = .downloading
         try ledger.save(checkpoint)
+        publish(
+            .downloading,
+            delivery: delivery,
+            currentIndex: currentIndex,
+            totalCount: totalCount,
+            completedCount: completedCount,
+            bytesReceived: resumeOffset,
+            startedAt: startedAt
+        )
         try validateCapacity(
             at: destination.url,
             requiredBytes: delivery.size - resumeOffset
@@ -252,6 +332,15 @@ actor USBReceiveService {
                 offset += Int64(chunk.data.count)
                 checkpoint.confirmedOffset = offset
                 try ledger.save(checkpoint)
+                publish(
+                    .downloading,
+                    delivery: delivery,
+                    currentIndex: currentIndex,
+                    totalCount: totalCount,
+                    completedCount: completedCount,
+                    bytesReceived: offset,
+                    startedAt: startedAt
+                )
             }
             try handle.close()
         } catch {
@@ -261,6 +350,15 @@ actor USBReceiveService {
 
         checkpoint.state = .verifying
         try ledger.save(checkpoint)
+        publish(
+            .verifying,
+            delivery: delivery,
+            currentIndex: currentIndex,
+            totalCount: totalCount,
+            completedCount: completedCount,
+            bytesReceived: delivery.size,
+            startedAt: startedAt
+        )
         guard try fileSize(partialURL) == delivery.size else {
             checkpoint.state = .failed
             try ledger.save(checkpoint)
@@ -294,6 +392,15 @@ actor USBReceiveService {
 
         checkpoint.state = .finalizing
         try ledger.save(checkpoint)
+        publish(
+            .finalizing,
+            delivery: delivery,
+            currentIndex: currentIndex,
+            totalCount: totalCount,
+            completedCount: completedCount,
+            bytesReceived: delivery.size,
+            startedAt: startedAt
+        )
         if fileManager.fileExists(atPath: partialURL.path) {
             try coordinatedMove(from: partialURL, to: finalURL)
         }
@@ -307,6 +414,15 @@ actor USBReceiveService {
         checkpoint.confirmedOffset = delivery.size
         checkpoint.state = .ackPending
         try ledger.save(checkpoint)
+        publish(
+            .acknowledging,
+            delivery: delivery,
+            currentIndex: currentIndex,
+            totalCount: totalCount,
+            completedCount: completedCount,
+            bytesReceived: delivery.size,
+            startedAt: startedAt
+        )
         try await acknowledge(delivery, credentials: credentials)
         try ledger.remove(deliveryID: delivery.deliveryID)
     }
@@ -490,6 +606,30 @@ actor USBReceiveService {
         )
     }
 
+    private func publish(
+        _ stage: USBReceiveStage,
+        delivery: IPhoneDelivery,
+        currentIndex: Int,
+        totalCount: Int,
+        completedCount: Int,
+        bytesReceived: Int64,
+        startedAt: Date
+    ) {
+        progressStore.publish(USBReceiveProgress(
+            stage: stage,
+            deliveryID: delivery.deliveryID,
+            fileName: delivery.fileName,
+            currentIndex: currentIndex,
+            totalCount: totalCount,
+            completedCount: completedCount,
+            bytesReceived: bytesReceived,
+            totalBytes: delivery.size,
+            startedAt: startedAt,
+            expiresAt: delivery.expiresAt,
+            errorMessage: nil
+        ))
+    }
+
     private static func hex(_ digest: SHA256.Digest) -> String {
         digest.map { String(format: "%02x", $0) }.joined()
     }
@@ -498,5 +638,15 @@ actor USBReceiveService {
         try url.resourceValues(forKeys: [.volumeIdentifierKey])
             .volumeIdentifier
             .map { String(describing: $0) }
+    }
+
+    private static func errorMessage(_ error: Error) -> String {
+        if let serviceError = error as? USBReceiveServiceError {
+            return String(describing: serviceError)
+        }
+        if let clientError = error as? IPhoneReceiverClientError {
+            return String(describing: clientError)
+        }
+        return String(describing: error)
     }
 }
