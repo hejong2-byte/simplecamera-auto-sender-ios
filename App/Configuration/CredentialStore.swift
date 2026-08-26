@@ -14,6 +14,12 @@ enum CredentialStoreError: Error {
 }
 
 struct KeychainCredentialStore: CredentialStore {
+    private let account: String
+
+    init(account: String = AppConfiguration.keychainAccount) {
+        self.account = account
+    }
+
     func save(_ value: String) throws {
         let credential = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !credential.isEmpty else { throw CredentialStoreError.emptyValue }
@@ -22,7 +28,7 @@ struct KeychainCredentialStore: CredentialStore {
         let status = SecItemAdd([
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: AppConfiguration.keychainService,
-            kSecAttrAccount: AppConfiguration.keychainAccount,
+            kSecAttrAccount: account,
             kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             kSecValueData: Data(credential.utf8)
         ] as CFDictionary, nil)
@@ -36,7 +42,7 @@ struct KeychainCredentialStore: CredentialStore {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: AppConfiguration.keychainService,
-            kSecAttrAccount: AppConfiguration.keychainAccount,
+            kSecAttrAccount: account,
             kSecReturnData: true,
             kSecMatchLimit: kSecMatchLimitOne
         ]
@@ -57,7 +63,7 @@ struct KeychainCredentialStore: CredentialStore {
         let status = SecItemDelete([
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: AppConfiguration.keychainService,
-            kSecAttrAccount: AppConfiguration.keychainAccount
+            kSecAttrAccount: account
         ] as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw CredentialStoreError.keychain(status)

@@ -38,6 +38,8 @@ enum AppConfiguration {
 
     static let keychainService = AppIdentity.bundleIdentifier + ".relay"
     static let keychainAccount = "upload-authorization"
+    static let receiveSecretKeychainAccount = "iphone-receiver-secret"
+    static let receiverIdentityKeychainAccount = "iphone-receiver-identity"
     static let backgroundSessionIdentifier = AppIdentity.bundleIdentifier + ".background-upload"
     static let manualBackgroundSessionIdentifier = AppIdentity.bundleIdentifier
         + ".manual-background-upload"
