@@ -11,8 +11,14 @@ enum USBReceiveStage: String, Codable, Sendable, Equatable {
     case failed
 }
 
+enum IPhoneReceiveDestination: String, Codable, CaseIterable, Sendable {
+    case iphoneLocal
+    case usb
+}
+
 struct USBReceiveProgress: Codable, Sendable, Equatable {
     let stage: USBReceiveStage
+    let destination: IPhoneReceiveDestination = .usb
     let deliveryID: UUID?
     let fileName: String?
     let currentIndex: Int
