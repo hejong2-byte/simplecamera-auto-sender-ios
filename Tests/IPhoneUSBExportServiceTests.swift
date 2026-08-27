@@ -153,36 +153,23 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
     }
 
     func testReportedZeroCapacityDoesNotBlockVerifiedCopyToWritableUSB() async throws {
-        let context = try makeContext()
+        let fileManager = ZeroCapacityUSBFileManager()
+        let context = try makeContext(fileManager: fileManager)
         let payload = Data(repeating: 0x5a, count: 1_024 * 1_024 + 31)
         let file = try makeStoredFile(
             name: "capacity-report.zip",
             data: payload,
             in: context.sourceDirectory
         )
-        var destinationURL = context.usbDirectory
-        // Change only the in-memory capacity report; the fixture volume remains writable.
-        destinationURL.setTemporaryResourceValue(
-            NSNumber(value: 0),
-            forKey: .volumeAvailableCapacityForImportantUsageKey
-        )
-        let reported = try destinationURL.resourceValues(
-            forKeys: [.volumeAvailableCapacityForImportantUsageKey]
-        )
-        XCTAssertEqual(reported.volumeAvailableCapacityForImportantUsage, 0)
+        let reported = try fileManager.attributesOfFileSystem(forPath: context.usbDirectory.path)
+        XCTAssertEqual((reported[.systemFreeSize] as? NSNumber)?.int64Value, 0)
         let attributes = try FileManager.default.attributesOfFileSystem(
-            forPath: destinationURL.path
+            forPath: context.usbDirectory.path
         )
         let actualFree = try XCTUnwrap(attributes[.systemFreeSize] as? NSNumber)
         XCTAssertGreaterThan(actualFree.int64Value, Int64(payload.count))
-        let destination = USBBookmarkDestination(
-            url: destinationURL,
-            volumeID: context.destination.volumeID,
-            displayName: context.destination.displayName,
-            isStale: false
-        )
 
-        let summary = await context.service.export([file], to: destination)
+        let summary = await context.service.export([file], to: context.destination)
 
         XCTAssertEqual(summary.failed, [])
         XCTAssertEqual(summary.verified.map(\.sourceID), [file.id])
@@ -336,6 +323,10 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             startAccessing: { _ in canAccessSecurityScope },
             stopAccessing: { _ in },
             volumeIdentity: volumeIdentity,
+            availableCapacity: { url in
+                let attributes = try fileManager.attributesOfFileSystem(forPath: url.path)
+                return (attributes[.systemFreeSize] as? NSNumber)?.int64Value
+            },
             progressStore: progressStore,
             now: { Date(timeIntervalSince1970: 456) }
         )
@@ -400,6 +391,12 @@ private struct ExportContext {
     let deletionStore: IPhoneUSBDeletionDecisionStore
     let service: IPhoneUSBExportService
     let progressStore: USBReceiveProgressStore
+}
+
+private final class ZeroCapacityUSBFileManager: FileManager, @unchecked Sendable {
+    override func attributesOfFileSystem(forPath path: String) throws -> [FileAttributeKey: Any] {
+        [.systemFreeSize: NSNumber(value: 0)]
+    }
 }
 
 private final class DiskFullUSBFileManager: FileManager, @unchecked Sendable {
