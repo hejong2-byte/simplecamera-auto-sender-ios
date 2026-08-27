@@ -31,3 +31,4 @@ ditto -c -k --sequesterRsrc --keepParent \
 
 test -s "$ROOT/dist/SimpleCameraAutoSender.ipa"
 unzip -t "$ROOT/dist/SimpleCameraAutoSender.ipa"
+python3 "$ROOT/scripts/verify-ipa.py" "$ROOT/dist/SimpleCameraAutoSender.ipa"
