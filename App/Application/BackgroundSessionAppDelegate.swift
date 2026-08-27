@@ -6,13 +6,21 @@ final class BackgroundSessionAppDelegate: NSObject, UIApplicationDelegate {
         handleEventsForBackgroundURLSession identifier: String,
         completionHandler: @escaping () -> Void
     ) {
-        guard identifier == AppConfiguration.manualBackgroundSessionIdentifier else {
+        guard identifier == AppConfiguration.manualBackgroundSessionIdentifier
+                || identifier == AppConfiguration.receiverBackgroundSessionIdentifier else {
             completionHandler()
             return
         }
-        BackgroundSessionCompletionRegistry.shared.store(completionHandler)
-        Task {
-            await AppDependencies.shared.manualTransferEngine.restore()
+        BackgroundSessionCompletionRegistry.shared.store(
+            identifier: identifier,
+            handler: completionHandler
+        )
+        if identifier == AppConfiguration.manualBackgroundSessionIdentifier {
+            Task {
+                await AppDependencies.shared.manualTransferEngine.restore()
+            }
+        } else {
+            _ = BackgroundIPhoneReceiveSession.shared
         }
     }
 }

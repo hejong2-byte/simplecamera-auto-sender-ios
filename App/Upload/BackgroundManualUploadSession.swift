@@ -45,16 +45,15 @@ final class BackgroundSessionCompletionRegistry: @unchecked Sendable {
     static let shared = BackgroundSessionCompletionRegistry()
 
     private let lock = NSLock()
-    private var handler: (() -> Void)?
+    private var handlers: [String: () -> Void] = [:]
 
-    func store(_ handler: @escaping () -> Void) {
-        lock.withLock { self.handler = handler }
+    func store(identifier: String, handler: @escaping () -> Void) {
+        lock.withLock { handlers[identifier] = handler }
     }
 
-    func finish() {
+    func finish(identifier: String) {
         let current = lock.withLock { () -> (() -> Void)? in
-            defer { handler = nil }
-            return handler
+            handlers.removeValue(forKey: identifier)
         }
         current?()
     }
@@ -176,7 +175,9 @@ extension BackgroundManualUploadSession: URLSessionDataDelegate {
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         DispatchQueue.main.async { [completionRegistry] in
-            completionRegistry.finish()
+            completionRegistry.finish(
+                identifier: AppConfiguration.manualBackgroundSessionIdentifier
+            )
         }
     }
 }

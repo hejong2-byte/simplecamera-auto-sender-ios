@@ -43,4 +43,6 @@ enum AppConfiguration {
     static let backgroundSessionIdentifier = AppIdentity.bundleIdentifier + ".background-upload"
     static let manualBackgroundSessionIdentifier = AppIdentity.bundleIdentifier
         + ".manual-background-upload"
+    static let receiverBackgroundSessionIdentifier = AppIdentity.bundleIdentifier
+        + ".pc-file-receive"
 }
