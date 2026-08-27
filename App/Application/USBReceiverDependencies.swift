@@ -66,6 +66,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
             jobStore: jobStore,
             catalog: catalog,
             credentials: { try registrationStore.load() },
+            automaticDiscoveryAllowed: { preferences.selectedDestination == .iphoneLocal },
             progressStore: progressStore
         )
         backgroundSession.bind(sink: localEngine)
@@ -139,7 +140,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
                 try await directUSBService.runOnce()
             },
             receiveLocalOnce: { [localEngine] in
-                try await localEngine.discoverAndSchedule()
+                try await localEngine.discoverAndSchedule(force: true)
             },
             pendingDeliveryIDs: { [client, registrationStore] in
                 guard let credentials = try registrationStore.load() else { return [] }

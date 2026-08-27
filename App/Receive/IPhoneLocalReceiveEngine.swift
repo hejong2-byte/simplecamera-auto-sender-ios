@@ -72,6 +72,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
     private let jobStore: IPhoneLocalReceiveJobStore
     private let catalog: IPhoneReceivedFileCatalog
     private let credentials: @Sendable () throws -> IPhoneReceiverCredentials?
+    private let automaticDiscoveryAllowed: @Sendable () -> Bool
     private let progressStore: USBReceiveProgressStore
     private let fileManager: FileManager
     private let now: @Sendable () -> Date
@@ -82,6 +83,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         jobStore: IPhoneLocalReceiveJobStore,
         catalog: IPhoneReceivedFileCatalog,
         credentials: @escaping @Sendable () throws -> IPhoneReceiverCredentials?,
+        automaticDiscoveryAllowed: @escaping @Sendable () -> Bool = { true },
         progressStore: USBReceiveProgressStore,
         fileManager: FileManager = .default,
         now: @escaping @Sendable () -> Date = Date.init
@@ -91,12 +93,14 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         self.jobStore = jobStore
         self.catalog = catalog
         self.credentials = credentials
+        self.automaticDiscoveryAllowed = automaticDiscoveryAllowed
         self.progressStore = progressStore
         self.fileManager = fileManager
         self.now = now
     }
 
-    func discoverAndSchedule() async throws {
+    func discoverAndSchedule(force: Bool = false) async throws {
+        guard force || automaticDiscoveryAllowed() else { return }
         let credentials = try requiredCredentials()
         try await client.updateFeatures(
             receiverID: credentials.identity.receiverID,
