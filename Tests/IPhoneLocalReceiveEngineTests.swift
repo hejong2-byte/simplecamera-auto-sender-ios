@@ -155,6 +155,14 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
         XCTAssertEqual(latest?.stage, .failed)
         XCTAssertEqual(latest?.deliveryID, delivery.deliveryID)
         XCTAssertNotNil(latest?.errorMessage)
+
+        context.client.failNextDiscovery(duringFeatureUpdate: false)
+        await context.engine.restore()
+        try await context.engine.discoverAndSchedule()
+        var afterRecovery = context.progress.updates().makeAsyncIterator()
+        let stillFailed = await afterRecovery.next()
+        XCTAssertEqual(stillFailed?.stage, .failed)
+        XCTAssertEqual(stillFailed?.deliveryID, delivery.deliveryID)
     }
 
     func testAckFailureKeepsFinalFileAndRestoreRetriesOnlyAck() async throws {

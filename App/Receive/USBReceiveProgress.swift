@@ -131,6 +131,29 @@ final class USBReceiveProgressStore: @unchecked Sendable {
         clear { $0.stage == .failed && $0.deliveryID == nil }
     }
 
+    func publishDiscoveryFailure(_ message: String, destination: IPhoneReceiveDestination) {
+        let failure = USBReceiveProgress(
+            stage: .failed,
+            destination: destination,
+            deliveryID: nil,
+            fileName: nil,
+            currentIndex: 0,
+            totalCount: 0,
+            completedCount: 0,
+            bytesReceived: 0,
+            totalBytes: 0,
+            startedAt: nil,
+            expiresAt: nil,
+            errorMessage: message
+        )
+        let current = lock.withLock { () -> [AsyncStream<USBReceiveProgress>.Continuation] in
+            guard latest.stage != .failed || latest.deliveryID == nil else { return [] }
+            latest = failure
+            return Array(continuations.values)
+        }
+        current.forEach { _ = $0.yield(failure) }
+    }
+
     func clearCompleted() {
         clear { $0.stage == .completed }
     }
