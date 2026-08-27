@@ -171,6 +171,8 @@ final class USBReceiverViewModelTests: XCTestCase {
 
     func testForegroundPollingStartsImmediatelyAndStopsCleanly() async throws {
         let counter = ReceiveCounter()
+        let preferences = isolatedPreferences()
+        preferences.selectedDestination = .usb
         let model = USBReceiverViewModel(
             uploadCredentialStore: InMemoryCredentialStore(),
             registrationStore: IPhoneReceiverRegistrationStore(
@@ -188,6 +190,7 @@ final class USBReceiverViewModelTests: XCTestCase {
             },
             progressUpdates: { AsyncStream { $0.finish() } },
             defaultDeviceName: "iPhone",
+            preferences: preferences,
             sleep: { try await Task.sleep(for: .seconds(60)) }
         )
 
