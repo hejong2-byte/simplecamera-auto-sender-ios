@@ -48,7 +48,7 @@ struct SettingsView: View {
 
     private var receiverSettingsCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("PC 파일 → USB 수신").font(.headline)
+            Text("PC 파일 수신").font(.headline)
             if receiverModel.isRegistered {
                 Label(
                     "\(receiverModel.deviceName ?? "iPhone") · 코드 \(receiverModel.registrationCode ?? "------")",
@@ -65,18 +65,32 @@ struct SettingsView: View {
                 .buttonStyle(.borderedProminent)
             }
 
-            Label(
-                receiverModel.usbDisplayName ?? "USB 폴더 미선택",
-                systemImage: "externaldrive"
-            )
-            HStack {
-                Button("USB 폴더 선택") { selectingUSBDestination = true }
-                    .buttonStyle(.borderedProminent)
-                if receiverModel.hasUSBDestination {
-                    Button("선택 해제", role: .destructive) {
-                        Task { await receiverModel.clearDestination() }
+            Picker(
+                "기본 저장 위치",
+                selection: Binding(
+                    get: { receiverModel.selectedDestination },
+                    set: { receiverModel.setSelectedDestination($0) }
+                )
+            ) {
+                Text("나의 iPhone").tag(IPhoneReceiveDestination.iphoneLocal)
+                Text("USB 직접 저장").tag(IPhoneReceiveDestination.usb)
+            }
+            .pickerStyle(.segmented)
+
+            if receiverModel.selectedDestination == .usb {
+                Label(
+                    receiverModel.usbDisplayName ?? "USB 폴더 미선택",
+                    systemImage: "externaldrive"
+                )
+                HStack {
+                    Button("USB 폴더 선택") { selectingUSBDestination = true }
+                        .buttonStyle(.borderedProminent)
+                    if receiverModel.hasUSBDestination {
+                        Button("선택 해제", role: .destructive) {
+                            Task { await receiverModel.clearDestination() }
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
                 }
             }
 

@@ -3,6 +3,7 @@ import Foundation
 final class USBReceiverPreferences: @unchecked Sendable {
     private let defaults: UserDefaults
     private let key = "usbReceiver.allowsCellular"
+    private let destinationKey = "iphoneReceiver.destination"
     private let lock = NSLock()
 
     init(defaults: UserDefaults = .standard) {
@@ -12,6 +13,21 @@ final class USBReceiverPreferences: @unchecked Sendable {
     var allowsCellular: Bool {
         get { lock.withLock { defaults.bool(forKey: key) } }
         set { lock.withLock { defaults.set(newValue, forKey: key) } }
+    }
+
+    var selectedDestination: IPhoneReceiveDestination {
+        get {
+            lock.withLock {
+                guard let value = defaults.string(forKey: destinationKey),
+                      let destination = IPhoneReceiveDestination(rawValue: value) else {
+                    return .iphoneLocal
+                }
+                return destination
+            }
+        }
+        set {
+            lock.withLock { defaults.set(newValue.rawValue, forKey: destinationKey) }
+        }
     }
 }
 

@@ -17,10 +17,10 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     header
-                    receiverCard
                     automaticStatusCard
                     manualTransferCard
                     manualStatusCard
+                    receiverCard
                     NavigationLink {
                         SettingsView(model: model, receiverModel: receiverModel)
                     } label: {
@@ -109,7 +109,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label("PC 파일 수신", systemImage: "externaldrive.badge.icloud")
                     .font(.headline)
-                Text("PC에서 보낸 파일을 연결된 USB 메모리에 직접 저장")
+                Text("PC에서 보낸 파일을 iPhone에 저장하거나 USB로 직접 저장")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 HStack {

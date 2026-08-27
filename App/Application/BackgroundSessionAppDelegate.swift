@@ -20,7 +20,9 @@ final class BackgroundSessionAppDelegate: NSObject, UIApplicationDelegate {
                 await AppDependencies.shared.manualTransferEngine.restore()
             }
         } else {
-            _ = BackgroundIPhoneReceiveSession.shared
+            Task {
+                await USBReceiverDependencies.shared.restoreLocalReceiver()
+            }
         }
     }
 }
