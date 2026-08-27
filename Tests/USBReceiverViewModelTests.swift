@@ -4,6 +4,95 @@ import XCTest
 
 @MainActor
 final class USBReceiverViewModelTests: XCTestCase {
+    func testReceiveDestinationDefaultsToIPhoneAndPersistsUSBChoice() {
+        let suiteName = "USBReceiverViewModelTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let first = USBReceiverPreferences(defaults: defaults)
+        XCTAssertEqual(first.selectedDestination, .iphoneLocal)
+        first.selectedDestination = .usb
+
+        XCTAssertEqual(
+            USBReceiverPreferences(defaults: defaults).selectedDestination,
+            .usb
+        )
+    }
+
+    func testMissingUSBWithPendingDeliveryPromptsOnceAndLocalChoiceStartsReceive() async throws {
+        let localCounter = ReceiveCounter()
+        let pendingID = UUID()
+        let preferences = isolatedPreferences()
+        preferences.selectedDestination = .usb
+        let model = USBReceiverViewModel(
+            uploadCredentialStore: InMemoryCredentialStore(),
+            registrationStore: IPhoneReceiverRegistrationStore(
+                identityStore: InMemoryCredentialStore(),
+                secretStore: InMemoryCredentialStore()
+            ),
+            bookmarkStore: USBBookmarkStore(
+                fileURL: temporaryDirectory().appendingPathComponent("destination.json"),
+                codec: ViewModelBookmarkCodec(url: temporaryDirectory())
+            ),
+            registrar: StubReceiverRegistrar(),
+            receiveOnce: { throw USBReceiveServiceError.missingDestination },
+            receiveLocalOnce: { localCounter.increment() },
+            pendingDeliveryIDs: { [pendingID] },
+            progressUpdates: { AsyncStream { $0.finish() } },
+            defaultDeviceName: "iPhone",
+            preferences: preferences
+        )
+
+        await model.pollOnce()
+        XCTAssertEqual(model.selectedDestination, .usb)
+        XCTAssertTrue(model.needsLocalFallbackDecision)
+
+        await model.chooseLocalFallback()
+        XCTAssertEqual(localCounter.value, 1)
+        XCTAssertFalse(model.needsLocalFallbackDecision)
+
+        await model.pollOnce()
+        XCTAssertEqual(localCounter.value, 2)
+        XCTAssertFalse(model.needsLocalFallbackDecision)
+    }
+
+    func testServerWaitDoesNotDownloadCurrentPendingSet() async throws {
+        let usbCounter = ReceiveCounter()
+        let localCounter = ReceiveCounter()
+        let pendingID = UUID()
+        let preferences = isolatedPreferences()
+        preferences.selectedDestination = .usb
+        let model = USBReceiverViewModel(
+            uploadCredentialStore: InMemoryCredentialStore(),
+            registrationStore: IPhoneReceiverRegistrationStore(
+                identityStore: InMemoryCredentialStore(),
+                secretStore: InMemoryCredentialStore()
+            ),
+            bookmarkStore: USBBookmarkStore(
+                fileURL: temporaryDirectory().appendingPathComponent("destination.json"),
+                codec: ViewModelBookmarkCodec(url: temporaryDirectory())
+            ),
+            registrar: StubReceiverRegistrar(),
+            receiveOnce: {
+                usbCounter.increment()
+                throw USBReceiveServiceError.missingDestination
+            },
+            receiveLocalOnce: { localCounter.increment() },
+            pendingDeliveryIDs: { [pendingID] },
+            progressUpdates: { AsyncStream { $0.finish() } },
+            defaultDeviceName: "iPhone",
+            preferences: preferences
+        )
+
+        await model.pollOnce()
+        await model.chooseServerWait()
+        await model.pollOnce()
+
+        XCTAssertEqual(usbCounter.value, 1)
+        XCTAssertEqual(localCounter.value, 0)
+        XCTAssertFalse(model.needsLocalFallbackDecision)
+    }
+
     func testRegistrationDestinationAndProgressArePublishedWithoutPhotoPermission() async throws {
         let uploadCredential = InMemoryCredentialStore()
         try uploadCredential.save("Bearer upload")
@@ -119,6 +208,13 @@ final class USBReceiverViewModelTests: XCTestCase {
         )
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         return directory
+    }
+
+    private func isolatedPreferences() -> USBReceiverPreferences {
+        let suiteName = "USBReceiverViewModelTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: suiteName) }
+        return USBReceiverPreferences(defaults: defaults)
     }
 
     private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async {
