@@ -66,12 +66,10 @@ final class IPhoneReceivedFileCatalog: @unchecked Sendable {
 
     func save(_ record: IPhoneReceivedFileRecord) throws {
         try lock.withLock {
-            var next = records
-            if let index = next.firstIndex(where: { $0.deliveryID == record.deliveryID }) {
-                next[index] = record
-            } else {
-                next.append(record)
+            var next = records.filter {
+                $0.deliveryID != record.deliveryID && $0.storedName != record.storedName
             }
+            next.append(record)
             next.sort { $0.deliveryID.uuidString < $1.deliveryID.uuidString }
             try fileManager.createDirectory(
                 at: recordsFileURL.deletingLastPathComponent(),
@@ -91,7 +89,10 @@ final class IPhoneReceivedFileCatalog: @unchecked Sendable {
     func refresh() throws -> [IPhoneStoredFile] {
         try lock.withLock {
             let recordsByName = Dictionary(
-                uniqueKeysWithValues: records.map { ($0.storedName, $0) }
+                records.map { ($0.storedName, $0) },
+                uniquingKeysWith: { first, second in
+                    first.receivedAt > second.receivedAt ? first : second
+                }
             )
             let keys: Set<URLResourceKey> = [
                 .isRegularFileKey,
