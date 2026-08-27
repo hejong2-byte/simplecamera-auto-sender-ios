@@ -137,23 +137,23 @@ struct USBReceiverView: View {
 
     private var progressCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("PC 새 파일 수신 상태")
+            Text(model.receiveProgress?.stage == .completed ? "최근 PC 파일 수신 결과" : "PC 새 파일 수신 상태")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack {
                 Text(model.receiveStageTitle).font(.headline)
                 Spacer()
                 if model.isPolling {
-                    Label("감시 중", systemImage: "dot.radiowaves.left.and.right")
+                    Label(model.lastError == nil ? "감시 중" : "재확인 중", systemImage: "dot.radiowaves.left.and.right")
                         .font(.caption)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(model.lastError == nil ? .green : .orange)
                 }
             }
 
             if let progress = model.receiveProgress, progress.stage != .idle {
                 if progress.stage == .discovering {
                     ProgressView().tint(.cyan)
-                } else {
+                } else if !model.receivePercentText.isEmpty {
                     ProgressView(value: Double(progress.percent), total: 100)
                         .tint(progress.stage == .failed ? .red : .cyan)
                     HStack {
@@ -164,13 +164,15 @@ struct USBReceiverView: View {
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
-                    HStack {
-                        Text(model.receiveSpeedText)
-                        Spacer()
-                        Text(model.receiveETAText)
+                    if !model.receiveSpeedText.isEmpty {
+                        HStack {
+                            Text(model.receiveSpeedText)
+                            Spacer()
+                            Text(model.receiveETAText)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 }
 
                 if let fileName = progress.fileName {
@@ -254,6 +256,16 @@ struct USBReceiverView: View {
 
             if model.isExportingToUSB || model.usbExportProgress != nil || model.lastUSBExportError != nil {
                 usbExportStatus
+            }
+            if let message = model.usbExportCompletionMessage {
+                Label(message, systemImage: "checkmark.circle.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.green)
+            }
+            if let error = model.lastOriginalCleanupError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.red)
             }
         }
         .cardStyle()

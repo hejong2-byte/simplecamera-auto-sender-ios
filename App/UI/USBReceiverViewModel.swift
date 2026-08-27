@@ -23,6 +23,8 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var receiveProgress: USBReceiveProgress?
     @Published private(set) var usbExportProgress: USBReceiveProgress?
     @Published private(set) var lastUSBExportError: String?
+    @Published private(set) var usbExportCompletionMessage: String?
+    @Published private(set) var lastOriginalCleanupError: String?
     @Published private(set) var isExportingToUSB = false
     @Published private(set) var isPolling = false
     @Published private(set) var lastError: String?
@@ -106,17 +108,21 @@ final class USBReceiverViewModel: ObservableObject {
         progressTask = Task { [weak self] in
             for await progress in progressUpdates() {
                 guard !Task.isCancelled else { break }
+                let previousStage = self?.receiveProgress?.stage
                 self?.receiveProgress = progress
                 if progress.stage == .failed {
                     self?.lastError = progress.errorMessage
+                } else if previousStage == .failed || progress.stage != .idle {
+                    if self?.needsLocalFallbackDecision == false {
+                        self?.lastError = nil
+                    }
                 }
             }
         }
         exportProgressTask = Task { [weak self] in
             for await progress in exportProgressUpdates() {
                 guard !Task.isCancelled else { break }
-                guard progress.stage != .idle else { continue }
-                self?.usbExportProgress = progress
+                self?.usbExportProgress = progress.stage == .idle ? nil : progress
                 if progress.stage == .failed {
                     self?.lastUSBExportError = progress.errorMessage
                 }
@@ -290,6 +296,8 @@ final class USBReceiverViewModel: ObservableObject {
         isExportingToUSB = true
         usbExportProgress = nil
         lastUSBExportError = nil
+        usbExportCompletionMessage = nil
+        lastOriginalCleanupError = nil
         defer { isExportingToUSB = false }
         do {
             guard let destination = try bookmarkStore.resolve() else {
@@ -310,29 +318,44 @@ final class USBReceiverViewModel: ObservableObject {
 
     func keepOriginals() async {
         let ids = Set(pendingDeletionDecisions().map(\.id))
+        guard !ids.isEmpty else { return }
+        lastOriginalCleanupError = nil
         do {
             try await keepOriginalFiles(ids)
             needsDeletionDecision = !pendingDeletionDecisions().isEmpty
-            lastError = nil
+            if !needsDeletionDecision, lastUSBExportError == nil {
+                usbExportProgress = nil
+                usbExportCompletionMessage = "USB 복사 완료 · iPhone 원본 \(ids.count)개 유지됨"
+            }
         } catch {
-            lastError = "원본 유지 결정을 저장하지 못했습니다."
+            lastOriginalCleanupError = "원본 유지 결정을 저장하지 못했습니다. 원본은 삭제하지 않았습니다."
         }
     }
 
     func deleteOriginals() async {
         let ids = Set(pendingDeletionDecisions().map(\.id))
+        guard !ids.isEmpty else { return }
+        lastOriginalCleanupError = nil
         let summary = await deleteOriginalFiles(ids)
-        do { storedFiles = try storedFilesProvider() } catch {
-            lastError = "iPhone 저장 파일 목록을 다시 읽지 못했습니다."
-        }
         needsDeletionDecision = !pendingDeletionDecisions().isEmpty
+        do {
+            storedFiles = try storedFilesProvider()
+            selectedStoredFileIDs.formIntersection(Set(storedFiles.map(\.id)))
+        } catch {
+            lastOriginalCleanupError = "iPhone 저장 파일 목록을 다시 읽지 못했습니다."
+            return
+        }
         if !summary.failed.isEmpty {
-            lastError = "변경되었거나 찾을 수 없는 원본 \(summary.failed.count)개는 삭제하지 않았습니다."
+            lastOriginalCleanupError = "iPhone 원본 \(summary.failed.count)개를 삭제하지 못했습니다. USB에 복사된 파일은 유지됩니다."
+        } else if !needsDeletionDecision, lastUSBExportError == nil {
+            usbExportProgress = nil
+            usbExportCompletionMessage = "USB 복사 완료 · iPhone 원본 \(summary.deletedSourceIDs.count)개 삭제됨"
         }
     }
 
     var usbExportStageTitle: String {
         if lastUSBExportError != nil { return "USB 복사 실패" }
+        if let usbExportCompletionMessage { return usbExportCompletionMessage }
         guard let progress = usbExportProgress else {
             return isExportingToUSB ? "USB 복사 준비 중" : "USB 복사 대기"
         }
@@ -371,18 +394,25 @@ final class USBReceiverViewModel: ObservableObject {
         case .acknowledging: return "PC에 저장 완료 알림 중\(position)"
         case .completed: return "\(destination) 저장 완료"
         case .paused: return "PC 파일 수신 일시정지"
-        case .failed: return "\(destination) 수신 오류"
+        case .failed:
+            return progress.deliveryID == nil ? "새 파일 확인 오류" : "\(destination) 수신 오류"
         }
     }
 
-    var receivePercentText: String { "\(receiveProgress?.percent ?? 0)%" }
+    var receivePercentText: String {
+        guard let progress = receiveProgress, progress.totalBytes > 0,
+              ![.idle, .discovering, .waitingForDestination, .completed, .failed]
+                .contains(progress.stage) else { return "" }
+        return "\(progress.percent)%"
+    }
 
     var receiveByteText: String {
-        guard let progress = receiveProgress else { return "" }
+        guard let progress = receiveProgress, progress.totalBytes > 0 else { return "" }
         return "\(Self.byteText(progress.bytesReceived)) / \(Self.byteText(progress.totalBytes))"
     }
 
     var receiveSpeedText: String {
+        guard receiveProgress?.stage == .downloading else { return "" }
         guard let progress = receiveProgress,
               let startedAt = progress.startedAt,
               progress.bytesReceived > 0 else { return "계산 중" }
@@ -392,6 +422,7 @@ final class USBReceiverViewModel: ObservableObject {
 
     var receiveETAText: String {
         guard let progress = receiveProgress,
+              progress.stage == .downloading,
               let startedAt = progress.startedAt,
               progress.bytesReceived > 0,
               progress.totalBytes > progress.bytesReceived else { return "" }

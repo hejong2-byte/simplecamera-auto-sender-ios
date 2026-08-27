@@ -127,6 +127,23 @@ final class USBReceiveProgressStore: @unchecked Sendable {
         publish(failure)
     }
 
+    func clearDiscoveryFailure() {
+        clear { $0.stage == .failed && $0.deliveryID == nil }
+    }
+
+    func clearCompleted() {
+        clear { $0.stage == .completed }
+    }
+
+    private func clear(where shouldClear: (USBReceiveProgress) -> Bool) {
+        let current = lock.withLock { () -> [AsyncStream<USBReceiveProgress>.Continuation] in
+            guard shouldClear(latest) else { return [] }
+            latest = .idle
+            return Array(continuations.values)
+        }
+        current.forEach { _ = $0.yield(.idle) }
+    }
+
     func updates() -> AsyncStream<USBReceiveProgress> {
         let subscriberID = UUID()
         return AsyncStream(bufferingPolicy: .bufferingNewest(32)) { continuation in

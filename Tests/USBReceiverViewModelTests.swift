@@ -111,6 +111,8 @@ final class USBReceiverViewModelTests: XCTestCase {
         XCTAssertNotNil(context.model.usbExportProgress)
         XCTAssertNil(context.model.lastError, "Original cleanup errors belong below the USB result")
         XCTAssertNil(context.model.lastUSBExportError, "The verified USB copy itself succeeded")
+        XCTAssertTrue(context.model.lastOriginalCleanupError?.contains("원본 1개") == true)
+        XCTAssertNil(context.model.usbExportCompletionMessage)
     }
 
     func testPCProgressCannotOverwriteAUSBExportFailure() async throws {

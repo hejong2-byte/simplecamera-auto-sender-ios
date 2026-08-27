@@ -210,6 +210,7 @@ actor IPhoneUSBExportService {
 
     func keep(decisionIDs: Set<UUID>) throws {
         try deletionStore.remove(ids: decisionIDs)
+        if deletionStore.pending().isEmpty { progressStore.clearCompleted() }
     }
 
     func delete(decisionIDs: Set<UUID>) -> IPhoneUSBDeletionSummary {
@@ -228,6 +229,9 @@ actor IPhoneUSBExportService {
             } catch {
                 failed.append(Self.failure(sourceID: decision.sourceID, error: error))
             }
+        }
+        if failed.isEmpty, deletionStore.pending().isEmpty {
+            progressStore.clearCompleted()
         }
         return IPhoneUSBDeletionSummary(
             deletedSourceIDs: deleted,

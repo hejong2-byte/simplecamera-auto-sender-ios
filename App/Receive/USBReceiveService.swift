@@ -88,6 +88,18 @@ actor USBReceiveService {
         guard let credentials = try credentials() else {
             throw USBReceiveServiceError.missingRegistration
         }
+        let deliveries = try await client.list(
+            receiverID: credentials.identity.receiverID,
+            receiveSecret: credentials.secret
+        )
+        let hasPendingAcknowledgement = ledger.allCheckpoints().contains {
+            $0.state == .ackPending
+        }
+        guard deliveries.contains(where: { $0.state != .ackDeleting })
+                || hasPendingAcknowledgement else {
+            progressStore.clearDiscoveryFailure()
+            return USBReceiveSummary(discovered: deliveries.count, completed: 0)
+        }
         guard let destination = try destination() else {
             throw USBReceiveServiceError.missingDestination
         }
@@ -104,10 +116,6 @@ actor USBReceiveService {
         let acknowledged = try await retryAcknowledgements(
             credentials: credentials,
             destination: destination
-        )
-        let deliveries = try await client.list(
-            receiverID: credentials.identity.receiverID,
-            receiveSecret: credentials.secret
         )
         var completed = acknowledged.count
         for (offset, delivery) in deliveries.enumerated()

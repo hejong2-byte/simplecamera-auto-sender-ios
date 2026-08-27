@@ -113,7 +113,6 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         if current.contains(where: { ![.completed, .failed].contains($0.stage) }) {
             return
         }
-        publish(stage: .discovering, job: nil)
         let deliveries = try await client.list(
             receiverID: credentials.identity.receiverID,
             receiveSecret: credentials.secret
@@ -128,7 +127,11 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         let existingTasks = await scheduler.existingDeliveryIDs()
         guard let delivery = deliveries.first(where: {
             !known.contains($0.deliveryID) && !existingTasks.contains($0.deliveryID)
-        }) else { return }
+        }) else {
+            progressStore.clearDiscoveryFailure()
+            return
+        }
+        publish(stage: .discovering, job: nil)
         var job = IPhoneLocalReceiveJob(
             id: delivery.deliveryID,
             delivery: delivery,
