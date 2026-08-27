@@ -107,9 +107,9 @@ struct ContentView: View {
             USBReceiverView(model: receiverModel)
         } label: {
             VStack(alignment: .leading, spacing: 8) {
-                Label("PC ZIP 수신", systemImage: "externaldrive.badge.icloud")
+                Label("PC 파일 수신", systemImage: "externaldrive.badge.icloud")
                     .font(.headline)
-                Text("PC에서 보낸 ZIP을 연결된 USB 메모리에 직접 저장")
+                Text("PC에서 보낸 파일을 연결된 USB 메모리에 직접 저장")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 HStack {

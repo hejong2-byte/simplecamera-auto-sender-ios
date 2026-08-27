@@ -68,13 +68,14 @@ final class IPhoneReceiverClientTests: XCTestCase {
         let deliveries = try decoder.decode(
             [IPhoneDelivery].self,
             from: Data(
-                #"[{"deliveryId":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"업무.zip","contentType":"application/zip","size":40,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"available","createdAt":"2026-08-26T00:00:00Z","expiresAt":"2026-09-02T00:00:00Z","deliveredAt":null}]"#.utf8
+                #"[{"deliveryId":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"업무.hwp","contentType":"application/x-hwp","size":40,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"available","createdAt":"2026-08-26T00:00:00Z","expiresAt":"2026-09-02T00:00:00Z","deliveredAt":null}]"#.utf8
             )
         )
 
         XCTAssertEqual(registration.receiverID.uuidString.lowercased(), "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
         XCTAssertEqual(registration.code, "123456")
-        XCTAssertEqual(deliveries.first?.fileName, "업무.zip")
+        XCTAssertEqual(deliveries.first?.fileName, "업무.hwp")
+        XCTAssertEqual(deliveries.first?.contentType, "application/x-hwp")
         XCTAssertEqual(deliveries.first?.size, 40)
         XCTAssertEqual(deliveries.first?.state, .available)
     }

@@ -9,8 +9,7 @@ enum USBReceiveServiceError: Error, Equatable {
     case destinationNotWritable
     case insufficientSpace
     case fat32FileTooLarge
-    case invalidZIPMetadata
-    case invalidZIPSignature
+    case invalidFileMetadata
     case sizeMismatch
     case shaMismatch
     case unexpectedRangeStatus(Int)
@@ -373,11 +372,6 @@ actor USBReceiveService {
             try ledger.save(checkpoint)
             throw USBReceiveServiceError.sizeMismatch
         }
-        guard try hasZIPSignature(partialURL) else {
-            checkpoint.state = .failed
-            try ledger.save(checkpoint)
-            throw USBReceiveServiceError.invalidZIPSignature
-        }
         let calculatedSHA = Self.hex(hasher.finalize())
         guard calculatedSHA == delivery.sha256.lowercased() else {
             checkpoint.state = .failed
@@ -477,9 +471,14 @@ actor USBReceiveService {
         let name = (requestedName as NSString).deletingPathExtension
         let ext = (requestedName as NSString).pathExtension
         for suffix in 0...9_999 {
-            let candidate = suffix == 0
-                ? requestedName
-                : "\(name) (\(suffix)).\(ext)"
+            let candidate: String
+            if suffix == 0 {
+                candidate = requestedName
+            } else if ext.isEmpty {
+                candidate = "\(name) (\(suffix))"
+            } else {
+                candidate = "\(name) (\(suffix)).\(ext)"
+            }
             let url = directory.appendingPathComponent(candidate)
             if !fileManager.fileExists(atPath: url.path) {
                 return (candidate, false)
@@ -493,13 +492,19 @@ actor USBReceiveService {
 
     private func validatedFileName(_ delivery: IPhoneDelivery) throws -> String {
         let value = delivery.fileName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard delivery.contentType == "application/zip",
-              delivery.size > 0,
-              value.lowercased().hasSuffix(".zip"),
+        let contentType = delivery.contentType.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard delivery.size > 0,
+              !value.isEmpty,
+              value != ".",
+              value != "..",
+              value.count <= 240,
               !value.contains("/"),
               !value.contains("\\"),
-              value.rangeOfCharacter(from: .controlCharacters) == nil else {
-            throw USBReceiveServiceError.invalidZIPMetadata
+              value.rangeOfCharacter(from: .controlCharacters) == nil,
+              !contentType.isEmpty,
+              contentType.count <= 127,
+              contentType.rangeOfCharacter(from: .controlCharacters) == nil else {
+            throw USBReceiveServiceError.invalidFileMetadata
         }
         return value
     }
@@ -516,22 +521,13 @@ actor USBReceiveService {
 
     private func fileMatches(_ url: URL, size: Int64, sha256: String) throws -> Bool {
         guard fileManager.fileExists(atPath: url.path),
-              try fileSize(url) == size,
-              try hasZIPSignature(url) else { return false }
+              try fileSize(url) == size else { return false }
         return try hashFile(url) == sha256.lowercased()
     }
 
     private func fileSize(_ url: URL) throws -> Int64 {
         let attributes = try fileManager.attributesOfItem(atPath: url.path)
         return (attributes[.size] as? NSNumber)?.int64Value ?? 0
-    }
-
-    private func hasZIPSignature(_ url: URL) throws -> Bool {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        return USBReceiveIntegrity.isZIPSignature(
-            try handle.read(upToCount: 4) ?? Data()
-        )
     }
 
     private func hashFile(_ url: URL) throws -> String {

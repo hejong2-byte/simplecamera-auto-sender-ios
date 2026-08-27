@@ -41,9 +41,7 @@ final class USBReceiveLedgerTests: XCTestCase {
         )
     }
 
-    func testZIPSignatureAndBoundedContentRangeValidation() throws {
-        XCTAssertTrue(USBReceiveIntegrity.isZIPSignature(Data([0x50, 0x4b, 0x03, 0x04])))
-        XCTAssertFalse(USBReceiveIntegrity.isZIPSignature(Data([0, 1, 2, 3])))
+    func testBoundedContentRangeValidation() throws {
         XCTAssertNoThrow(
             try USBReceiveIntegrity.validateRange(
                 statusCode: 206,

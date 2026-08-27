@@ -28,6 +28,7 @@ final class USBReceiverViewModelTests: XCTestCase {
         )
 
         await model.refresh()
+        XCTAssertEqual(model.receiveStageTitle, "PC 파일 수신 대기")
         XCTAssertFalse(model.isRegistered)
         XCTAssertFalse(model.hasUSBDestination)
 
@@ -59,6 +60,24 @@ final class USBReceiverViewModelTests: XCTestCase {
         XCTAssertEqual(model.receiveStageTitle, "USB 저장 중 · 1/2")
         XCTAssertEqual(model.receivePercentText, "50%")
         XCTAssertTrue(model.receiveSpeedText.contains("/초"))
+
+        progress.yield(
+            USBReceiveProgress(
+                stage: .verifying,
+                deliveryID: UUID(),
+                fileName: "업무.hwp",
+                currentIndex: 1,
+                totalCount: 2,
+                completedCount: 0,
+                bytesReceived: 100,
+                totalBytes: 100,
+                startedAt: Date().addingTimeInterval(-10),
+                expiresAt: Date().addingTimeInterval(3_600),
+                errorMessage: nil
+            )
+        )
+        await waitUntil { model.receiveProgress?.stage == .verifying }
+        XCTAssertEqual(model.receiveStageTitle, "파일·SHA 검증 중 · 1/2")
     }
 
     func testForegroundPollingStartsImmediatelyAndStopsCleanly() async throws {

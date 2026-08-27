@@ -95,14 +95,6 @@ enum USBReceiveIntegrityError: Error, Equatable {
 }
 
 enum USBReceiveIntegrity {
-    static func isZIPSignature(_ data: Data) -> Bool {
-        guard data.count >= 4 else { return false }
-        let prefix = Array(data.prefix(4))
-        return prefix == [0x50, 0x4b, 0x03, 0x04]
-            || prefix == [0x50, 0x4b, 0x05, 0x06]
-            || prefix == [0x50, 0x4b, 0x07, 0x08]
-    }
-
     static func validateRange(
         statusCode: Int,
         contentRange: String?,

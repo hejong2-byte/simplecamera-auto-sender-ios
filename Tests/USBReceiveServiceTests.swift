@@ -26,6 +26,28 @@ final class USBReceiveServiceTests: XCTestCase {
         XCTAssertNil(fixture.ledger.checkpoint(for: fixture.delivery.deliveryID))
     }
 
+    func testRunOnceSavesAndAcknowledgesVerifiedNonZIPFile() async throws {
+        let payload = Data("original-hwp-data".utf8)
+        let fixture = try makeFixture(
+            payload: payload,
+            fileName: "결재문서.hwp",
+            contentType: "application/x-hwp",
+            chunkSize: 5
+        )
+
+        let summary = try await fixture.service.runOnce()
+        let acknowledgedIDs = await fixture.client.acknowledgedIDs()
+
+        XCTAssertEqual(summary.discovered, 1)
+        XCTAssertEqual(summary.completed, 1)
+        XCTAssertEqual(acknowledgedIDs, [fixture.delivery.deliveryID])
+        XCTAssertEqual(
+            try Data(contentsOf: fixture.destination.appendingPathComponent("결재문서.hwp")),
+            payload
+        )
+        XCTAssertNil(fixture.ledger.checkpoint(for: fixture.delivery.deliveryID))
+    }
+
     func testRunOnceTruncatesUnconfirmedTailAndResumesFromSafeBoundary() async throws {
         let payload = zipPayload(count: 25)
         let fixture = try makeFixture(payload: payload, fileName: "resume.zip", chunkSize: 8)
@@ -102,6 +124,51 @@ final class USBReceiveServiceTests: XCTestCase {
         )
     }
 
+    func testExtensionlessFileCollisionUsesNumberedNameWithoutTrailingDot() async throws {
+        let payload = Data("new-readme".utf8)
+        let fixture = try makeFixture(
+            payload: payload,
+            fileName: "README",
+            contentType: "text/plain",
+            chunkSize: 4
+        )
+        let existing = fixture.destination.appendingPathComponent("README")
+        let existingBytes = Data("do-not-overwrite".utf8)
+        try existingBytes.write(to: existing)
+
+        _ = try await fixture.service.runOnce()
+
+        XCTAssertEqual(try Data(contentsOf: existing), existingBytes)
+        XCTAssertEqual(
+            try Data(contentsOf: fixture.destination.appendingPathComponent("README (1)")),
+            payload
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: fixture.destination.appendingPathComponent("README (1).").path
+            )
+        )
+    }
+
+    func testDotDotFileNameIsRejectedWithoutAcknowledgement() async throws {
+        let fixture = try makeFixture(
+            payload: Data("unsafe".utf8),
+            fileName: "..",
+            contentType: "application/octet-stream",
+            chunkSize: 4
+        )
+
+        do {
+            _ = try await fixture.service.runOnce()
+            XCTFail("Expected unsafe file metadata to fail")
+        } catch USBReceiveServiceError.invalidFileMetadata {
+            // Expected.
+        }
+
+        let acknowledgedIDs = await fixture.client.acknowledgedIDs()
+        XCTAssertEqual(acknowledgedIDs, [])
+    }
+
     func testUnexpectedFullResponseResetsPartialAndDoesNotAck() async throws {
         let fixture = try makeFixture(
             payload: zipPayload(count: 25),
@@ -151,6 +218,7 @@ final class USBReceiveServiceTests: XCTestCase {
     private func makeFixture(
         payload: Data,
         fileName: String = "업무.zip",
+        contentType: String = "application/zip",
         expectedSHA256: String? = nil,
         chunkSize: Int64,
         responseMode: StubReceiverClient.ResponseMode = .partial,
@@ -160,7 +228,7 @@ final class USBReceiveServiceTests: XCTestCase {
         let delivery = IPhoneDelivery(
             deliveryID: UUID(),
             fileName: fileName,
-            contentType: "application/zip",
+            contentType: contentType,
             size: Int64(payload.count),
             sha256: expectedSHA256 ?? sha256(payload),
             state: .available,

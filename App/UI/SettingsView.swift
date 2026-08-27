@@ -48,7 +48,7 @@ struct SettingsView: View {
 
     private var receiverSettingsCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("PC ZIP → USB 수신").font(.headline)
+            Text("PC 파일 → USB 수신").font(.headline)
             if receiverModel.isRegistered {
                 Label(
                     "\(receiverModel.deviceName ?? "iPhone") · 코드 \(receiverModel.registrationCode ?? "------")",
@@ -81,13 +81,13 @@ struct SettingsView: View {
             }
 
             Toggle(
-                "셀룰러에서도 ZIP 수신",
+                "셀룰러에서도 파일 수신",
                 isOn: Binding(
                     get: { receiverModel.allowsCellular },
                     set: { receiverModel.setAllowsCellular($0) }
                 )
             )
-            Text("기본값은 Wi‑Fi 전용입니다. 대용량 ZIP은 exFAT USB를 권장합니다.")
+            Text("기본값은 Wi‑Fi 전용입니다. 4GiB 초과 파일은 exFAT USB를 권장합니다.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if let error = receiverModel.lastError {

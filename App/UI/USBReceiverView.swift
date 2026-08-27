@@ -16,7 +16,7 @@ struct USBReceiverView: View {
             .padding()
         }
         .background(Color(.systemGroupedBackground))
-        .navigationTitle("PC ZIP 수신")
+        .navigationTitle("PC 파일 수신")
         .task {
             await model.refresh()
             updatePolling(for: scenePhase)
@@ -110,7 +110,7 @@ struct USBReceiverView: View {
                 }
 
                 if let fileName = progress.fileName {
-                    Label(fileName, systemImage: "doc.zipper")
+                    Label(fileName, systemImage: "doc.fill")
                         .font(.subheadline)
                         .lineLimit(2)
                 }
@@ -131,7 +131,7 @@ struct USBReceiverView: View {
                     .font(.subheadline)
                     .foregroundStyle(.red)
             } else if model.receiveProgress == nil {
-                Text("PC에서 이 iPhone 코드로 ZIP을 보내면 자동으로 확인합니다.")
+                Text("PC에서 이 iPhone 코드로 파일을 보내면 자동으로 확인합니다.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }

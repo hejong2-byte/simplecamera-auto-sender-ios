@@ -169,15 +169,15 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     var receiveStageTitle: String {
-        guard let progress = receiveProgress else { return "PC ZIP 수신 대기" }
+        guard let progress = receiveProgress else { return "PC 파일 수신 대기" }
         let position = progress.totalCount > 0
             ? " · \(progress.currentIndex)/\(progress.totalCount)"
             : ""
         switch progress.stage {
-        case .idle: return "PC ZIP 수신 대기"
-        case .discovering: return "새 ZIP 확인 중"
+        case .idle: return "PC 파일 수신 대기"
+        case .discovering: return "새 파일 확인 중"
         case .downloading: return "USB 저장 중\(position)"
-        case .verifying: return "ZIP·SHA 검증 중\(position)"
+        case .verifying: return "파일·SHA 검증 중\(position)"
         case .finalizing: return "USB 파일 확정 중\(position)"
         case .acknowledging: return "PC에 저장 완료 알림 중\(position)"
         case .completed: return "USB 저장 완료"
