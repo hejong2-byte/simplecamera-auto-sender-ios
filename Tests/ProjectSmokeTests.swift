@@ -45,5 +45,21 @@ final class ProjectSmokeTests: XCTestCase {
 
         XCTAssertLessThan(manual.lowerBound, receiver.lowerBound)
     }
+
+    func testExistingUSBBookmarkAndLedgerPathsRemainStable() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repository.appendingPathComponent(
+                "App/Application/USBReceiverDependencies.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains(".appendingPathComponent(\"USBReceiver\", isDirectory: true)"))
+        XCTAssertTrue(source.contains("fileURL: usbStateDirectory.appendingPathComponent(\"destination.json\")"))
+        XCTAssertTrue(source.contains("fileURL: usbStateDirectory.appendingPathComponent(\"ledger.json\")"))
+    }
 }
 

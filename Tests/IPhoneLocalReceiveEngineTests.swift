@@ -142,6 +142,29 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
         XCTAssertEqual(scheduledAfter, 1)
     }
 
+    func testProgressKeepsOneStartTimeForTheSameDownload() async throws {
+        let clock = LocalReceiveTestClock()
+        let context = try makeContext(
+            payloads: ["progress.txt": Data("progress".utf8)],
+            now: { clock.date() }
+        )
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        var updates = context.progress.updates().makeAsyncIterator()
+        let first = await updates.next()
+
+        clock.advance()
+        await context.engine.downloadProgress(
+            deliveryID: delivery.deliveryID,
+            received: 4,
+            expected: delivery.size
+        )
+        let second = await updates.next()
+
+        XCTAssertNotNil(first?.startedAt)
+        XCTAssertEqual(second?.startedAt, first?.startedAt)
+    }
+
     func testCollisionAndLongNameKeepValidSuffixAndExtension() throws {
         let directory = temporaryDirectory()
         try Data().write(to: directory.appendingPathComponent("README"))
@@ -163,7 +186,8 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
     private func makeContext(
         payloads: [String: Data],
         ackFailures: Int = 0,
-        automaticDiscoveryAllowed: @escaping @Sendable () -> Bool = { true }
+        automaticDiscoveryAllowed: @escaping @Sendable () -> Bool = { true },
+        now: @escaping @Sendable () -> Date = { Date(timeIntervalSince1970: 500) }
     ) throws -> LocalReceiveContext {
         let root = temporaryDirectory()
         let deliveries = payloads.map { name, payload in
@@ -192,6 +216,7 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
             recordsFileURL: root.appendingPathComponent("records.json")
         )
         let scheduler = FakeLocalReceiveScheduler(jobStore: jobs)
+        let progress = USBReceiveProgressStore()
         let credentials = IPhoneReceiverCredentials(
             identity: IPhoneReceiverIdentity(
                 receiverID: UUID(),
@@ -207,15 +232,16 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
             catalog: catalog,
             credentials: { credentials },
             automaticDiscoveryAllowed: automaticDiscoveryAllowed,
-            progressStore: USBReceiveProgressStore(),
-            now: { Date(timeIntervalSince1970: 500) }
+            progressStore: progress,
+            now: now
         )
         return LocalReceiveContext(
             engine: engine,
             client: client,
             scheduler: scheduler,
             jobs: jobs,
-            catalog: catalog
+            catalog: catalog,
+            progress: progress
         )
     }
 
@@ -241,6 +267,15 @@ private struct LocalReceiveContext {
     let scheduler: FakeLocalReceiveScheduler
     let jobs: IPhoneLocalReceiveJobStore
     let catalog: IPhoneReceivedFileCatalog
+    let progress: USBReceiveProgressStore
+}
+
+private final class LocalReceiveTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = Date(timeIntervalSince1970: 500)
+
+    func date() -> Date { lock.withLock { value } }
+    func advance() { lock.withLock { value = value.addingTimeInterval(10) } }
 }
 
 private struct LocalReceiveAck: Equatable {
