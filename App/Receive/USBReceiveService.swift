@@ -25,6 +25,8 @@ actor USBReceiveService {
     typealias DestinationProvider = @Sendable () throws -> USBBookmarkDestination?
     typealias VolumeIdentityProvider = @Sendable (URL) throws -> String?
     typealias VolumeFormatProvider = @Sendable (URL) throws -> String?
+    typealias SecurityScopeStart = @Sendable (URL) -> Bool
+    typealias SecurityScopeStop = @Sendable (URL) -> Void
 
     static let defaultChunkSize: Int64 = 8 * 1_024 * 1_024
     static let partialDirectoryName = ".SimpleCameraReceiver"
@@ -36,6 +38,8 @@ actor USBReceiveService {
     private let chunkSize: Int64
     private let volumeIdentity: VolumeIdentityProvider
     private let volumeFormat: VolumeFormatProvider
+    private let startAccessing: SecurityScopeStart
+    private let stopAccessing: SecurityScopeStop
     private let now: @Sendable () -> Date
     private let fileManager: FileManager
     private let progressStore: USBReceiveProgressStore
@@ -48,6 +52,8 @@ actor USBReceiveService {
         chunkSize: Int64 = USBReceiveService.defaultChunkSize,
         volumeIdentity: @escaping VolumeIdentityProvider = USBReceiveService.systemVolumeIdentity,
         volumeFormat: @escaping VolumeFormatProvider = USBReceiveService.systemVolumeFormat,
+        startAccessing: @escaping SecurityScopeStart = { $0.startAccessingSecurityScopedResource() },
+        stopAccessing: @escaping SecurityScopeStop = { $0.stopAccessingSecurityScopedResource() },
         now: @escaping @Sendable () -> Date = Date.init,
         fileManager: FileManager = .default,
         progressStore: USBReceiveProgressStore = USBReceiveProgressStore()
@@ -60,6 +66,8 @@ actor USBReceiveService {
         self.chunkSize = chunkSize
         self.volumeIdentity = volumeIdentity
         self.volumeFormat = volumeFormat
+        self.startAccessing = startAccessing
+        self.stopAccessing = stopAccessing
         self.now = now
         self.fileManager = fileManager
         self.progressStore = progressStore
@@ -100,10 +108,10 @@ actor USBReceiveService {
             throw USBReceiveServiceError.staleDestination
         }
 
-        let accessed = destination.url.startAccessingSecurityScopedResource()
-        defer {
-            if accessed { destination.url.stopAccessingSecurityScopedResource() }
+        guard startAccessing(destination.url) else {
+            throw USBReceiveServiceError.destinationNotWritable
         }
+        defer { stopAccessing(destination.url) }
         try validateDestination(destination)
 
         let acknowledged = try await retryAcknowledgements(
@@ -480,17 +488,11 @@ actor USBReceiveService {
         delivery: IPhoneDelivery,
         in directory: URL
     ) throws -> (name: String, reusesExistingFile: Bool) {
-        let name = (requestedName as NSString).deletingPathExtension
-        let ext = (requestedName as NSString).pathExtension
         for suffix in 0...9_999 {
-            let candidate: String
-            if suffix == 0 {
-                candidate = requestedName
-            } else if ext.isEmpty {
-                candidate = "\(name) (\(suffix))"
-            } else {
-                candidate = "\(name) (\(suffix)).\(ext)"
-            }
+            let candidate = try IPhoneLocalFileNaming.candidateName(
+                requestedName,
+                suffix: suffix
+            )
             let url = directory.appendingPathComponent(candidate)
             if !fileManager.fileExists(atPath: url.path) {
                 return (candidate, false)
@@ -505,11 +507,11 @@ actor USBReceiveService {
     private func validatedFileName(_ delivery: IPhoneDelivery) throws -> String {
         let value = delivery.fileName.trimmingCharacters(in: .whitespacesAndNewlines)
         let contentType = delivery.contentType.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard delivery.size > 0,
+        guard delivery.size >= 0,
               !value.isEmpty,
               value != ".",
               value != "..",
-              value.count <= 240,
+              value.lengthOfBytes(using: .utf8) <= IPhoneLocalFileNaming.maximumNameBytes,
               !value.contains("/"),
               !value.contains("\\"),
               value.rangeOfCharacter(from: .controlCharacters) == nil,

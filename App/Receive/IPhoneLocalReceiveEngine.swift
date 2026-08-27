@@ -29,7 +29,7 @@ enum IPhoneLocalFileNaming {
         throw IPhoneLocalReceiveError.fileNameUnavailable
     }
 
-    private static func candidateName(_ requestedName: String, suffix: Int) throws -> String {
+    static func candidateName(_ requestedName: String, suffix: Int) throws -> String {
         let original = requestedName as NSString
         let pathExtension = original.pathExtension
         let base = original.deletingPathExtension
