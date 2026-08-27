@@ -32,11 +32,55 @@ final class USBBookmarkStoreTests: XCTestCase {
         XCTAssertTrue(destination.isStale)
     }
 
+    func testSavingSelectedFolderAgainReplacesStaleBookmarkAndMetadata() throws {
+        let stateDirectory = temporaryDirectory()
+        let codec = ReplacingUSBBookmarkCodec()
+        let store = USBBookmarkStore(
+            fileURL: stateDirectory.appendingPathComponent("usb-destination.json"),
+            codec: codec
+        )
+        let oldURL = URL(fileURLWithPath: "/Volumes/OLD", isDirectory: true)
+        let newURL = URL(fileURLWithPath: "/Volumes/NEW", isDirectory: true)
+
+        try store.save(folderURL: oldURL, volumeID: "old-volume", displayName: "OLD")
+        XCTAssertTrue(try XCTUnwrap(store.resolve()).isStale)
+        try store.save(folderURL: newURL, volumeID: "new-volume", displayName: "NEW")
+        let refreshed = try XCTUnwrap(store.resolve())
+
+        XCTAssertFalse(refreshed.isStale)
+        XCTAssertEqual(refreshed.url, newURL)
+        XCTAssertEqual(refreshed.volumeID, "new-volume")
+        XCTAssertEqual(refreshed.displayName, "NEW")
+    }
+
     private func temporaryDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         return directory
+    }
+}
+
+private final class ReplacingUSBBookmarkCodec: USBBookmarkCoding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var nextID = 0
+
+    func makeBookmark(for url: URL) throws -> Data {
+        lock.withLock {
+            nextID += 1
+            return Data("\(nextID)|\(url.path)".utf8)
+        }
+    }
+
+    func resolve(_ data: Data) throws -> USBBookmarkResolution {
+        let parts = String(decoding: data, as: UTF8.self).split(
+            separator: "|",
+            maxSplits: 1
+        )
+        return USBBookmarkResolution(
+            url: URL(fileURLWithPath: String(parts[1]), isDirectory: true),
+            isStale: parts[0] == "1"
+        )
     }
 }
 

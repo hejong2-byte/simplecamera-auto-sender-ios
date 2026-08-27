@@ -4,6 +4,34 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class USBReceiveServiceTests: XCTestCase {
+    func testZeroByteFileSkipsRangesAndAcknowledgesUSBStoredName() async throws {
+        let fixture = try makeFixture(
+            payload: Data(),
+            fileName: "empty.bin",
+            contentType: "application/octet-stream",
+            chunkSize: 4
+        )
+
+        let summary = try await fixture.service.runOnce()
+        let requestedRanges = await fixture.client.requestedRanges()
+        let acknowledgementRecords = await fixture.client.acknowledgementRecords()
+
+        XCTAssertEqual(summary, USBReceiveSummary(discovered: 1, completed: 1))
+        XCTAssertEqual(requestedRanges, [])
+        XCTAssertEqual(
+            acknowledgementRecords,
+            [DirectUSBAck(
+                deliveryID: fixture.delivery.deliveryID,
+                storageLocation: .usb,
+                storedName: "empty.bin"
+            )]
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: fixture.destination.appendingPathComponent("empty.bin")),
+            Data()
+        )
+    }
+
     func testRunOnceUsesBoundedRangesAndAcknowledgesVerifiedZIP() async throws {
         XCTAssertEqual(USBReceiveService.defaultChunkSize, 8 * 1_024 * 1_024)
         let fixture = try makeFixture(payload: zipPayload(count: 25), chunkSize: 8)
@@ -150,6 +178,70 @@ final class USBReceiveServiceTests: XCTestCase {
         )
     }
 
+    func testMaximumLengthCollisionPreservesExtensionWithinUTF8Limit() async throws {
+        let requestedName = String(repeating: "a", count: 236) + ".zip"
+        let payload = zipPayload(count: 12)
+        let fixture = try makeFixture(
+            payload: payload,
+            fileName: requestedName,
+            chunkSize: 4
+        )
+        try Data("existing".utf8).write(
+            to: fixture.destination.appendingPathComponent(requestedName)
+        )
+
+        _ = try await fixture.service.runOnce()
+
+        let names = try FileManager.default.contentsOfDirectory(
+            atPath: fixture.destination.path
+        ).filter { !$0.hasPrefix(".") && $0 != requestedName }
+        let storedName = try XCTUnwrap(names.first)
+        XCTAssertLessThanOrEqual(storedName.lengthOfBytes(using: .utf8), 240)
+        XCTAssertEqual((storedName as NSString).pathExtension, "zip")
+        XCTAssertEqual(
+            try Data(contentsOf: fixture.destination.appendingPathComponent(storedName)),
+            payload
+        )
+    }
+
+    func testStaleDestinationFailsWithoutAcknowledgement() async throws {
+        let fixture = try makeFixture(
+            payload: Data("file".utf8),
+            chunkSize: 4,
+            destinationIsStale: true
+        )
+
+        await assertFailure(.staleDestination, fixture: fixture)
+    }
+
+    func testSecurityScopeFailureFailsWithoutAcknowledgement() async throws {
+        let fixture = try makeFixture(
+            payload: Data("file".utf8),
+            chunkSize: 4,
+            canAccessSecurityScope: false
+        )
+
+        await assertFailure(.destinationNotWritable, fixture: fixture)
+    }
+
+    func testDifferentVolumeFailsWithoutAcknowledgement() async throws {
+        let fixture = try makeFixture(
+            payload: Data("file".utf8),
+            chunkSize: 4,
+            currentVolumeID: "another-volume"
+        )
+
+        await assertFailure(.destinationChanged, fixture: fixture)
+    }
+
+    func testMissingDestinationDirectoryFailsWithoutAcknowledgement() async throws {
+        let fixture = try makeFixture(payload: Data("file".utf8), chunkSize: 4)
+        try FileManager.default.removeItem(at: fixture.destination)
+        try Data("not-a-directory".utf8).write(to: fixture.destination)
+
+        await assertFailure(.destinationNotWritable, fixture: fixture)
+    }
+
     func testDotDotFileNameIsRejectedWithoutAcknowledgement() async throws {
         let fixture = try makeFixture(
             payload: Data("unsafe".utf8),
@@ -222,7 +314,10 @@ final class USBReceiveServiceTests: XCTestCase {
         expectedSHA256: String? = nil,
         chunkSize: Int64,
         responseMode: StubReceiverClient.ResponseMode = .partial,
-        ackFailures: Int = 0
+        ackFailures: Int = 0,
+        destinationIsStale: Bool = false,
+        canAccessSecurityScope: Bool = true,
+        currentVolumeID: String = "test-volume"
     ) throws -> Fixture {
         let destination = temporaryDirectory()
         let delivery = IPhoneDelivery(
@@ -262,11 +357,13 @@ final class USBReceiveServiceTests: XCTestCase {
                     url: destination,
                     volumeID: "test-volume",
                     displayName: "TEST USB",
-                    isStale: false
+                    isStale: destinationIsStale
                 )
             },
             chunkSize: chunkSize,
-            volumeIdentity: { _ in "test-volume" }
+            volumeIdentity: { _ in currentVolumeID },
+            startAccessing: { _ in canAccessSecurityScope },
+            stopAccessing: { _ in }
         )
         return Fixture(
             client: client,
@@ -276,6 +373,22 @@ final class USBReceiveServiceTests: XCTestCase {
             delivery: delivery,
             payload: payload
         )
+    }
+
+    private func assertFailure(
+        _ expected: USBReceiveServiceError,
+        fixture: Fixture
+    ) async {
+        do {
+            _ = try await fixture.service.runOnce()
+            XCTFail("Expected \(expected)")
+        } catch let error as USBReceiveServiceError {
+            XCTAssertEqual(error, expected)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        let acknowledgedIDs = await fixture.client.acknowledgedIDs()
+        XCTAssertEqual(acknowledgedIDs, [])
     }
 
     private func zipPayload(count: Int) -> Data {
@@ -320,6 +433,7 @@ private actor StubReceiverClient: IPhoneReceiverServing {
     private let responseMode: ResponseMode
     private var ranges: [ClosedRange<Int64>] = []
     private var acknowledgements: [UUID] = []
+    private var acknowledgementDetails: [DirectUSBAck] = []
     private var remainingAckFailures: Int
     private var ackAttempts = 0
 
@@ -389,11 +503,23 @@ private actor StubReceiverClient: IPhoneReceiverServing {
             throw StubReceiverError.ackFailed
         }
         acknowledgements.append(deliveryID)
+        acknowledgementDetails.append(DirectUSBAck(
+            deliveryID: deliveryID,
+            storageLocation: storageLocation,
+            storedName: storedName
+        ))
     }
 
     func requestedRanges() -> [ClosedRange<Int64>] { ranges }
     func acknowledgedIDs() -> [UUID] { acknowledgements }
     func ackAttemptCount() -> Int { ackAttempts }
+    func acknowledgementRecords() -> [DirectUSBAck] { acknowledgementDetails }
+}
+
+private struct DirectUSBAck: Equatable, Sendable {
+    let deliveryID: UUID
+    let storageLocation: IPhoneStorageLocation
+    let storedName: String
 }
 
 private enum StubReceiverError: Error {
