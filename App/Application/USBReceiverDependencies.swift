@@ -13,6 +13,9 @@ final class USBReceiverDependencies: @unchecked Sendable {
         let stateDirectory = applicationSupport
             .appendingPathComponent("SimpleCameraAutoSender", isDirectory: true)
             .appendingPathComponent("PCFileReceiver", isDirectory: true)
+        let usbStateDirectory = applicationSupport
+            .appendingPathComponent("SimpleCameraAutoSender", isDirectory: true)
+            .appendingPathComponent("USBReceiver", isDirectory: true)
         let documents = try! fileManager.url(
             for: .documentDirectory,
             in: .userDomainMask,
@@ -28,10 +31,10 @@ final class USBReceiverDependencies: @unchecked Sendable {
             )
         )
         let bookmarkStore = USBBookmarkStore(
-            fileURL: stateDirectory.appendingPathComponent("destination.json")
+            fileURL: usbStateDirectory.appendingPathComponent("destination.json")
         )
         let ledger = try! USBReceiveLedger(
-            fileURL: stateDirectory.appendingPathComponent("usb-ledger.json")
+            fileURL: usbStateDirectory.appendingPathComponent("ledger.json")
         )
         let catalog = try! IPhoneReceivedFileCatalog(
             receivedDirectory: documents.appendingPathComponent("받은 파일", isDirectory: true),

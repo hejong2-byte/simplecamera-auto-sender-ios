@@ -76,6 +76,8 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
     private let progressStore: USBReceiveProgressStore
     private let fileManager: FileManager
     private let now: @Sendable () -> Date
+    private var progressDeliveryID: UUID?
+    private var progressStartedAt: Date?
 
     init(
         client: any IPhoneLocalReceiveNetworking,
@@ -375,6 +377,10 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
     }
 
     private func publish(stage: USBReceiveStage, job: IPhoneLocalReceiveJob?) {
+        if progressDeliveryID != job?.delivery.deliveryID {
+            progressDeliveryID = job?.delivery.deliveryID
+            progressStartedAt = job == nil ? nil : now()
+        }
         progressStore.publish(USBReceiveProgress(
             stage: stage,
             destination: .iphoneLocal,
@@ -385,7 +391,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
             completedCount: stage == .completed ? 1 : 0,
             bytesReceived: job?.bytesReceived ?? 0,
             totalBytes: job?.delivery.size ?? 0,
-            startedAt: job == nil ? nil : now(),
+            startedAt: progressStartedAt,
             expiresAt: job?.delivery.expiresAt,
             errorMessage: nil
         ))
