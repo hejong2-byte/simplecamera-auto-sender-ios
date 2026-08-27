@@ -668,12 +668,6 @@ actor USBReceiveService {
     }
 
     private static func errorMessage(_ error: Error) -> String {
-        if let serviceError = error as? USBReceiveServiceError {
-            return String(describing: serviceError)
-        }
-        if let clientError = error as? IPhoneReceiverClientError {
-            return String(describing: clientError)
-        }
-        return String(describing: error)
+        IPhoneReceiveErrorMessage.message(error)
     }
 }

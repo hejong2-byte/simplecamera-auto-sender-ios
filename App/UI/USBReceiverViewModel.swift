@@ -405,30 +405,7 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     private static func message(for error: Error) -> String {
-        switch error {
-        case USBReceiveServiceError.missingRegistration:
-            return "수신 기기를 먼저 등록해 주세요."
-        case USBReceiveServiceError.missingDestination:
-            return "USB 폴더를 먼저 선택해 주세요."
-        case USBReceiveServiceError.staleDestination:
-            return "USB 폴더 권한이 만료되었습니다. 다시 선택해 주세요."
-        case USBReceiveServiceError.destinationChanged:
-            return "선택한 USB와 현재 연결된 USB가 다릅니다."
-        case USBReceiveServiceError.destinationNotWritable:
-            return "USB에 쓸 수 없습니다. 연결과 폴더 권한을 확인해 주세요."
-        case USBReceiveServiceError.insufficientSpace,
-             IPhoneUSBExportError.insufficientSpace:
-            return "저장 공간이 부족합니다."
-        case USBReceiveServiceError.fat32FileTooLarge:
-            return "FAT32 USB에는 4GiB 초과 파일을 저장할 수 없습니다. exFAT을 사용해 주세요."
-        case USBReceiveServiceError.shaMismatch,
-             IPhoneUSBExportError.shaMismatch:
-            return "파일 무결성 검증에 실패했습니다. 원본은 삭제하지 않았습니다."
-        case let IPhoneReceiverClientError.server(statusCode, code):
-            return "서버 오류 (HTTP \(statusCode) · \(code ?? "unknown"))"
-        default:
-            return "수신하지 못했습니다. 네트워크와 저장 위치를 확인해 주세요."
-        }
+        IPhoneReceiveErrorMessage.message(error)
     }
 
     private static func byteText(_ bytes: Int64) -> String {

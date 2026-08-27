@@ -165,9 +165,14 @@ extension BackgroundIPhoneReceiveSession: URLSessionDownloadDelegate {
         guard let descriptor = Self.descriptor(for: downloadTask) else { return }
         let sink = currentSink()
         do {
-            guard let response = downloadTask.response as? HTTPURLResponse,
-                  (200..<300).contains(response.statusCode) else {
+            guard let response = downloadTask.response as? HTTPURLResponse else {
                 throw BackgroundIPhoneReceiveError.invalidResponse
+            }
+            guard (200..<300).contains(response.statusCode) else {
+                throw IPhoneReceiverClientError.server(
+                    statusCode: response.statusCode,
+                    code: nil
+                )
             }
             let destination = stagingDirectory.appendingPathComponent(
                 descriptor.deliveryID.uuidString.lowercased() + ".download"

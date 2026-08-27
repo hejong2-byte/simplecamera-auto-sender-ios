@@ -158,7 +158,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
             try jobStore.save(job)
             publish(stage: .downloading, job: job)
         } catch {
-            job.lastError = String(describing: error)
+            job.lastError = IPhoneReceiveErrorMessage.message(error)
             try? jobStore.save(job)
             throw error
         }
@@ -191,7 +191,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
             }
             try await discoverAndSchedule()
         } catch {
-            progressStore.publishFailure(String(describing: error))
+            progressStore.publishFailure(IPhoneReceiveErrorMessage.message(error))
         }
     }
 
@@ -328,7 +328,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         } catch {
             job.stage = .ackPending
             job.retryCount += 1
-            job.lastError = String(describing: error)
+            job.lastError = IPhoneReceiveErrorMessage.message(error)
             try? jobStore.save(job)
             progressStore.publishFailure(job.lastError ?? "ACK failed")
         }
@@ -361,7 +361,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
     private func markFailed(_ initial: IPhoneLocalReceiveJob, error: Error) async {
         var job = initial
         job.stage = .failed
-        job.lastError = String(describing: error)
+        job.lastError = IPhoneReceiveErrorMessage.message(error)
         try? jobStore.save(job)
         progressStore.publishFailure(job.lastError ?? "receive failed")
         try? await discoverAndSchedule()
