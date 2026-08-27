@@ -4,6 +4,109 @@ import XCTest
 
 @MainActor
 final class USBReceiverViewModelTests: XCTestCase {
+    func testPCProgressCannotOverwriteAUSBExportFailure() async throws {
+        let file = try storedFile()
+        let pcProgress = USBReceiveProgressStore()
+        let exportProgress = USBReceiveProgressStore()
+        let model = try exportModel(
+            files: [file],
+            receiveProgressStore: pcProgress,
+            exportProgressStore: exportProgress
+        ) { _, _ in
+            exportProgress.publishFailure("USB에 쓸 수 없습니다. 폴더 권한을 확인해 주세요.")
+            return IPhoneUSBExportSummary(
+                verified: [],
+                failed: [IPhoneUSBExportFailure(
+                    sourceID: file.id,
+                    error: .destinationAccessDenied
+                )]
+            )
+        }
+        await model.refresh()
+        model.toggleStoredFileSelection(file.id)
+        await model.exportSelectedFilesToUSB()
+        await waitUntil { model.usbExportProgress?.stage == .failed }
+        let failure = model.lastUSBExportError
+
+        pcProgress.publish(testProgress(stage: .downloading, name: "new-pc.txt", bytes: 25))
+        await waitUntil { model.receiveProgress?.fileName == "new-pc.txt" }
+        await model.pollOnce()
+
+        XCTAssertEqual(model.lastUSBExportError, failure)
+        XCTAssertTrue(model.lastUSBExportError?.contains("권한") == true)
+        XCTAssertEqual(model.usbExportProgress?.stage, .failed)
+        XCTAssertEqual(model.selectedStoredFileIDs, [file.id])
+    }
+
+    func testUSBExportProgressIsIndependentOfPCReceiveProgress() async throws {
+        let pcProgress = USBReceiveProgressStore()
+        let exportProgress = USBReceiveProgressStore()
+        let model = try exportModel(
+            files: [],
+            receiveProgressStore: pcProgress,
+            exportProgressStore: exportProgress
+        ) { _, _ in IPhoneUSBExportSummary(verified: [], failed: []) }
+
+        exportProgress.publish(testProgress(stage: .copyingToUSB, name: "local.zip", bytes: 50))
+        pcProgress.publish(testProgress(stage: .downloading, name: "from-pc.txt", bytes: 25))
+        await waitUntil {
+            model.usbExportProgress?.percent == 50 && model.receiveProgress?.percent == 25
+        }
+
+        XCTAssertEqual(model.usbExportProgress?.fileName, "local.zip")
+        XCTAssertEqual(model.usbExportStageTitle, "USB로 복사 중 · 1/1")
+        XCTAssertEqual(model.receiveProgress?.fileName, "from-pc.txt")
+    }
+
+    func testFailedUSBCopyKeepsTheFailedFileSelectedForRetry() async throws {
+        let file = try storedFile()
+        let model = try exportModel(files: [file]) { _, _ in
+            IPhoneUSBExportSummary(
+                verified: [],
+                failed: [IPhoneUSBExportFailure(
+                    sourceID: file.id,
+                    error: .destinationAccessDenied
+                )]
+            )
+        }
+        await model.refresh()
+        model.toggleStoredFileSelection(file.id)
+
+        await model.exportSelectedFilesToUSB()
+
+        XCTAssertEqual(model.selectedStoredFileIDs, [file.id])
+        XCTAssertFalse(model.needsDeletionDecision)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
+
+    func testSecondCopyPressCannotQueueADuplicateExport() async throws {
+        let file = try storedFile()
+        let calls = ReceiveCounter()
+        let secondPress = ReceiveCounter()
+        let gate = USBExportGate()
+        let model = try exportModel(files: [file]) { _, _ in
+            calls.increment()
+            await gate.wait()
+            return IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        await model.refresh()
+        model.toggleStoredFileSelection(file.id)
+
+        let first = Task { await model.exportSelectedFilesToUSB() }
+        await waitUntil { calls.value == 1 }
+        let second = Task {
+            secondPress.increment()
+            await model.exportSelectedFilesToUSB()
+        }
+        await waitUntil { secondPress.value == 1 }
+        await gate.open()
+        await first.value
+        await second.value
+
+        XCTAssertEqual(calls.value, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
+
     func testReceiveDestinationDefaultsToIPhoneAndPersistsUSBChoice() {
         let suiteName = "USBReceiverViewModelTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -202,6 +305,70 @@ final class USBReceiverViewModelTests: XCTestCase {
         XCTAssertFalse(model.isPolling)
     }
 
+    private func storedFile() throws -> IPhoneStoredFile {
+        let url = temporaryDirectory().appendingPathComponent("local.zip")
+        let data = Data("unchanged-original".utf8)
+        try data.write(to: url)
+        return IPhoneStoredFile(
+            id: url.path,
+            url: url,
+            name: url.lastPathComponent,
+            size: Int64(data.count),
+            modifiedAt: Date(),
+            receivedRecord: nil
+        )
+    }
+
+    private func exportModel(
+        files: [IPhoneStoredFile],
+        receiveProgressStore: USBReceiveProgressStore? = nil,
+        exportProgressStore: USBReceiveProgressStore? = nil,
+        export: @escaping USBReceiverViewModel.ExportFiles
+    ) throws -> USBReceiverViewModel {
+        let usb = temporaryDirectory()
+        let bookmarkStore = USBBookmarkStore(
+            fileURL: temporaryDirectory().appendingPathComponent("destination.json"),
+            codec: ViewModelBookmarkCodec(url: usb)
+        )
+        try bookmarkStore.save(folderURL: usb)
+        return USBReceiverViewModel(
+            uploadCredentialStore: InMemoryCredentialStore(),
+            registrationStore: IPhoneReceiverRegistrationStore(
+                identityStore: InMemoryCredentialStore(),
+                secretStore: InMemoryCredentialStore()
+            ),
+            bookmarkStore: bookmarkStore,
+            registrar: StubReceiverRegistrar(),
+            receiveOnce: { USBReceiveSummary(discovered: 0, completed: 0) },
+            storedFiles: { files },
+            exportFiles: export,
+            progressUpdates: {
+                receiveProgressStore?.updates() ?? AsyncStream { $0.finish() }
+            },
+            exportProgressUpdates: {
+                exportProgressStore?.updates() ?? AsyncStream { $0.finish() }
+            },
+            defaultDeviceName: "iPhone",
+            preferences: isolatedPreferences()
+        )
+    }
+
+    private func testProgress(stage: USBReceiveStage, name: String, bytes: Int64) -> USBReceiveProgress {
+        USBReceiveProgress(
+            stage: stage,
+            deliveryID: UUID(),
+            fileName: name,
+            currentIndex: 1,
+            totalCount: 1,
+            completedCount: 0,
+            bytesReceived: bytes,
+            totalBytes: 100,
+            startedAt: Date(),
+            expiresAt: nil,
+            errorMessage: nil
+        )
+    }
+
     private func temporaryDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -226,6 +393,22 @@ final class USBReceiverViewModelTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(5))
         }
         XCTFail("수신 상태가 시간 안에 반영되지 않았습니다.")
+    }
+}
+
+private actor USBExportGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
     }
 }
 

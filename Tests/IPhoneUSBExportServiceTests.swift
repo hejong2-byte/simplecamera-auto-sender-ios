@@ -4,6 +4,119 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneUSBExportServiceTests: XCTestCase {
+    func testVerifiedCompletionShowsCopiedBytesInsteadOfZeroOfZero() async throws {
+        let context = try makeContext()
+        let payload = Data(repeating: 0x5a, count: 2 * 1_024 * 1_024 + 17)
+        let file = try makeStoredFile(
+            name: "large-test.zip",
+            data: payload,
+            in: context.sourceDirectory
+        )
+        let updates = context.progressStore.updates()
+
+        let summary = await context.service.export([file], to: context.destination)
+        var latest = context.progressStore.updates().makeAsyncIterator()
+        let completion = await latest.next()
+
+        XCTAssertEqual(summary.failed, [])
+        XCTAssertEqual(completion?.stage, .completed)
+        XCTAssertEqual(completion?.completedCount, 1)
+        XCTAssertEqual(completion?.bytesReceived, Int64(payload.count))
+        XCTAssertEqual(completion?.totalBytes, Int64(payload.count))
+        XCTAssertEqual(try Data(contentsOf: file.url), payload)
+
+        context.progressStore.publishFailure("end-of-test")
+        var stages: [USBReceiveStage] = []
+        var startTimes: Set<Date> = []
+        for await progress in updates {
+            if progress.errorMessage == "end-of-test" { break }
+            stages.append(progress.stage)
+            if let startedAt = progress.startedAt { startTimes.insert(startedAt) }
+        }
+        XCTAssertTrue(stages.contains(.copyingToUSB))
+        XCTAssertTrue(stages.contains(.verifying))
+        XCTAssertEqual(startTimes.count, 1)
+    }
+
+    func testPathBackedDestinationWithoutVolumeMetadataCanCopyAndKeepsOriginal() async throws {
+        let context = try makeContext(
+            volumeIdentity: { _ in nil },
+            destinationVolumeID: nil
+        )
+        let payload = Data("original-local-file".utf8)
+        let file = try makeStoredFile(
+            name: "local.zip",
+            data: payload,
+            in: context.sourceDirectory
+        )
+
+        let summary = await context.service.export([file], to: context.destination)
+
+        XCTAssertEqual(summary.failed, [])
+        XCTAssertEqual(summary.verified.map(\.sourceID), [file.id])
+        XCTAssertEqual(try Data(contentsOf: file.url), payload)
+        if let storedName = summary.verified.first?.usbStoredName {
+            XCTAssertEqual(
+                try Data(contentsOf: context.usbDirectory.appendingPathComponent(storedName)),
+                payload
+            )
+        }
+    }
+
+    func testMissingVolumeMetadataDoesNotAcceptDifferentSavedIdentity() async throws {
+        let context = try makeContext(volumeIdentity: { _ in nil })
+        let file = try makeStoredFile(
+            name: "keep.txt",
+            data: Data("keep-original".utf8),
+            in: context.sourceDirectory
+        )
+
+        let summary = await context.service.export([file], to: context.destination)
+
+        XCTAssertEqual(summary.verified, [])
+        XCTAssertEqual(summary.failed.map(\.error), [.destinationChanged])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+        XCTAssertEqual(context.deletionStore.pending(), [])
+    }
+
+    func testAccessFailureReportsTheActualReasonAndFileName() async throws {
+        let context = try makeContext(canAccessSecurityScope: false)
+        let file = try makeStoredFile(
+            name: "cannot-copy.zip",
+            data: Data("keep-original".utf8),
+            in: context.sourceDirectory
+        )
+
+        let summary = await context.service.export([file], to: context.destination)
+        var updates = context.progressStore.updates().makeAsyncIterator()
+        let progress = await updates.next()
+
+        XCTAssertEqual(summary.failed.map(\.error), [.destinationAccessDenied])
+        XCTAssertEqual(progress?.stage, .failed)
+        XCTAssertEqual(progress?.fileName, file.name)
+        XCTAssertTrue(progress?.errorMessage?.contains("권한") == true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
+
+    func testUnexpectedFileSystemFailurePreservesDiagnosticCode() async throws {
+        let context = try makeContext()
+        let file = try makeStoredFile(
+            name: "removed-before-copy.txt",
+            data: Data("temporary-test-file".utf8),
+            in: context.sourceDirectory
+        )
+        try FileManager.default.removeItem(at: file.url)
+
+        let summary = await context.service.export([file], to: context.destination)
+        var updates = context.progressStore.updates().makeAsyncIterator()
+        let progress = await updates.next()
+
+        XCTAssertEqual(summary.verified, [])
+        XCTAssertEqual(progress?.stage, .failed)
+        XCTAssertTrue(progress?.errorMessage?.contains("NSCocoaErrorDomain") == true)
+        XCTAssertEqual(context.deletionStore.pending(), [])
+    }
+
     func testExportVerifiesGoodFileRecordsPartialFailureAndLeavesSources() async throws {
         let context = try makeContext()
         let good = try makeStoredFile(
@@ -140,7 +253,9 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
 
     private func makeContext(
         availableCapacity: @escaping @Sendable (URL) throws -> Int64? = { _ in Int64.max },
-        volumeIdentity: @escaping @Sendable (URL) throws -> String? = { _ in "volume-1" }
+        volumeIdentity: @escaping @Sendable (URL) throws -> String? = { _ in "volume-1" },
+        destinationVolumeID: String? = "volume-1",
+        canAccessSecurityScope: Bool = true
     ) throws -> ExportContext {
         let root = temporaryDirectory()
         let sourceDirectory = root.appendingPathComponent("received", isDirectory: true)
@@ -150,12 +265,14 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         let deletionStore = try IPhoneUSBDeletionDecisionStore(
             fileURL: root.appendingPathComponent("decisions.json")
         )
+        let progressStore = USBReceiveProgressStore()
         let service = IPhoneUSBExportService(
             deletionStore: deletionStore,
-            startAccessing: { _ in true },
+            startAccessing: { _ in canAccessSecurityScope },
             stopAccessing: { _ in },
             volumeIdentity: volumeIdentity,
             availableCapacity: availableCapacity,
+            progressStore: progressStore,
             now: { Date(timeIntervalSince1970: 456) }
         )
         return ExportContext(
@@ -163,12 +280,13 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             usbDirectory: usbDirectory,
             destination: USBBookmarkDestination(
                 url: usbDirectory,
-                volumeID: "volume-1",
+                volumeID: destinationVolumeID ?? usbDirectory.path,
                 displayName: "TEST USB",
                 isStale: false
             ),
             deletionStore: deletionStore,
-            service: service
+            service: service,
+            progressStore: progressStore
         )
     }
 
@@ -217,6 +335,7 @@ private struct ExportContext {
     let destination: USBBookmarkDestination
     let deletionStore: IPhoneUSBDeletionDecisionStore
     let service: IPhoneUSBExportService
+    let progressStore: USBReceiveProgressStore
 }
 
 private final class SequencedVolumeIdentity: @unchecked Sendable {

@@ -55,6 +55,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
             transport: PolicyIPhoneReceiverTransport(preferences: preferences)
         )
         let progressStore = USBReceiveProgressStore()
+        let exportProgressStore = USBReceiveProgressStore()
         let directUSBService = USBReceiveService(
             client: client,
             ledger: ledger,
@@ -75,7 +76,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
         backgroundSession.bind(sink: localEngine)
         let exporter = IPhoneUSBExportService(
             deletionStore: deletionStore,
-            progressStore: progressStore
+            progressStore: exportProgressStore
         )
         let dependencies = USBReceiverDependencies(
             registrationStore: registrationStore,
@@ -87,7 +88,8 @@ final class USBReceiverDependencies: @unchecked Sendable {
             catalog: catalog,
             exporter: exporter,
             deletionStore: deletionStore,
-            progressStore: progressStore
+            progressStore: progressStore,
+            exportProgressStore: exportProgressStore
         )
         Task { await localEngine.restore() }
         return dependencies
@@ -103,6 +105,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
     private let exporter: IPhoneUSBExportService
     private let deletionStore: IPhoneUSBDeletionDecisionStore
     private let progressStore: USBReceiveProgressStore
+    private let exportProgressStore: USBReceiveProgressStore
 
     private init(
         registrationStore: IPhoneReceiverRegistrationStore,
@@ -114,7 +117,8 @@ final class USBReceiverDependencies: @unchecked Sendable {
         catalog: IPhoneReceivedFileCatalog,
         exporter: IPhoneUSBExportService,
         deletionStore: IPhoneUSBDeletionDecisionStore,
-        progressStore: USBReceiveProgressStore
+        progressStore: USBReceiveProgressStore,
+        exportProgressStore: USBReceiveProgressStore
     ) {
         self.registrationStore = registrationStore
         self.bookmarkStore = bookmarkStore
@@ -126,6 +130,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
         self.exporter = exporter
         self.deletionStore = deletionStore
         self.progressStore = progressStore
+        self.exportProgressStore = exportProgressStore
     }
 
     func restoreLocalReceiver() async {
@@ -173,6 +178,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
                 )
             },
             progressUpdates: { [progressStore] in progressStore.updates() },
+            exportProgressUpdates: { [exportProgressStore] in exportProgressStore.updates() },
             defaultDeviceName: UIDevice.current.name,
             preferences: preferences
         )
