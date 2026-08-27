@@ -342,7 +342,8 @@ private actor StubReceiverClient: IPhoneReceiverServing {
     func lease(
         receiverID: UUID,
         deliveryID: UUID,
-        receiveSecret: String
+        receiveSecret: String,
+        mode: IPhoneReceiveLeaseMode
     ) async throws -> IPhoneDelivery {
         delivery
     }
@@ -378,7 +379,9 @@ private actor StubReceiverClient: IPhoneReceiverServing {
         receiverID: UUID,
         deliveryID: UUID,
         receiveSecret: String,
-        sha256: String
+        sha256: String,
+        storageLocation: IPhoneStorageLocation,
+        storedName: String
     ) async throws {
         ackAttempts += 1
         if remainingAckFailures > 0 {

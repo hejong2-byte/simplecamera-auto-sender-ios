@@ -61,6 +61,30 @@ struct IPhoneReceiverCredentials: Equatable, Sendable {
     let secret: String
 }
 
+struct IPhoneReceiveFeatures: Codable, Equatable, Sendable {
+    let protocolVersion: Int
+    let acceptsRegularFiles: Bool
+    let acceptsZeroByte: Bool
+    let supportsLocalStorage: Bool
+
+    static let current = Self(
+        protocolVersion: 2,
+        acceptsRegularFiles: true,
+        acceptsZeroByte: true,
+        supportsLocalStorage: true
+    )
+}
+
+enum IPhoneStorageLocation: String, Codable, Sendable {
+    case iphoneLocal
+    case usb
+}
+
+enum IPhoneReceiveLeaseMode: String, Sendable {
+    case foreground
+    case background
+}
+
 enum IPhoneDeliveryState: String, Codable, Sendable {
     case available
     case leased

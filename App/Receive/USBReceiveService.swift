@@ -122,7 +122,8 @@ actor USBReceiveService {
             _ = try await client.lease(
                 receiverID: credentials.identity.receiverID,
                 deliveryID: delivery.deliveryID,
-                receiveSecret: credentials.secret
+                receiveSecret: credentials.secret,
+                mode: .foreground
             )
             try await receive(
                 delivery,
@@ -214,7 +215,9 @@ actor USBReceiveService {
                 receiverID: credentials.identity.receiverID,
                 deliveryID: checkpoint.deliveryID,
                 receiveSecret: credentials.secret,
-                sha256: checkpoint.sha256
+                sha256: checkpoint.sha256,
+                storageLocation: .usb,
+                storedName: checkpoint.finalFileName
             )
             try ledger.remove(deliveryID: checkpoint.deliveryID)
             acknowledged.insert(checkpoint.deliveryID)
@@ -256,7 +259,11 @@ actor USBReceiveService {
                 bytesReceived: delivery.size,
                 startedAt: startedAt
             )
-            try await acknowledge(delivery, credentials: credentials)
+            try await acknowledge(
+                delivery,
+                credentials: credentials,
+                storedName: checkpoint.finalFileName
+            )
             try ledger.remove(deliveryID: delivery.deliveryID)
             return
         }
@@ -304,7 +311,8 @@ actor USBReceiveService {
                     _ = try await client.lease(
                         receiverID: credentials.identity.receiverID,
                         deliveryID: delivery.deliveryID,
-                        receiveSecret: credentials.secret
+                        receiveSecret: credentials.secret,
+                        mode: .foreground
                     )
                     lastLease = now()
                 }
@@ -426,7 +434,11 @@ actor USBReceiveService {
             bytesReceived: delivery.size,
             startedAt: startedAt
         )
-        try await acknowledge(delivery, credentials: credentials)
+        try await acknowledge(
+            delivery,
+            credentials: credentials,
+            storedName: checkpoint.finalFileName
+        )
         try ledger.remove(deliveryID: delivery.deliveryID)
     }
 
@@ -591,13 +603,16 @@ actor USBReceiveService {
 
     private func acknowledge(
         _ delivery: IPhoneDelivery,
-        credentials: IPhoneReceiverCredentials
+        credentials: IPhoneReceiverCredentials,
+        storedName: String
     ) async throws {
         try await client.acknowledge(
             receiverID: credentials.identity.receiverID,
             deliveryID: delivery.deliveryID,
             receiveSecret: credentials.secret,
-            sha256: delivery.sha256
+            sha256: delivery.sha256,
+            storageLocation: .usb,
+            storedName: storedName
         )
     }
 

@@ -38,7 +38,8 @@ protocol IPhoneReceiverServing: Sendable {
     func lease(
         receiverID: UUID,
         deliveryID: UUID,
-        receiveSecret: String
+        receiveSecret: String,
+        mode: IPhoneReceiveLeaseMode
     ) async throws -> IPhoneDelivery
     func range(
         receiverID: UUID,
@@ -51,8 +52,27 @@ protocol IPhoneReceiverServing: Sendable {
         receiverID: UUID,
         deliveryID: UUID,
         receiveSecret: String,
-        sha256: String
+        sha256: String,
+        storageLocation: IPhoneStorageLocation,
+        storedName: String
     ) async throws
+}
+
+protocol IPhoneReceiverFeatureUpdating: Sendable {
+    func updateFeatures(
+        receiverID: UUID,
+        receiveSecret: String,
+        features: IPhoneReceiveFeatures
+    ) async throws
+}
+
+protocol IPhoneLocalReceiveNetworking: IPhoneReceiverServing,
+    IPhoneReceiverFeatureUpdating {
+    func downloadRequest(
+        receiverID: UUID,
+        deliveryID: UUID,
+        receiveSecret: String
+    ) throws -> URLRequest
 }
 
 protocol IPhoneReceiverRegistering: Sendable {
@@ -103,19 +123,46 @@ struct IPhoneReceiverClient: Sendable {
         )
     }
 
+    func updateFeatures(
+        receiverID: UUID,
+        receiveSecret: String,
+        features: IPhoneReceiveFeatures
+    ) async throws {
+        let request = try requests.features(
+            receiverID: receiverID.uuidString.lowercased(),
+            receiveSecret: receiveSecret,
+            features: features
+        )
+        _ = try await successfulData(for: request)
+    }
+
     func lease(
         receiverID: UUID,
         deliveryID: UUID,
-        receiveSecret: String
+        receiveSecret: String,
+        mode: IPhoneReceiveLeaseMode
     ) async throws -> IPhoneDelivery {
         let request = try requests.lease(
             receiverID: receiverID.uuidString.lowercased(),
             deliveryID: deliveryID.uuidString.lowercased(),
-            receiveSecret: receiveSecret
+            receiveSecret: receiveSecret,
+            mode: mode
         )
         return try IPhoneReceiverJSON.decoder.decode(
             IPhoneDelivery.self,
             from: try await successfulData(for: request)
+        )
+    }
+
+    func downloadRequest(
+        receiverID: UUID,
+        deliveryID: UUID,
+        receiveSecret: String
+    ) throws -> URLRequest {
+        try requests.download(
+            receiverID: receiverID.uuidString.lowercased(),
+            deliveryID: deliveryID.uuidString.lowercased(),
+            receiveSecret: receiveSecret
         )
     }
 
@@ -151,13 +198,17 @@ struct IPhoneReceiverClient: Sendable {
         receiverID: UUID,
         deliveryID: UUID,
         receiveSecret: String,
-        sha256: String
+        sha256: String,
+        storageLocation: IPhoneStorageLocation,
+        storedName: String
     ) async throws {
         let request = try requests.ack(
             receiverID: receiverID.uuidString.lowercased(),
             deliveryID: deliveryID.uuidString.lowercased(),
             receiveSecret: receiveSecret,
-            sha256: sha256
+            sha256: sha256,
+            storageLocation: storageLocation,
+            storedName: storedName
         )
         _ = try await successfulData(for: request)
     }
@@ -181,7 +232,8 @@ struct IPhoneReceiverClient: Sendable {
     }
 }
 
-extension IPhoneReceiverClient: IPhoneReceiverServing, IPhoneReceiverRegistering {}
+extension IPhoneReceiverClient: IPhoneLocalReceiveNetworking,
+    IPhoneReceiverRegistering {}
 
 struct IPhoneReceiverRequestFactory: Sendable {
     let baseURL: URL
@@ -203,6 +255,21 @@ struct IPhoneReceiverRequestFactory: Sendable {
         )
     }
 
+    func features(
+        receiverID: String,
+        receiveSecret: String,
+        features: IPhoneReceiveFeatures
+    ) throws -> URLRequest {
+        var request = try authenticated(
+            method: "PUT",
+            components: ["iphone-receivers", receiverID, "features"],
+            receiveSecret: receiveSecret
+        )
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(features)
+        return request
+    }
+
     func range(
         receiverID: String,
         deliveryID: String,
@@ -220,19 +287,40 @@ struct IPhoneReceiverRequestFactory: Sendable {
         return request
     }
 
-    func lease(receiverID: String, deliveryID: String, receiveSecret: String) throws -> URLRequest {
+    func download(
+        receiverID: String,
+        deliveryID: String,
+        receiveSecret: String
+    ) throws -> URLRequest {
         try authenticated(
+            method: "GET",
+            components: ["iphone-receivers", receiverID, "deliveries", deliveryID],
+            receiveSecret: receiveSecret
+        )
+    }
+
+    func lease(
+        receiverID: String,
+        deliveryID: String,
+        receiveSecret: String,
+        mode: IPhoneReceiveLeaseMode
+    ) throws -> URLRequest {
+        var request = try authenticated(
             method: "POST",
             components: ["iphone-receivers", receiverID, "deliveries", deliveryID, "lease"],
             receiveSecret: receiveSecret
         )
+        request.setValue(mode.rawValue, forHTTPHeaderField: "X-Receive-Mode")
+        return request
     }
 
     func ack(
         receiverID: String,
         deliveryID: String,
         receiveSecret: String,
-        sha256: String
+        sha256: String,
+        storageLocation: IPhoneStorageLocation,
+        storedName: String
     ) throws -> URLRequest {
         var request = try authenticated(
             method: "POST",
@@ -240,7 +328,11 @@ struct IPhoneReceiverRequestFactory: Sendable {
             receiveSecret: receiveSecret
         )
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(["sha256": sha256])
+        request.httpBody = try JSONEncoder().encode(IPhoneDeliveryAcknowledgement(
+            sha256: sha256,
+            storageLocation: storageLocation,
+            storedName: storedName
+        ))
         return request
     }
 
@@ -266,4 +358,10 @@ struct IPhoneReceiverRequestFactory: Sendable {
         guard !credential.isEmpty else { throw IPhoneReceiverRequestError.emptyCredential }
         return credential.lowercased().hasPrefix("bearer ") ? credential : "Bearer \(credential)"
     }
+}
+
+private struct IPhoneDeliveryAcknowledgement: Encodable {
+    let sha256: String
+    let storageLocation: IPhoneStorageLocation
+    let storedName: String
 }
