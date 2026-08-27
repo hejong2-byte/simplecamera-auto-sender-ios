@@ -126,18 +126,20 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
     func testRestoreDoesNotClaimNewDeliveryWhenAutomaticDiscoveryIsDisabled() async throws {
         let context = try makeContext(
             payloads: ["usb-target.txt": Data("USB only".utf8)],
-            automaticDiscoveryAllowed: false
+            automaticDiscoveryAllowed: { false }
         )
 
         await context.engine.restore()
 
-        XCTAssertEqual(context.client.featureUpdates(), [])
-        XCTAssertEqual(context.client.leaseModes(), [])
-        XCTAssertEqual(try context.jobs.load().jobs, [])
-        XCTAssertEqual(await context.scheduler.scheduledIDs(), [])
+        let scheduledBefore = await context.scheduler.scheduledIDs()
+        XCTAssertTrue(context.client.featureUpdates().isEmpty)
+        XCTAssertTrue(context.client.leaseModes().isEmpty)
+        XCTAssertTrue(try context.jobs.load().jobs.isEmpty)
+        XCTAssertTrue(scheduledBefore.isEmpty)
 
         try await context.engine.discoverAndSchedule(force: true)
-        XCTAssertEqual(await context.scheduler.scheduledIDs().count, 1)
+        let scheduledAfter = await context.scheduler.scheduledIDs().count
+        XCTAssertEqual(scheduledAfter, 1)
     }
 
     func testCollisionAndLongNameKeepValidSuffixAndExtension() throws {
