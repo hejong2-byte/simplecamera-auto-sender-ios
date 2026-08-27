@@ -66,6 +66,41 @@ final class IPhoneReceivedFileCatalogTests: XCTestCase {
         XCTAssertEqual(try catalog.refresh(), [])
     }
 
+    func testReusedFileNameReplacesMetadataOfDeletedDelivery() throws {
+        let root = temporaryDirectory()
+        let received = root.appendingPathComponent("받은 파일", isDirectory: true)
+        let catalog = try IPhoneReceivedFileCatalog(
+            receivedDirectory: received,
+            stagingDirectory: root.appendingPathComponent("ReceiveStaging", isDirectory: true),
+            recordsFileURL: root.appendingPathComponent("received-files.json")
+        )
+        let old = IPhoneReceivedFileRecord(
+            deliveryID: UUID(),
+            originalName: "same.txt",
+            storedName: "same.txt",
+            size: 3,
+            sha256: String(repeating: "a", count: 64),
+            receivedAt: Date(timeIntervalSince1970: 100)
+        )
+        let current = IPhoneReceivedFileRecord(
+            deliveryID: UUID(),
+            originalName: "same.txt",
+            storedName: "same.txt",
+            size: 3,
+            sha256: String(repeating: "b", count: 64),
+            receivedAt: Date(timeIntervalSince1970: 200)
+        )
+        try catalog.save(old)
+        try catalog.save(current)
+        try Data("new".utf8).write(to: received.appendingPathComponent("same.txt"))
+
+        guard catalog.record(for: old.deliveryID) == nil else {
+            XCTFail("재사용된 파일명에는 현재 파일의 메타데이터만 남아야 합니다.")
+            return
+        }
+        XCTAssertEqual(try catalog.refresh().first?.receivedRecord, current)
+    }
+
     private func temporaryDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
