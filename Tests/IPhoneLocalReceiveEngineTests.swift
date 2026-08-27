@@ -123,6 +123,23 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
         XCTAssertEqual(scheduledAfter, scheduledBefore)
     }
 
+    func testRestoreDoesNotClaimNewDeliveryWhenAutomaticDiscoveryIsDisabled() async throws {
+        let context = try makeContext(
+            payloads: ["usb-target.txt": Data("USB only".utf8)],
+            automaticDiscoveryAllowed: false
+        )
+
+        await context.engine.restore()
+
+        XCTAssertEqual(context.client.featureUpdates(), [])
+        XCTAssertEqual(context.client.leaseModes(), [])
+        XCTAssertEqual(try context.jobs.load().jobs, [])
+        XCTAssertEqual(await context.scheduler.scheduledIDs(), [])
+
+        try await context.engine.discoverAndSchedule(force: true)
+        XCTAssertEqual(await context.scheduler.scheduledIDs().count, 1)
+    }
+
     func testCollisionAndLongNameKeepValidSuffixAndExtension() throws {
         let directory = temporaryDirectory()
         try Data().write(to: directory.appendingPathComponent("README"))
@@ -143,7 +160,8 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
 
     private func makeContext(
         payloads: [String: Data],
-        ackFailures: Int = 0
+        ackFailures: Int = 0,
+        automaticDiscoveryAllowed: @escaping @Sendable () -> Bool = { true }
     ) throws -> LocalReceiveContext {
         let root = temporaryDirectory()
         let deliveries = payloads.map { name, payload in
@@ -186,6 +204,7 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
             jobStore: jobs,
             catalog: catalog,
             credentials: { credentials },
+            automaticDiscoveryAllowed: automaticDiscoveryAllowed,
             progressStore: USBReceiveProgressStore(),
             now: { Date(timeIntervalSince1970: 500) }
         )
