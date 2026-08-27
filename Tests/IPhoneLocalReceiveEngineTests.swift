@@ -4,6 +4,37 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneLocalReceiveEngineTests: XCTestCase {
+    func testDiscoveryFailureAfterCompletionHasNoStaleFileAndRecoversToIdle() async throws {
+        for failDuringFeatureUpdate in [false, true] {
+            let payload = Data("completed file".utf8)
+            let context = try makeContext(payloads: ["done.txt": payload])
+            try await context.engine.discoverAndSchedule()
+            let delivery = try XCTUnwrap(context.client.deliveries().first)
+            let staging = context.catalog.stagingDirectory.appendingPathComponent("done.download")
+            try payload.write(to: staging)
+            await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+            context.client.failNextDiscovery(duringFeatureUpdate: failDuringFeatureUpdate)
+
+            await context.engine.restore()
+
+            var failureUpdates = context.progress.updates().makeAsyncIterator()
+            let failure = await failureUpdates.next()
+            XCTAssertEqual(failure?.stage, .failed)
+            XCTAssertNil(failure?.deliveryID, "A new server check is not a failure of the old file")
+            XCTAssertNil(failure?.fileName)
+            XCTAssertEqual(failure?.totalBytes, 0)
+            XCTAssertTrue(failure?.errorMessage?.contains("네트워크") == true)
+
+            try await context.engine.discoverAndSchedule()
+
+            var recoveredUpdates = context.progress.updates().makeAsyncIterator()
+            let recovered = await recoveredUpdates.next()
+            XCTAssertEqual(recovered?.stage, .idle)
+            XCTAssertEqual(try context.jobs.load().jobs.first?.stage, .completed)
+            XCTAssertEqual(try Data(contentsOf: context.catalog.receivedDirectory.appendingPathComponent("done.txt")), payload)
+        }
+    }
+
     func testEmptyInboxRemainsIdleInsteadOfShowingEndlessDiscovery() async throws {
         let context = try makeContext(payloads: [:])
 
@@ -324,6 +355,8 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
     private var modes: [IPhoneReceiveLeaseMode] = []
     private var successfulAcks: [LocalReceiveAck] = []
     private var remainingAckFailures: Int
+    private var failFeatureUpdate = false
+    private var failListing = false
 
     init(deliveries: [IPhoneDelivery], ackFailures: Int) {
         availableDeliveries = deliveries
@@ -335,11 +368,30 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
         receiveSecret: String,
         features: IPhoneReceiveFeatures
     ) async throws {
-        lock.withLock { advertisedFeatures.append(features) }
+        try lock.withLock {
+            if failFeatureUpdate {
+                failFeatureUpdate = false
+                throw URLError(.notConnectedToInternet)
+            }
+            advertisedFeatures.append(features)
+        }
     }
 
     func list(receiverID: UUID, receiveSecret: String) async throws -> [IPhoneDelivery] {
-        availableDeliveries
+        try lock.withLock {
+            if failListing {
+                failListing = false
+                throw URLError(.notConnectedToInternet)
+            }
+            return availableDeliveries
+        }
+    }
+
+    func failNextDiscovery(duringFeatureUpdate: Bool) {
+        lock.withLock {
+            failFeatureUpdate = duringFeatureUpdate
+            failListing = !duringFeatureUpdate
+        }
     }
 
     func lease(
