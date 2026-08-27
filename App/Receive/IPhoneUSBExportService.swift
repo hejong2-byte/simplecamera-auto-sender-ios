@@ -114,7 +114,6 @@ actor IPhoneUSBExportService {
     typealias SecurityScopeStart = @Sendable (URL) -> Bool
     typealias SecurityScopeStop = @Sendable (URL) -> Void
     typealias VolumeIdentity = @Sendable (URL) throws -> String?
-    typealias AvailableCapacity = @Sendable (URL) throws -> Int64?
 
     static let partialDirectoryName = USBReceiveService.partialDirectoryName
 
@@ -123,7 +122,6 @@ actor IPhoneUSBExportService {
     private let startAccessing: SecurityScopeStart
     private let stopAccessing: SecurityScopeStop
     private let volumeIdentity: VolumeIdentity
-    private let availableCapacity: AvailableCapacity
     private let progressStore: USBReceiveProgressStore
     private let now: @Sendable () -> Date
 
@@ -137,7 +135,6 @@ actor IPhoneUSBExportService {
             $0.stopAccessingSecurityScopedResource()
         },
         volumeIdentity: @escaping VolumeIdentity = IPhoneUSBExportService.systemVolumeIdentity,
-        availableCapacity: @escaping AvailableCapacity = IPhoneUSBExportService.systemAvailableCapacity,
         progressStore: USBReceiveProgressStore = USBReceiveProgressStore(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
@@ -146,7 +143,6 @@ actor IPhoneUSBExportService {
         self.startAccessing = startAccessing
         self.stopAccessing = stopAccessing
         self.volumeIdentity = volumeIdentity
-        self.availableCapacity = availableCapacity
         self.progressStore = progressStore
         self.now = now
     }
@@ -268,9 +264,8 @@ actor IPhoneUSBExportService {
         if let record = file.receivedRecord, record.size != sourceSize {
             throw IPhoneUSBExportError.sourceChanged
         }
-        if let free = try availableCapacity(destination.url), free < sourceSize {
-            throw IPhoneUSBExportError.insufficientSpace
-        }
+        // Do not reject USB exports based on a capacity estimate. Actual write errors
+        // stop the copy, and size/hash verification below gates completion.
 
         let partialDirectory = destination.url.appendingPathComponent(
             Self.partialDirectoryName,
@@ -468,10 +463,11 @@ actor IPhoneUSBExportService {
             return IPhoneUSBExportFailure(sourceID: sourceID, error: known)
         }
         let systemError = error as NSError
-        let normalized: IPhoneUSBExportError = systemError.domain == NSCocoaErrorDomain
-            && systemError.code == CocoaError.Code.fileWriteOutOfSpace.rawValue
-            ? .insufficientSpace
-            : .copyFailed
+        let outOfSpace = (systemError.domain == NSCocoaErrorDomain
+            && systemError.code == CocoaError.Code.fileWriteOutOfSpace.rawValue)
+            || (systemError.domain == NSPOSIXErrorDomain
+                && systemError.code == Int(POSIXErrorCode.ENOSPC.rawValue))
+        let normalized: IPhoneUSBExportError = outOfSpace ? .insufficientSpace : .copyFailed
         return IPhoneUSBExportFailure(
             sourceID: sourceID,
             error: normalized,
@@ -487,18 +483,5 @@ actor IPhoneUSBExportService {
         try url.resourceValues(forKeys: [.volumeIdentifierKey])
             .volumeIdentifier
             .map { String(describing: $0) }
-    }
-
-    private static func systemAvailableCapacity(_ url: URL) throws -> Int64? {
-        let values = try url.resourceValues(
-            forKeys: [.volumeAvailableCapacityForImportantUsageKey]
-        )
-        if let capacity = values.volumeAvailableCapacityForImportantUsage {
-            return capacity
-        }
-        let attributes = try FileManager.default.attributesOfFileSystem(
-            forPath: url.path
-        )
-        return (attributes[.systemFreeSize] as? NSNumber)?.int64Value
     }
 }

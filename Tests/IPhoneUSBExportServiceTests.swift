@@ -323,10 +323,6 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             startAccessing: { _ in canAccessSecurityScope },
             stopAccessing: { _ in },
             volumeIdentity: volumeIdentity,
-            availableCapacity: { url in
-                let attributes = try fileManager.attributesOfFileSystem(forPath: url.path)
-                return (attributes[.systemFreeSize] as? NSNumber)?.int64Value
-            },
             progressStore: progressStore,
             now: { Date(timeIntervalSince1970: 456) }
         )
