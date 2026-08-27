@@ -6,8 +6,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    CURRENT_PROJECT_VERSION: 10
-    MARKETING_VERSION: 0.2.1
+    CURRENT_PROJECT_VERSION: 11
+    MARKETING_VERSION: 0.3.0
 targets:
   SimpleCameraAutoSender:
     type: application
@@ -22,6 +22,8 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: SimpleCamera 업무사진 전송
         INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Simple Cam 자동 사진과 직접 선택한 사진, 스크린샷 및 동영상을 전송하려면 사진 보관함 전체 접근이 필요합니다.
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
   SimpleCameraAutoSenderTests:
