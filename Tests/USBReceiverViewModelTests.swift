@@ -4,6 +4,55 @@ import XCTest
 
 @MainActor
 final class USBReceiverViewModelTests: XCTestCase {
+    func testFailedUSBCopyKeepsTheFailedFileSelectedForRetry() async throws {
+        let file = try storedFile()
+        let model = try exportModel(files: [file]) { _, _ in
+            IPhoneUSBExportSummary(
+                verified: [],
+                failed: [IPhoneUSBExportFailure(
+                    sourceID: file.id,
+                    error: .destinationAccessDenied
+                )]
+            )
+        }
+        await model.refresh()
+        model.toggleStoredFileSelection(file.id)
+
+        await model.exportSelectedFilesToUSB()
+
+        XCTAssertEqual(model.selectedStoredFileIDs, [file.id])
+        XCTAssertFalse(model.needsDeletionDecision)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
+
+    func testSecondCopyPressCannotQueueADuplicateExport() async throws {
+        let file = try storedFile()
+        let calls = ReceiveCounter()
+        let secondPress = ReceiveCounter()
+        let gate = USBExportGate()
+        let model = try exportModel(files: [file]) { _, _ in
+            calls.increment()
+            await gate.wait()
+            return IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        await model.refresh()
+        model.toggleStoredFileSelection(file.id)
+
+        let first = Task { await model.exportSelectedFilesToUSB() }
+        await waitUntil { calls.value == 1 }
+        let second = Task {
+            secondPress.increment()
+            await model.exportSelectedFilesToUSB()
+        }
+        await waitUntil { secondPress.value == 1 }
+        await gate.open()
+        await first.value
+        await second.value
+
+        XCTAssertEqual(calls.value, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
+
     func testReceiveDestinationDefaultsToIPhoneAndPersistsUSBChoice() {
         let suiteName = "USBReceiverViewModelTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -202,6 +251,47 @@ final class USBReceiverViewModelTests: XCTestCase {
         XCTAssertFalse(model.isPolling)
     }
 
+    private func storedFile() throws -> IPhoneStoredFile {
+        let url = temporaryDirectory().appendingPathComponent("local.zip")
+        let data = Data("unchanged-original".utf8)
+        try data.write(to: url)
+        return IPhoneStoredFile(
+            id: url.path,
+            url: url,
+            name: url.lastPathComponent,
+            size: Int64(data.count),
+            modifiedAt: Date(),
+            receivedRecord: nil
+        )
+    }
+
+    private func exportModel(
+        files: [IPhoneStoredFile],
+        export: @escaping USBReceiverViewModel.ExportFiles
+    ) throws -> USBReceiverViewModel {
+        let usb = temporaryDirectory()
+        let bookmarkStore = USBBookmarkStore(
+            fileURL: temporaryDirectory().appendingPathComponent("destination.json"),
+            codec: ViewModelBookmarkCodec(url: usb)
+        )
+        try bookmarkStore.save(folderURL: usb)
+        return USBReceiverViewModel(
+            uploadCredentialStore: InMemoryCredentialStore(),
+            registrationStore: IPhoneReceiverRegistrationStore(
+                identityStore: InMemoryCredentialStore(),
+                secretStore: InMemoryCredentialStore()
+            ),
+            bookmarkStore: bookmarkStore,
+            registrar: StubReceiverRegistrar(),
+            receiveOnce: { USBReceiveSummary(discovered: 0, completed: 0) },
+            storedFiles: { files },
+            exportFiles: export,
+            progressUpdates: { AsyncStream { $0.finish() } },
+            defaultDeviceName: "iPhone",
+            preferences: isolatedPreferences()
+        )
+    }
+
     private func temporaryDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -226,6 +316,22 @@ final class USBReceiverViewModelTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(5))
         }
         XCTFail("수신 상태가 시간 안에 반영되지 않았습니다.")
+    }
+}
+
+private actor USBExportGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
     }
 }
 

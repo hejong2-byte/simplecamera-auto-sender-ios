@@ -4,6 +4,66 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class USBReceiveServiceTests: XCTestCase {
+    func testRepeatedEmptyInboxDoesNotPublishDiscoveryOrCompletion() async throws {
+        let fixture = try makeFixture(payload: Data("unused".utf8), chunkSize: 4)
+        await fixture.client.clearInbox()
+        let updates = fixture.progressStore.updates()
+
+        for _ in 0..<3 {
+            let summary = try await fixture.service.runOnce()
+            XCTAssertEqual(summary, USBReceiveSummary(discovered: 0, completed: 0))
+        }
+
+        fixture.progressStore.publishFailure("end-of-test")
+        var stages: [USBReceiveStage] = []
+        for await progress in updates {
+            if progress.errorMessage == "end-of-test" { break }
+            stages.append(progress.stage)
+        }
+        XCTAssertEqual(stages, [.idle])
+        let acknowledgements = await fixture.client.acknowledgedIDs()
+        XCTAssertEqual(acknowledgements, [])
+    }
+
+    func testEmptyInboxPreservesLocalUSBCopyProgress() async throws {
+        let fixture = try makeFixture(payload: Data("unused".utf8), chunkSize: 4)
+        await fixture.client.clearInbox()
+        let copying = USBReceiveProgress(
+            stage: .copyingToUSB,
+            deliveryID: UUID(),
+            fileName: "local.zip",
+            currentIndex: 1,
+            totalCount: 1,
+            completedCount: 0,
+            bytesReceived: 50,
+            totalBytes: 100,
+            startedAt: Date(),
+            expiresAt: nil,
+            errorMessage: nil
+        )
+        fixture.progressStore.publish(copying)
+
+        _ = try await fixture.service.runOnce()
+
+        var updates = fixture.progressStore.updates().makeAsyncIterator()
+        let latest = await updates.next()
+        XCTAssertEqual(latest, copying)
+    }
+
+    func testEmptyInboxPreservesLastVerifiedCompletion() async throws {
+        let fixture = try makeFixture(payload: Data("verified".utf8), chunkSize: 4)
+        _ = try await fixture.service.runOnce()
+        await fixture.client.clearInbox()
+
+        _ = try await fixture.service.runOnce()
+
+        var updates = fixture.progressStore.updates().makeAsyncIterator()
+        let latest = await updates.next()
+        XCTAssertEqual(latest?.stage, .completed)
+        XCTAssertEqual(latest?.completedCount, 1)
+        XCTAssertEqual(latest?.totalCount, 1)
+    }
+
     func testZeroByteFileSkipsRangesAndAcknowledgesUSBStoredName() async throws {
         let fixture = try makeFixture(
             payload: Data(),
@@ -348,6 +408,7 @@ final class USBReceiveServiceTests: XCTestCase {
             ),
             secret: "receive-secret"
         )
+        let progressStore = USBReceiveProgressStore()
         let service = USBReceiveService(
             client: client,
             ledger: ledger,
@@ -363,7 +424,8 @@ final class USBReceiveServiceTests: XCTestCase {
             chunkSize: chunkSize,
             volumeIdentity: { _ in currentVolumeID },
             startAccessing: { _ in canAccessSecurityScope },
-            stopAccessing: { _ in }
+            stopAccessing: { _ in },
+            progressStore: progressStore
         )
         return Fixture(
             client: client,
@@ -371,7 +433,8 @@ final class USBReceiveServiceTests: XCTestCase {
             service: service,
             destination: destination,
             delivery: delivery,
-            payload: payload
+            payload: payload,
+            progressStore: progressStore
         )
     }
 
@@ -420,6 +483,7 @@ private struct Fixture {
     let destination: URL
     let delivery: IPhoneDelivery
     let payload: Data
+    let progressStore: USBReceiveProgressStore
 }
 
 private actor StubReceiverClient: IPhoneReceiverServing {
@@ -436,6 +500,7 @@ private actor StubReceiverClient: IPhoneReceiverServing {
     private var acknowledgementDetails: [DirectUSBAck] = []
     private var remainingAckFailures: Int
     private var ackAttempts = 0
+    private var inboxIsEmpty = false
 
     init(
         delivery: IPhoneDelivery,
@@ -450,8 +515,10 @@ private actor StubReceiverClient: IPhoneReceiverServing {
     }
 
     func list(receiverID: UUID, receiveSecret: String) async throws -> [IPhoneDelivery] {
-        [delivery]
+        inboxIsEmpty ? [] : [delivery]
     }
+
+    func clearInbox() { inboxIsEmpty = true }
 
     func lease(
         receiverID: UUID,
