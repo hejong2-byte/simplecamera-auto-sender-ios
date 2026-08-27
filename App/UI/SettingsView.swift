@@ -1,10 +1,13 @@
 import Photos
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @ObservedObject var model: ContentViewModel
+    @ObservedObject var receiverModel: USBReceiverViewModel
     @State private var credential = ""
     @State private var showingResetConfirmation = false
+    @State private var selectingUSBDestination = false
 
     var body: some View {
         ScrollView {
@@ -13,6 +16,7 @@ struct SettingsView: View {
                 credentialCard
                 monitoringCard
                 automationCard
+                receiverSettingsCard
                 statusCard
                 recoveryCard
             }
@@ -32,6 +36,80 @@ struct SettingsView: View {
         } message: {
             Text("초기화한 시점 이전 사진은 다시 전송되지 않습니다.")
         }
+        .fileImporter(
+            isPresented: $selectingUSBDestination,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case let .success(urls) = result, let url = urls.first else { return }
+            Task { await receiverModel.selectDestination(url) }
+        }
+    }
+
+    private var receiverSettingsCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("PC 파일 수신").font(.headline)
+            if receiverModel.isRegistered {
+                Label(
+                    "\(receiverModel.deviceName ?? "iPhone") · 코드 \(receiverModel.registrationCode ?? "------")",
+                    systemImage: "iphone.gen3"
+                )
+                Button("수신 기기 등록 초기화", role: .destructive) {
+                    Task { await receiverModel.resetRegistration() }
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Button("이 iPhone 수신 기기 등록") {
+                    Task { await receiverModel.registerDevice() }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+            Picker(
+                "기본 저장 위치",
+                selection: Binding(
+                    get: { receiverModel.selectedDestination },
+                    set: { receiverModel.setSelectedDestination($0) }
+                )
+            ) {
+                Text("나의 iPhone").tag(IPhoneReceiveDestination.iphoneLocal)
+                Text("USB 직접 저장").tag(IPhoneReceiveDestination.usb)
+            }
+            .pickerStyle(.segmented)
+
+            if receiverModel.selectedDestination == .usb {
+                Label(
+                    receiverModel.usbDisplayName ?? "USB 폴더 미선택",
+                    systemImage: "externaldrive"
+                )
+                HStack {
+                    Button("USB 폴더 선택") { selectingUSBDestination = true }
+                        .buttonStyle(.borderedProminent)
+                    if receiverModel.hasUSBDestination {
+                        Button("선택 해제", role: .destructive) {
+                            Task { await receiverModel.clearDestination() }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            }
+
+            Toggle(
+                "셀룰러에서도 파일 수신",
+                isOn: Binding(
+                    get: { receiverModel.allowsCellular },
+                    set: { receiverModel.setAllowsCellular($0) }
+                )
+            )
+            Text("기본값은 Wi‑Fi 전용입니다. 4GiB 초과 파일은 exFAT USB를 권장합니다.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let error = receiverModel.lastError {
+                Text(error).font(.caption).foregroundStyle(.red)
+            }
+        }
+        .cardStyle()
+        .task { await receiverModel.refresh() }
     }
 
     private var photoAccessCard: some View {
@@ -116,6 +194,11 @@ struct SettingsView: View {
             if let summary = model.lastSummary {
                 Text("최근 실행: \(summary.matched)장 확인, \(summary.uploaded)장 전송 완료")
                     .font(.caption)
+            }
+            if let failure = model.automaticFailureMessage {
+                Label("실패 원인: \(failure)", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
             if let error = model.lastError {
                 Text(error).font(.caption).foregroundStyle(.red)

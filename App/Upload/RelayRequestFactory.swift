@@ -11,13 +11,11 @@ struct ManualMediaUploadMetadata: Sendable, Equatable {
     let capturedAt: Date?
 }
 
-struct UploadFileFingerprint: Sendable, Equatable {
-    let sha256: String
-    let size: Int64
-    let remoteID: String
-}
-
 struct RelayRequestFactory: Sendable {
+    private struct ErrorBody: Decodable {
+        let error: String?
+    }
+
     func makeUploadRequest(credential: String) throws -> URLRequest {
         let value = credential.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else {
@@ -130,6 +128,10 @@ struct RelayRequestFactory: Sendable {
             forHTTPHeaderField: "Authorization"
         )
         return request
+    }
+
+    func decodeErrorCode(from data: Data) -> String? {
+        try? JSONDecoder().decode(ErrorBody.self, from: data).error
     }
 
     private func applyManualHeaders(

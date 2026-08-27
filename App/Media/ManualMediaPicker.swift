@@ -1,7 +1,7 @@
 import PhotosUI
 import SwiftUI
 
-enum ManualMediaKind: String, CaseIterable, Identifiable, Sendable {
+enum ManualMediaKind: String, CaseIterable, Identifiable, Codable, Sendable {
     case photo
     case screenshot
     case video
