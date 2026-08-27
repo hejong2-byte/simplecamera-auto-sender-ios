@@ -3,22 +3,26 @@ import Foundation
 enum USBReceiveStage: String, Codable, Sendable, Equatable {
     case idle
     case discovering
+    case waitingForDestination
     case downloading
+    case downloaded
     case verifying
     case finalizing
+    case copyingToUSB
     case acknowledging
     case completed
+    case paused
     case failed
 }
 
-enum IPhoneReceiveDestination: String, Codable, CaseIterable, Sendable {
+enum IPhoneReceiveDestination: String, Codable, CaseIterable, Sendable, Equatable {
     case iphoneLocal
     case usb
 }
 
 struct USBReceiveProgress: Codable, Sendable, Equatable {
     let stage: USBReceiveStage
-    let destination: IPhoneReceiveDestination = .usb
+    let destination: IPhoneReceiveDestination
     let deliveryID: UUID?
     let fileName: String?
     let currentIndex: Int
@@ -30,8 +34,41 @@ struct USBReceiveProgress: Codable, Sendable, Equatable {
     let expiresAt: Date?
     let errorMessage: String?
 
+    init(
+        stage: USBReceiveStage,
+        destination: IPhoneReceiveDestination = .usb,
+        deliveryID: UUID?,
+        fileName: String?,
+        currentIndex: Int,
+        totalCount: Int,
+        completedCount: Int,
+        bytesReceived: Int64,
+        totalBytes: Int64,
+        startedAt: Date?,
+        expiresAt: Date?,
+        errorMessage: String?
+    ) {
+        self.stage = stage
+        self.destination = destination
+        self.deliveryID = deliveryID
+        self.fileName = fileName
+        self.currentIndex = currentIndex
+        self.totalCount = totalCount
+        self.completedCount = completedCount
+        self.bytesReceived = bytesReceived
+        self.totalBytes = totalBytes
+        self.startedAt = startedAt
+        self.expiresAt = expiresAt
+        self.errorMessage = errorMessage
+    }
+
     var percent: Int {
-        guard totalBytes > 0 else { return stage == .completed ? 100 : 0 }
+        guard totalBytes > 0 else {
+            return [
+                .verifying, .finalizing, .copyingToUSB,
+                .acknowledging, .completed
+            ].contains(stage) ? 100 : 0
+        }
         return min(
             100,
             max(0, Int(Double(bytesReceived) / Double(totalBytes) * 100))
@@ -74,6 +111,7 @@ final class USBReceiveProgressStore: @unchecked Sendable {
         let failure = lock.withLock { () -> USBReceiveProgress in
             USBReceiveProgress(
                 stage: .failed,
+                destination: latest.destination,
                 deliveryID: latest.deliveryID,
                 fileName: latest.fileName,
                 currentIndex: latest.currentIndex,

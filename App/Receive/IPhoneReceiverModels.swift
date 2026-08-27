@@ -75,12 +75,12 @@ struct IPhoneReceiveFeatures: Codable, Equatable, Sendable {
     )
 }
 
-enum IPhoneStorageLocation: String, Codable, Sendable {
+enum IPhoneStorageLocation: String, Codable, Sendable, Equatable {
     case iphoneLocal
     case usb
 }
 
-enum IPhoneReceiveLeaseMode: String, Sendable {
+enum IPhoneReceiveLeaseMode: String, Sendable, Equatable {
     case foreground
     case background
 }

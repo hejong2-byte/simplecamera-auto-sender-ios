@@ -9,10 +9,12 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
 
         try await context.engine.discoverAndSchedule()
 
+        let scheduledCount = await context.scheduler.scheduledIDs().count
+        let durableAtSchedule = await context.scheduler.hadDurableJobWhenScheduled()
         XCTAssertEqual(context.client.featureUpdates(), [.current])
         XCTAssertEqual(context.client.leaseModes(), [.background])
-        XCTAssertEqual(await context.scheduler.scheduledIDs().count, 1)
-        XCTAssertTrue(await context.scheduler.hadDurableJobWhenScheduled())
+        XCTAssertEqual(scheduledCount, 1)
+        XCTAssertTrue(durableAtSchedule)
         XCTAssertEqual(try context.jobs.load().jobs.count, 1)
         XCTAssertEqual(try context.jobs.load().jobs.first?.stage, .downloading)
     }
@@ -115,9 +117,10 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
 
         await context.engine.restore()
 
+        let scheduledAfter = await context.scheduler.scheduledIDs().count
         XCTAssertEqual(try context.jobs.load().jobs.first?.stage, .completed)
         XCTAssertEqual(context.client.acks().count, 1)
-        XCTAssertEqual(await context.scheduler.scheduledIDs().count, scheduledBefore)
+        XCTAssertEqual(scheduledAfter, scheduledBefore)
     }
 
     func testCollisionAndLongNameKeepValidSuffixAndExtension() throws {
@@ -277,7 +280,7 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
         start: Int64,
         end: Int64
     ) async throws -> IPhoneReceiverRangeChunk {
-        throw CocoaError(.featureUnsupported)
+        throw LocalReceiveTestError.unsupported
     }
 
     func acknowledge(
@@ -291,7 +294,7 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
         try lock.withLock {
             if remainingAckFailures > 0 {
                 remainingAckFailures -= 1
-                throw CocoaError(.networkConnectionLost)
+                throw LocalReceiveTestError.ackFailed
             }
             successfulAcks.append(LocalReceiveAck(
                 deliveryID: deliveryID,
@@ -308,6 +311,11 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
     }
     func leaseModes() -> [IPhoneReceiveLeaseMode] { lock.withLock { modes } }
     func acks() -> [LocalReceiveAck] { lock.withLock { successfulAcks } }
+}
+
+private enum LocalReceiveTestError: Error {
+    case unsupported
+    case ackFailed
 }
 
 private actor FakeLocalReceiveScheduler: IPhoneReceiveTaskScheduling {

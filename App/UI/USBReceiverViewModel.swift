@@ -176,11 +176,15 @@ final class USBReceiverViewModel: ObservableObject {
         switch progress.stage {
         case .idle: return "PC 파일 수신 대기"
         case .discovering: return "새 파일 확인 중"
+        case .waitingForDestination: return "저장 위치 선택 대기"
         case .downloading: return "USB 저장 중\(position)"
+        case .downloaded: return "다운로드 완료\(position)"
         case .verifying: return "파일·SHA 검증 중\(position)"
         case .finalizing: return "USB 파일 확정 중\(position)"
+        case .copyingToUSB: return "USB로 복사 중\(position)"
         case .acknowledging: return "PC에 저장 완료 알림 중\(position)"
         case .completed: return "USB 저장 완료"
+        case .paused: return "PC 파일 수신 일시정지"
         case .failed: return "USB 수신 오류"
         }
     }
