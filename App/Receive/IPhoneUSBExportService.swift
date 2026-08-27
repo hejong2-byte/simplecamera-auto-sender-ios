@@ -358,6 +358,7 @@ actor IPhoneUSBExportService {
         ), isDirectory.boolValue else {
             throw IPhoneUSBExportError.destinationNotWritable
         }
+        // Match USBBookmarkStore's fallback when the provider has no volume identifier.
         let currentVolume = try volumeIdentity(destination.url) ?? destination.url.path
         guard currentVolume == destination.volumeID else {
             throw IPhoneUSBExportError.destinationChanged

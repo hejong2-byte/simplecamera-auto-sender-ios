@@ -291,7 +291,7 @@ struct USBReceiverView: View {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.subheadline)
                     .foregroundStyle(.red)
-                Text("원본은 삭제하지 않았습니다. 연결·권한을 확인한 뒤 선택된 파일을 다시 복사할 수 있습니다.")
+                Text("복사에 실패한 파일의 원본은 자동 삭제하지 않습니다. 오류 원인을 확인한 뒤 선택된 파일을 다시 복사할 수 있습니다.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

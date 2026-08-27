@@ -313,8 +313,9 @@ final class USBReceiverViewModel: ObservableObject {
         do {
             try await keepOriginalFiles(ids)
             needsDeletionDecision = !pendingDeletionDecisions().isEmpty
+            lastError = nil
         } catch {
-            lastUSBExportError = "원본 유지 결정을 저장하지 못했습니다."
+            lastError = "원본 유지 결정을 저장하지 못했습니다."
         }
     }
 
@@ -322,11 +323,11 @@ final class USBReceiverViewModel: ObservableObject {
         let ids = Set(pendingDeletionDecisions().map(\.id))
         let summary = await deleteOriginalFiles(ids)
         do { storedFiles = try storedFilesProvider() } catch {
-            lastUSBExportError = "iPhone 저장 파일 목록을 다시 읽지 못했습니다."
+            lastError = "iPhone 저장 파일 목록을 다시 읽지 못했습니다."
         }
         needsDeletionDecision = !pendingDeletionDecisions().isEmpty
         if !summary.failed.isEmpty {
-            lastUSBExportError = "변경되었거나 찾을 수 없는 원본 \(summary.failed.count)개는 삭제하지 않았습니다."
+            lastError = "변경되었거나 찾을 수 없는 원본 \(summary.failed.count)개는 삭제하지 않았습니다."
         }
     }
 
