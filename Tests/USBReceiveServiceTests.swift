@@ -4,6 +4,74 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class USBReceiveServiceTests: XCTestCase {
+    func testEmptyInboxDoesNotRequireUSBAccess() async throws {
+        let fixture = try makeFixture(
+            payload: Data("unused".utf8),
+            chunkSize: 4,
+            canAccessSecurityScope: false
+        )
+        await fixture.client.clearInbox()
+
+        do {
+            let summary = try await fixture.service.runOnce()
+            XCTAssertEqual(summary, USBReceiveSummary(discovered: 0, completed: 0))
+        } catch {
+            XCTFail("No incoming file or pending ACK needs USB access: \(error)")
+        }
+        XCTAssertTrue(fixture.ledger.allCheckpoints().isEmpty)
+    }
+
+    func testSuccessfulEmptyPollClearsPreviousDiscoveryFailure() async throws {
+        let fixture = try makeFixture(payload: Data("unused".utf8), chunkSize: 4)
+        await fixture.client.clearInbox()
+        fixture.progressStore.publishFailure("previous connection failure")
+
+        _ = try await fixture.service.runOnce()
+
+        var updates = fixture.progressStore.updates().makeAsyncIterator()
+        let latest = await updates.next()
+        XCTAssertEqual(latest?.stage, .idle)
+        XCTAssertNil(latest?.errorMessage)
+    }
+
+    func testCurrentListingFailureIsNotClearedAsAnEmptyInbox() async throws {
+        let fixture = try makeFixture(payload: Data("unused".utf8), chunkSize: 4)
+        await fixture.client.clearInbox()
+        await fixture.client.failNextListing()
+
+        do {
+            _ = try await fixture.service.runOnce()
+            XCTFail("A failed server check must remain an error")
+        } catch is URLError {
+            // Expected.
+        }
+
+        var updates = fixture.progressStore.updates().makeAsyncIterator()
+        let latest = await updates.next()
+        XCTAssertEqual(latest?.stage, .failed)
+        XCTAssertTrue(latest?.errorMessage?.contains("네트워크") == true)
+    }
+
+    func testEmptyInboxStillRetriesAPendingAcknowledgement() async throws {
+        let fixture = try makeFixture(
+            payload: Data("verified".utf8), chunkSize: 4, ackFailures: 1
+        )
+        do {
+            _ = try await fixture.service.runOnce()
+            XCTFail("Expected the first ACK to fail")
+        } catch StubReceiverError.ackFailed {
+            // Expected.
+        }
+        await fixture.client.clearInbox()
+
+        let summary = try await fixture.service.runOnce()
+
+        XCTAssertEqual(summary.completed, 1)
+        XCTAssertNil(fixture.ledger.checkpoint(for: fixture.delivery.deliveryID))
+        let acknowledgements = await fixture.client.acknowledgedIDs()
+        XCTAssertEqual(acknowledgements, [fixture.delivery.deliveryID])
+    }
+
     func testRepeatedEmptyInboxDoesNotPublishDiscoveryOrCompletion() async throws {
         let fixture = try makeFixture(payload: Data("unused".utf8), chunkSize: 4)
         await fixture.client.clearInbox()
@@ -501,6 +569,7 @@ private actor StubReceiverClient: IPhoneReceiverServing {
     private var remainingAckFailures: Int
     private var ackAttempts = 0
     private var inboxIsEmpty = false
+    private var listingShouldFail = false
 
     init(
         delivery: IPhoneDelivery,
@@ -515,10 +584,15 @@ private actor StubReceiverClient: IPhoneReceiverServing {
     }
 
     func list(receiverID: UUID, receiveSecret: String) async throws -> [IPhoneDelivery] {
-        inboxIsEmpty ? [] : [delivery]
+        if listingShouldFail {
+            listingShouldFail = false
+            throw URLError(.notConnectedToInternet)
+        }
+        return inboxIsEmpty ? [] : [delivery]
     }
 
     func clearInbox() { inboxIsEmpty = true }
+    func failNextListing() { listingShouldFail = true }
 
     func lease(
         receiverID: UUID,

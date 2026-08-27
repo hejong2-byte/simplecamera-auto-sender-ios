@@ -4,6 +4,29 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneLocalReceiveEngineTests: XCTestCase {
+    func testEmptyInboxRemainsIdleInsteadOfShowingEndlessDiscovery() async throws {
+        let context = try makeContext(payloads: [:])
+
+        for _ in 0..<3 { try await context.engine.discoverAndSchedule() }
+
+        var updates = context.progress.updates().makeAsyncIterator()
+        let latest = await updates.next()
+        XCTAssertEqual(latest?.stage, .idle)
+        XCTAssertTrue(try context.jobs.load().jobs.isEmpty)
+    }
+
+    func testHealthyEmptyDiscoveryClearsOnlyTheOldDiscoveryFailure() async throws {
+        let context = try makeContext(payloads: [:])
+        context.progress.publishFailure("old discovery failure")
+
+        try await context.engine.discoverAndSchedule()
+
+        var updates = context.progress.updates().makeAsyncIterator()
+        let latest = await updates.next()
+        XCTAssertEqual(latest?.stage, .idle)
+        XCTAssertNil(latest?.errorMessage)
+    }
+
     func testDiscoveryAdvertisesV2PersistsBeforeSchedulingAndUsesBackgroundLease() async throws {
         let context = try makeContext(payloads: ["one.hwp": Data("one".utf8)])
 
@@ -44,6 +67,9 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
         )])
         XCTAssertEqual(try context.jobs.load().jobs.first?.stage, .completed)
         XCTAssertFalse(FileManager.default.fileExists(atPath: staging.path))
+        var updates = context.progress.updates().makeAsyncIterator()
+        let latest = await updates.next()
+        XCTAssertEqual(latest?.stage, .completed)
     }
 
     func testZeroByteFinalizesAndVerifyingProgressIsOneHundredPercent() async throws {
@@ -93,6 +119,11 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: staging.path))
         XCTAssertEqual(context.client.acks(), [])
         XCTAssertEqual(try context.catalog.refresh(), [])
+        var updates = context.progress.updates().makeAsyncIterator()
+        let latest = await updates.next()
+        XCTAssertEqual(latest?.stage, .failed)
+        XCTAssertEqual(latest?.deliveryID, delivery.deliveryID)
+        XCTAssertNotNil(latest?.errorMessage)
     }
 
     func testAckFailureKeepsFinalFileAndRestoreRetriesOnlyAck() async throws {

@@ -150,6 +150,12 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             try Data(contentsOf: context.usbDirectory.appendingPathComponent(storedName)),
             Data("verified-data".utf8)
         )
+
+        try await context.service.keep(decisionIDs: Set(summary.verified.map(\.id)))
+        var updates = context.progressStore.updates().makeAsyncIterator()
+        let latest = await updates.next()
+        XCTAssertEqual(latest?.stage, .failed, "Keeping good originals must not hide a failed copy")
+        XCTAssertNotNil(latest?.errorMessage)
     }
 
     func testReportedZeroCapacityDoesNotBlockVerifiedCopyToWritableUSB() async throws {

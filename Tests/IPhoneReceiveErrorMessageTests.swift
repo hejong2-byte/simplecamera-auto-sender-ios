@@ -3,6 +3,14 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneReceiveErrorMessageTests: XCTestCase {
+    func testUnknownReceiveErrorKeepsItsDiagnosticCode() {
+        let message = IPhoneReceiveErrorMessage.message(
+            NSError(domain: NSCocoaErrorDomain, code: 260)
+        )
+        XCTAssertTrue(message.contains(NSCocoaErrorDomain))
+        XCTAssertTrue(message.contains("260"))
+    }
+
     func testLocalUSBCopyFailureDoesNotBlameTheNetwork() {
         let message = IPhoneReceiveErrorMessage.message(IPhoneUSBExportError.copyFailed)
         XCTAssertTrue(message.contains("USB 복사"))
