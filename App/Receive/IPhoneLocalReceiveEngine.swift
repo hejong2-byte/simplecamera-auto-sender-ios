@@ -103,32 +103,47 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
 
     func discoverAndSchedule(force: Bool = false) async throws {
         guard force || automaticDiscoveryAllowed() else { return }
-        let credentials = try requiredCredentials()
-        try await client.updateFeatures(
-            receiverID: credentials.identity.receiverID,
-            receiveSecret: credentials.secret,
-            features: .current
-        )
         let current = try jobStore.load().jobs
         if current.contains(where: { ![.completed, .failed].contains($0.stage) }) {
             return
         }
-        publish(stage: .discovering, job: nil)
-        let deliveries = try await client.list(
-            receiverID: credentials.identity.receiverID,
-            receiveSecret: credentials.secret
-        ).filter { $0.state == .available || $0.state == .leased }
-            .sorted {
-                if $0.createdAt == $1.createdAt {
-                    return $0.deliveryID.uuidString < $1.deliveryID.uuidString
+        let credentials: IPhoneReceiverCredentials
+        let deliveries: [IPhoneDelivery]
+        do {
+            credentials = try requiredCredentials()
+            try await client.updateFeatures(
+                receiverID: credentials.identity.receiverID,
+                receiveSecret: credentials.secret,
+                features: .current
+            )
+            deliveries = try await client.list(
+                receiverID: credentials.identity.receiverID,
+                receiveSecret: credentials.secret
+            ).filter { $0.state == .available || $0.state == .leased }
+                .sorted {
+                    if $0.createdAt == $1.createdAt {
+                        return $0.deliveryID.uuidString < $1.deliveryID.uuidString
+                    }
+                    return $0.createdAt < $1.createdAt
                 }
-                return $0.createdAt < $1.createdAt
-            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            progressStore.publishDiscoveryFailure(
+                IPhoneReceiveErrorMessage.message(error),
+                destination: .iphoneLocal
+            )
+            throw error
+        }
         let known = Set(current.map { $0.delivery.deliveryID })
         let existingTasks = await scheduler.existingDeliveryIDs()
         guard let delivery = deliveries.first(where: {
             !known.contains($0.deliveryID) && !existingTasks.contains($0.deliveryID)
-        }) else { return }
+        }) else {
+            progressStore.clearDiscoveryFailure()
+            return
+        }
+        publish(stage: .discovering, job: nil)
         var job = IPhoneLocalReceiveJob(
             id: delivery.deliveryID,
             delivery: delivery,

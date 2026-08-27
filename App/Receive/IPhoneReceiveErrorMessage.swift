@@ -60,7 +60,7 @@ enum IPhoneReceiveErrorMessage {
         case is CancellationError:
             return "수신이 일시정지되었습니다."
         default:
-            return "수신하지 못했습니다. 네트워크와 저장 위치를 확인해 주세요."
+            return "수신 오류 (\(value.domain) · \(value.code)) · 연결과 저장 위치를 확인해 주세요."
         }
     }
 }

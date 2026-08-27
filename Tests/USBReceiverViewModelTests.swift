@@ -4,6 +4,117 @@ import XCTest
 
 @MainActor
 final class USBReceiverViewModelTests: XCTestCase {
+    func testRecoveryToIdleClearsThePreviousPCError() async throws {
+        let progress = USBReceiveProgressStore()
+        let model = try exportModel(files: [], receiveProgressStore: progress) { _, _ in
+            IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        progress.publishFailure("previous network error")
+        await waitUntil { model.receiveProgress?.stage == .failed }
+
+        progress.publish(.idle)
+        await waitUntil { model.receiveProgress?.stage == .idle }
+
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(model.receiveStageTitle, "PC 파일 수신 대기")
+    }
+
+    func testNewReceiveProgressClearsThePreviousPCError() async throws {
+        let progress = USBReceiveProgressStore()
+        let model = try exportModel(files: [], receiveProgressStore: progress) { _, _ in
+            IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        progress.publishFailure("previous network error")
+        await waitUntil { model.receiveProgress?.stage == .failed }
+
+        progress.publish(testProgress(stage: .downloading, name: "new.txt", bytes: 25))
+        await waitUntil { model.receiveProgress?.stage == .downloading }
+
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(model.receivePercentText, "25%")
+    }
+
+    func testDiscoveryErrorDoesNotShowZeroByteProgressOrCalculating() async throws {
+        let progress = USBReceiveProgressStore()
+        let model = try exportModel(files: [], receiveProgressStore: progress) { _, _ in
+            IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        progress.publishFailure("current server error")
+        await waitUntil { model.receiveProgress?.stage == .failed }
+
+        XCTAssertEqual(model.receiveStageTitle, "새 파일 확인 오류")
+        XCTAssertEqual(model.receivePercentText, "")
+        XCTAssertEqual(model.receiveByteText, "")
+        XCTAssertEqual(model.receiveSpeedText, "")
+        XCTAssertEqual(model.receiveETAText, "")
+        XCTAssertEqual(model.lastError, "current server error")
+    }
+
+    func testCompletedReceiveDoesNotKeepShowingRunningProgress() async throws {
+        let progress = USBReceiveProgressStore()
+        let model = try exportModel(files: [], receiveProgressStore: progress) { _, _ in
+            IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        progress.publish(testProgress(stage: .completed, name: "done.txt", bytes: 100))
+        await waitUntil { model.receiveProgress?.stage == .completed }
+
+        XCTAssertEqual(model.receivePercentText, "")
+        XCTAssertEqual(model.receiveSpeedText, "")
+        XCTAssertEqual(model.receiveETAText, "")
+    }
+
+    func testDeletingOriginalCollapsesFinishedUSBProgressAndRefreshesTheList() async throws {
+        let context = try await completedExportContext()
+        XCTAssertTrue(context.model.needsDeletionDecision)
+
+        await context.model.deleteOriginals()
+        await waitUntil { context.model.usbExportProgress == nil }
+
+        XCTAssertFalse(context.model.needsDeletionDecision)
+        XCTAssertTrue(context.model.storedFiles.isEmpty)
+        XCTAssertTrue(context.model.selectedStoredFileIDs.isEmpty)
+        XCTAssertTrue(context.model.usbExportStageTitle.contains("원본 1개 삭제"))
+        XCTAssertNil(context.model.lastError)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: context.file.url.path))
+        var replay = context.exportProgress.updates().makeAsyncIterator()
+        let latest = await replay.next()
+        XCTAssertEqual(latest?.stage, .idle, "Reopening the screen must not replay old completion")
+    }
+
+    func testKeepingOriginalCollapsesUSBProgressWithoutHidingAPCError() async throws {
+        let context = try await completedExportContext()
+        context.pcProgress.publishFailure("current server failure")
+        await waitUntil { context.model.lastError == "current server failure" }
+
+        await context.model.keepOriginals()
+        await waitUntil { context.model.usbExportProgress == nil }
+
+        XCTAssertFalse(context.model.needsDeletionDecision)
+        XCTAssertEqual(context.model.storedFiles.map(\.id), [context.file.id])
+        XCTAssertTrue(context.model.usbExportStageTitle.contains("원본 1개 유지"))
+        XCTAssertEqual(context.model.lastError, "current server failure")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: context.file.url.path))
+        var replay = context.exportProgress.updates().makeAsyncIterator()
+        let latest = await replay.next()
+        XCTAssertEqual(latest?.stage, .idle)
+    }
+
+    func testChangedOriginalIsNotDeletedOrReportedAsAPCReceiveFailure() async throws {
+        let context = try await completedExportContext()
+        let changed = Data("changed after verified copy".utf8)
+        try changed.write(to: context.file.url)
+
+        await context.model.deleteOriginals()
+
+        XCTAssertEqual(try Data(contentsOf: context.file.url), changed)
+        XCTAssertTrue(context.model.needsDeletionDecision)
+        XCTAssertNotNil(context.model.usbExportProgress)
+        XCTAssertNil(context.model.lastError, "Original cleanup errors belong below the USB result")
+        XCTAssertNil(context.model.lastUSBExportError, "The verified USB copy itself succeeded")
+        XCTAssertTrue(context.model.lastOriginalCleanupError?.contains("원본 1개") == true)
+        XCTAssertNil(context.model.usbExportCompletionMessage)
+    }
+
     func testPCProgressCannotOverwriteAUSBExportFailure() async throws {
         let file = try storedFile()
         let pcProgress = USBReceiveProgressStore()
@@ -323,6 +434,11 @@ final class USBReceiverViewModelTests: XCTestCase {
         files: [IPhoneStoredFile],
         receiveProgressStore: USBReceiveProgressStore? = nil,
         exportProgressStore: USBReceiveProgressStore? = nil,
+        pendingDeletionDecisions: @escaping USBReceiverViewModel.PendingDeletionDecisions = { [] },
+        keepOriginals: @escaping USBReceiverViewModel.KeepOriginals = { _ in },
+        deleteOriginals: @escaping USBReceiverViewModel.DeleteOriginals = { _ in
+            IPhoneUSBDeletionSummary(deletedSourceIDs: [], failed: [])
+        },
         export: @escaping USBReceiverViewModel.ExportFiles
     ) throws -> USBReceiverViewModel {
         let usb = temporaryDirectory()
@@ -340,8 +456,11 @@ final class USBReceiverViewModelTests: XCTestCase {
             bookmarkStore: bookmarkStore,
             registrar: StubReceiverRegistrar(),
             receiveOnce: { USBReceiveSummary(discovered: 0, completed: 0) },
-            storedFiles: { files },
+            storedFiles: { files.filter { FileManager.default.fileExists(atPath: $0.url.path) } },
             exportFiles: export,
+            pendingDeletionDecisions: pendingDeletionDecisions,
+            keepOriginals: keepOriginals,
+            deleteOriginals: deleteOriginals,
             progressUpdates: {
                 receiveProgressStore?.updates() ?? AsyncStream { $0.finish() }
             },
@@ -351,6 +470,42 @@ final class USBReceiverViewModelTests: XCTestCase {
             defaultDeviceName: "iPhone",
             preferences: isolatedPreferences()
         )
+    }
+
+    private func completedExportContext() async throws -> (
+        model: USBReceiverViewModel,
+        file: IPhoneStoredFile,
+        exportProgress: USBReceiveProgressStore,
+        pcProgress: USBReceiveProgressStore
+    ) {
+        let file = try storedFile()
+        let decisions = try IPhoneUSBDeletionDecisionStore(
+            fileURL: temporaryDirectory().appendingPathComponent("decisions.json")
+        )
+        let exportProgress = USBReceiveProgressStore()
+        let pcProgress = USBReceiveProgressStore()
+        let exporter = IPhoneUSBExportService(
+            deletionStore: decisions,
+            startAccessing: { _ in true },
+            stopAccessing: { _ in },
+            progressStore: exportProgress
+        )
+        let model = try exportModel(
+            files: [file],
+            receiveProgressStore: pcProgress,
+            exportProgressStore: exportProgress,
+            pendingDeletionDecisions: { decisions.pending() },
+            keepOriginals: { try await exporter.keep(decisionIDs: $0) },
+            deleteOriginals: { await exporter.delete(decisionIDs: $0) }
+        ) { files, destination in
+            await exporter.export(files, to: destination)
+        }
+        await model.refresh()
+        model.toggleStoredFileSelection(file.id)
+        await model.exportSelectedFilesToUSB()
+        await waitUntil { model.usbExportProgress?.stage == .completed }
+        XCTAssertNil(model.lastUSBExportError)
+        return (model, file, exportProgress, pcProgress)
     }
 
     private func testProgress(stage: USBReceiveStage, name: String, bytes: Int64) -> USBReceiveProgress {
