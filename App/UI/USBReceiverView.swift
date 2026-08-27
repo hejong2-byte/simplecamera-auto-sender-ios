@@ -94,7 +94,7 @@ struct USBReceiverView: View {
 
     private var destinationCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("저장 위치").font(.headline)
+            Text("PC에서 새로 받을 파일의 저장 위치").font(.headline)
             Picker(
                 "저장 위치",
                 selection: Binding(
@@ -106,6 +106,7 @@ struct USBReceiverView: View {
                 Text("USB 직접 저장").tag(IPhoneReceiveDestination.usb)
             }
             .pickerStyle(.segmented)
+            .disabled(model.isExportingToUSB)
 
             if model.selectedDestination == .iphoneLocal {
                 Label("받은 파일 폴더에 저장", systemImage: "iphone.gen3")
@@ -125,13 +126,20 @@ struct USBReceiverView: View {
                     selectingDestination = true
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(model.isExportingToUSB)
             }
+            Text("iPhone에 이미 저장된 파일은 아래 목록에서 선택해 USB로 복사하세요.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .cardStyle()
     }
 
     private var progressCard: some View {
         VStack(alignment: .leading, spacing: 10) {
+            Text("PC 새 파일 수신 상태")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             HStack {
                 Text(model.receiveStageTitle).font(.headline)
                 Spacer()
@@ -142,7 +150,7 @@ struct USBReceiverView: View {
                 }
             }
 
-            if let progress = model.receiveProgress {
+            if let progress = model.receiveProgress, progress.stage != .idle {
                 if progress.stage == .discovering {
                     ProgressView().tint(.cyan)
                 } else {
@@ -186,7 +194,7 @@ struct USBReceiverView: View {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.subheadline)
                     .foregroundStyle(.red)
-            } else if model.receiveProgress == nil {
+            } else if model.receiveProgress == nil || model.receiveProgress?.stage == .idle {
                 Text("PC에서 이 iPhone 코드로 파일을 보내면 앱을 열었을 때 확인합니다.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -209,6 +217,9 @@ struct USBReceiverView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else {
+                Text("파일을 눌러 선택한 뒤 아래 복사 버튼을 누르세요. 선택 \(model.selectedStoredFileIDs.count)개")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 ForEach(model.storedFiles) { file in
                     Button {
                         model.toggleStoredFileSelection(file.id)
@@ -231,6 +242,7 @@ struct USBReceiverView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .disabled(model.isExportingToUSB)
                     Divider()
                 }
             }
@@ -238,9 +250,52 @@ struct USBReceiverView: View {
                 Task { await model.exportSelectedFilesToUSB() }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!model.hasStoredFileSelection)
+            .disabled(!model.hasStoredFileSelection || model.isExportingToUSB)
+
+            if model.isExportingToUSB || model.usbExportProgress != nil || model.lastUSBExportError != nil {
+                usbExportStatus
+            }
         }
         .cardStyle()
+    }
+
+    private var usbExportStatus: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider()
+            Text(model.usbExportStageTitle).font(.headline)
+            if let progress = model.usbExportProgress {
+                if progress.stage != .failed {
+                    ProgressView(value: Double(progress.percent), total: 100)
+                        .tint(.cyan)
+                    HStack {
+                        Text("\(progress.percent)%")
+                            .font(.title3.monospacedDigit().bold())
+                        Spacer()
+                        Text(model.usbExportByteText)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let fileName = progress.fileName {
+                    Label(fileName, systemImage: "doc.fill")
+                        .font(.subheadline)
+                        .lineLimit(2)
+                }
+                Text("전체 \(progress.totalCount)개 · USB 복사 완료 \(progress.completedCount)개")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if model.isExportingToUSB {
+                ProgressView().tint(.cyan)
+            }
+            if let error = model.lastUSBExportError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.red)
+                Text("원본은 삭제하지 않았습니다. 연결·권한을 확인한 뒤 선택된 파일을 다시 복사할 수 있습니다.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private var operationNotice: some View {

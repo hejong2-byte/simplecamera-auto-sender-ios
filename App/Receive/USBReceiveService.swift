@@ -85,19 +85,6 @@ actor USBReceiveService {
     }
 
     private func performRunOnce() async throws -> USBReceiveSummary {
-        progressStore.publish(USBReceiveProgress(
-            stage: .discovering,
-            deliveryID: nil,
-            fileName: nil,
-            currentIndex: 0,
-            totalCount: 0,
-            completedCount: 0,
-            bytesReceived: 0,
-            totalBytes: 0,
-            startedAt: now(),
-            expiresAt: nil,
-            errorMessage: nil
-        ))
         guard let credentials = try credentials() else {
             throw USBReceiveServiceError.missingRegistration
         }
@@ -143,19 +130,21 @@ actor USBReceiveService {
             )
             completed += 1
         }
-        progressStore.publish(USBReceiveProgress(
-            stage: .completed,
-            deliveryID: nil,
-            fileName: nil,
-            currentIndex: deliveries.count,
-            totalCount: deliveries.count,
-            completedCount: completed,
-            bytesReceived: 0,
-            totalBytes: 0,
-            startedAt: nil,
-            expiresAt: nil,
-            errorMessage: nil
-        ))
+        if completed > 0 {
+            progressStore.publish(USBReceiveProgress(
+                stage: .completed,
+                deliveryID: nil,
+                fileName: nil,
+                currentIndex: max(deliveries.count, completed),
+                totalCount: max(deliveries.count, completed),
+                completedCount: completed,
+                bytesReceived: 0,
+                totalBytes: 0,
+                startedAt: nil,
+                expiresAt: nil,
+                errorMessage: nil
+            ))
+        }
         return USBReceiveSummary(discovered: deliveries.count, completed: completed)
     }
 

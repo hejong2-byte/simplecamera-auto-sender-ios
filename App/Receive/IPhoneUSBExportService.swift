@@ -16,6 +16,15 @@ enum IPhoneUSBExportError: String, Error, Codable, Equatable, Sendable {
 struct IPhoneUSBExportFailure: Equatable, Sendable {
     let sourceID: String
     let error: IPhoneUSBExportError
+    let detail: String?
+
+    init(sourceID: String, error: IPhoneUSBExportError, detail: String? = nil) {
+        self.sourceID = sourceID
+        self.error = error
+        self.detail = detail
+    }
+
+    var message: String { detail ?? IPhoneReceiveErrorMessage.message(error) }
 }
 
 struct IPhoneUSBDeletionDecision: Codable, Equatable, Sendable, Identifiable {
@@ -31,6 +40,11 @@ struct IPhoneUSBDeletionDecision: Codable, Equatable, Sendable, Identifiable {
 struct IPhoneUSBExportSummary: Equatable, Sendable {
     let verified: [IPhoneUSBDeletionDecision]
     let failed: [IPhoneUSBExportFailure]
+
+    var errorMessage: String? {
+        guard let first = failed.first else { return nil }
+        return "USB 복사 완료 \(verified.count)개, 실패 \(failed.count)개\n\(first.message)"
+    }
 }
 
 struct IPhoneUSBDeletionSummary: Equatable, Sendable {
@@ -141,6 +155,9 @@ actor IPhoneUSBExportService {
         _ files: [IPhoneStoredFile],
         to destination: USBBookmarkDestination
     ) -> IPhoneUSBExportSummary {
+        guard !files.isEmpty else {
+            return IPhoneUSBExportSummary(verified: [], failed: [])
+        }
         var verified: [IPhoneUSBDeletionDecision] = []
         var failed: [IPhoneUSBExportFailure] = []
         for (index, file) in files.enumerated() {
@@ -154,13 +171,12 @@ actor IPhoneUSBExportService {
                 )
                 verified.append(decision)
             } catch {
-                failed.append(IPhoneUSBExportFailure(
-                    sourceID: file.id,
-                    error: Self.normalizedError(error)
-                ))
+                failed.append(Self.failure(sourceID: file.id, error: error))
             }
         }
+        let summary = IPhoneUSBExportSummary(verified: verified, failed: failed)
         if failed.isEmpty {
+            let copiedBytes = verified.reduce(Int64(0)) { $0 + $1.sourceSize }
             progressStore.publish(USBReceiveProgress(
                 stage: .completed,
                 destination: .usb,
@@ -169,18 +185,31 @@ actor IPhoneUSBExportService {
                 currentIndex: files.count,
                 totalCount: files.count,
                 completedCount: verified.count,
-                bytesReceived: 0,
-                totalBytes: 0,
+                bytesReceived: copiedBytes,
+                totalBytes: copiedBytes,
                 startedAt: nil,
                 expiresAt: nil,
                 errorMessage: nil
             ))
         } else {
-            progressStore.publishFailure(
-                "USB 복사 완료 \(verified.count)개, 실패 \(failed.count)개"
-            )
+            let failedIndex = files.firstIndex { $0.id == failed[0].sourceID } ?? 0
+            let failedFile = files[failedIndex]
+            progressStore.publish(USBReceiveProgress(
+                stage: .failed,
+                destination: .usb,
+                deliveryID: failedFile.receivedRecord?.deliveryID,
+                fileName: failedFile.name,
+                currentIndex: failedIndex + 1,
+                totalCount: files.count,
+                completedCount: verified.count,
+                bytesReceived: 0,
+                totalBytes: failedFile.size,
+                startedAt: nil,
+                expiresAt: nil,
+                errorMessage: summary.errorMessage
+            ))
         }
-        return IPhoneUSBExportSummary(verified: verified, failed: failed)
+        return summary
     }
 
     func keep(decisionIDs: Set<UUID>) throws {
@@ -201,10 +230,7 @@ actor IPhoneUSBExportService {
                 try deletionStore.remove(ids: [decision.id])
                 deleted.append(decision.sourceID)
             } catch {
-                failed.append(IPhoneUSBExportFailure(
-                    sourceID: decision.sourceID,
-                    error: Self.normalizedError(error)
-                ))
+                failed.append(Self.failure(sourceID: decision.sourceID, error: error))
             }
         }
         return IPhoneUSBDeletionSummary(
@@ -220,6 +246,15 @@ actor IPhoneUSBExportService {
         totalCount: Int,
         completedCount: Int
     ) throws -> IPhoneUSBDeletionDecision {
+        let startedAt = now()
+        publish(
+            file: file,
+            currentIndex: currentIndex,
+            totalCount: totalCount,
+            completedCount: completedCount,
+            bytes: 0,
+            startedAt: startedAt
+        )
         guard !destination.isStale else {
             throw IPhoneUSBExportError.staleDestination
         }
@@ -253,13 +288,6 @@ actor IPhoneUSBExportService {
         }
         defer { try? fileManager.removeItem(at: partialURL) }
 
-        publish(
-            file: file,
-            currentIndex: currentIndex,
-            totalCount: totalCount,
-            completedCount: completedCount,
-            bytes: 0
-        )
         let sourceSHA = try copyAndHash(
             source: file.url,
             destination: partialURL,
@@ -269,7 +297,8 @@ actor IPhoneUSBExportService {
                     currentIndex: currentIndex,
                     totalCount: totalCount,
                     completedCount: completedCount,
-                    bytes: bytes
+                    bytes: bytes,
+                    startedAt: startedAt
                 )
             }
         )
@@ -287,6 +316,15 @@ actor IPhoneUSBExportService {
         )
         let finalURL = destination.url.appendingPathComponent(storedName)
         try coordinatedMove(from: partialURL, to: finalURL)
+        publish(
+            file: file,
+            currentIndex: currentIndex,
+            totalCount: totalCount,
+            completedCount: completedCount,
+            bytes: sourceSize,
+            startedAt: startedAt,
+            stage: .verifying
+        )
         do {
             guard try fileSize(finalURL) == sourceSize else {
                 throw IPhoneUSBExportError.sizeMismatch
@@ -320,8 +358,8 @@ actor IPhoneUSBExportService {
         ), isDirectory.boolValue else {
             throw IPhoneUSBExportError.destinationNotWritable
         }
-        guard let currentVolume = try volumeIdentity(destination.url),
-              currentVolume == destination.volumeID else {
+        let currentVolume = try volumeIdentity(destination.url) ?? destination.url.path
+        guard currentVolume == destination.volumeID else {
             throw IPhoneUSBExportError.destinationChanged
         }
         let probe = destination.url.appendingPathComponent(
@@ -404,10 +442,12 @@ actor IPhoneUSBExportService {
         currentIndex: Int,
         totalCount: Int,
         completedCount: Int,
-        bytes: Int64
+        bytes: Int64,
+        startedAt: Date,
+        stage: USBReceiveStage = .copyingToUSB
     ) {
         progressStore.publish(USBReceiveProgress(
-            stage: .copyingToUSB,
+            stage: stage,
             destination: .usb,
             deliveryID: file.receivedRecord?.deliveryID,
             fileName: file.name,
@@ -416,14 +456,26 @@ actor IPhoneUSBExportService {
             completedCount: completedCount,
             bytesReceived: bytes,
             totalBytes: file.size,
-            startedAt: now(),
+            startedAt: startedAt,
             expiresAt: nil,
             errorMessage: nil
         ))
     }
 
-    private static func normalizedError(_ error: Error) -> IPhoneUSBExportError {
-        (error as? IPhoneUSBExportError) ?? .copyFailed
+    private static func failure(sourceID: String, error: Error) -> IPhoneUSBExportFailure {
+        if let known = error as? IPhoneUSBExportError {
+            return IPhoneUSBExportFailure(sourceID: sourceID, error: known)
+        }
+        let systemError = error as NSError
+        let normalized: IPhoneUSBExportError = systemError.domain == NSCocoaErrorDomain
+            && systemError.code == CocoaError.Code.fileWriteOutOfSpace.rawValue
+            ? .insufficientSpace
+            : .copyFailed
+        return IPhoneUSBExportFailure(
+            sourceID: sourceID,
+            error: normalized,
+            detail: "\(IPhoneReceiveErrorMessage.message(normalized)) (\(systemError.domain) · \(systemError.code))"
+        )
     }
 
     private static func hex(_ digest: SHA256.Digest) -> String {

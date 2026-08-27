@@ -3,6 +3,12 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneReceiveErrorMessageTests: XCTestCase {
+    func testLocalUSBCopyFailureDoesNotBlameTheNetwork() {
+        let message = IPhoneReceiveErrorMessage.message(IPhoneUSBExportError.copyFailed)
+        XCTAssertTrue(message.contains("USB 복사"))
+        XCTAssertFalse(message.contains("네트워크"))
+    }
+
     func testServerAuthenticationAndExpiryAreDistinct() {
         XCTAssertTrue(IPhoneReceiveErrorMessage.message(
             IPhoneReceiverClientError.server(statusCode: 503, code: "unavailable")

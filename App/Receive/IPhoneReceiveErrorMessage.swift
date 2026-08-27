@@ -41,6 +41,8 @@ enum IPhoneReceiveErrorMessage {
         case IPhoneLocalReceiveError.finalFileChanged,
              IPhoneUSBExportError.sourceChanged:
             return "원본 파일이 변경되었습니다. 삭제하거나 완료 처리하지 않았습니다."
+        case IPhoneUSBExportError.copyFailed:
+            return "USB 복사에 실패했습니다. 원본 파일과 USB 연결·폴더 권한을 확인해 주세요."
         case let IPhoneReceiverClientError.server(statusCode, code):
             if statusCode == 401 || statusCode == 403 {
                 return "인증 오류 (HTTP \(statusCode)) · 수신 기기 등록과 인증값을 확인해 주세요."

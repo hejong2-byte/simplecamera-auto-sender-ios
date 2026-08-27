@@ -4,6 +4,60 @@ import XCTest
 
 @MainActor
 final class USBReceiverViewModelTests: XCTestCase {
+    func testPCProgressCannotOverwriteAUSBExportFailure() async throws {
+        let file = try storedFile()
+        let pcProgress = USBReceiveProgressStore()
+        let exportProgress = USBReceiveProgressStore()
+        let model = try exportModel(
+            files: [file],
+            receiveProgressStore: pcProgress,
+            exportProgressStore: exportProgress
+        ) { _, _ in
+            exportProgress.publishFailure("USB에 쓸 수 없습니다. 폴더 권한을 확인해 주세요.")
+            return IPhoneUSBExportSummary(
+                verified: [],
+                failed: [IPhoneUSBExportFailure(
+                    sourceID: file.id,
+                    error: .destinationAccessDenied
+                )]
+            )
+        }
+        await model.refresh()
+        model.toggleStoredFileSelection(file.id)
+        await model.exportSelectedFilesToUSB()
+        await waitUntil { model.usbExportProgress?.stage == .failed }
+        let failure = model.lastUSBExportError
+
+        pcProgress.publish(testProgress(stage: .downloading, name: "new-pc.txt", bytes: 25))
+        await waitUntil { model.receiveProgress?.fileName == "new-pc.txt" }
+        await model.pollOnce()
+
+        XCTAssertEqual(model.lastUSBExportError, failure)
+        XCTAssertTrue(model.lastUSBExportError?.contains("권한") == true)
+        XCTAssertEqual(model.usbExportProgress?.stage, .failed)
+        XCTAssertEqual(model.selectedStoredFileIDs, [file.id])
+    }
+
+    func testUSBExportProgressIsIndependentOfPCReceiveProgress() async throws {
+        let pcProgress = USBReceiveProgressStore()
+        let exportProgress = USBReceiveProgressStore()
+        let model = try exportModel(
+            files: [],
+            receiveProgressStore: pcProgress,
+            exportProgressStore: exportProgress
+        ) { _, _ in IPhoneUSBExportSummary(verified: [], failed: []) }
+
+        exportProgress.publish(testProgress(stage: .copyingToUSB, name: "local.zip", bytes: 50))
+        pcProgress.publish(testProgress(stage: .downloading, name: "from-pc.txt", bytes: 25))
+        await waitUntil {
+            model.usbExportProgress?.percent == 50 && model.receiveProgress?.percent == 25
+        }
+
+        XCTAssertEqual(model.usbExportProgress?.fileName, "local.zip")
+        XCTAssertEqual(model.usbExportStageTitle, "USB로 복사 중 · 1/1")
+        XCTAssertEqual(model.receiveProgress?.fileName, "from-pc.txt")
+    }
+
     func testFailedUSBCopyKeepsTheFailedFileSelectedForRetry() async throws {
         let file = try storedFile()
         let model = try exportModel(files: [file]) { _, _ in
@@ -267,6 +321,8 @@ final class USBReceiverViewModelTests: XCTestCase {
 
     private func exportModel(
         files: [IPhoneStoredFile],
+        receiveProgressStore: USBReceiveProgressStore? = nil,
+        exportProgressStore: USBReceiveProgressStore? = nil,
         export: @escaping USBReceiverViewModel.ExportFiles
     ) throws -> USBReceiverViewModel {
         let usb = temporaryDirectory()
@@ -286,9 +342,30 @@ final class USBReceiverViewModelTests: XCTestCase {
             receiveOnce: { USBReceiveSummary(discovered: 0, completed: 0) },
             storedFiles: { files },
             exportFiles: export,
-            progressUpdates: { AsyncStream { $0.finish() } },
+            progressUpdates: {
+                receiveProgressStore?.updates() ?? AsyncStream { $0.finish() }
+            },
+            exportProgressUpdates: {
+                exportProgressStore?.updates() ?? AsyncStream { $0.finish() }
+            },
             defaultDeviceName: "iPhone",
             preferences: isolatedPreferences()
+        )
+    }
+
+    private func testProgress(stage: USBReceiveStage, name: String, bytes: Int64) -> USBReceiveProgress {
+        USBReceiveProgress(
+            stage: stage,
+            deliveryID: UUID(),
+            fileName: name,
+            currentIndex: 1,
+            totalCount: 1,
+            completedCount: 0,
+            bytesReceived: bytes,
+            totalBytes: 100,
+            startedAt: Date(),
+            expiresAt: nil,
+            errorMessage: nil
         )
     }
 

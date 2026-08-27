@@ -4,6 +4,40 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneUSBExportServiceTests: XCTestCase {
+    func testVerifiedCompletionShowsCopiedBytesInsteadOfZeroOfZero() async throws {
+        let context = try makeContext()
+        let payload = Data(repeating: 0x5a, count: 2 * 1_024 * 1_024 + 17)
+        let file = try makeStoredFile(
+            name: "large-test.zip",
+            data: payload,
+            in: context.sourceDirectory
+        )
+        let updates = context.progressStore.updates()
+
+        let summary = await context.service.export([file], to: context.destination)
+        var latest = context.progressStore.updates().makeAsyncIterator()
+        let completion = await latest.next()
+
+        XCTAssertEqual(summary.failed, [])
+        XCTAssertEqual(completion?.stage, .completed)
+        XCTAssertEqual(completion?.completedCount, 1)
+        XCTAssertEqual(completion?.bytesReceived, Int64(payload.count))
+        XCTAssertEqual(completion?.totalBytes, Int64(payload.count))
+        XCTAssertEqual(try Data(contentsOf: file.url), payload)
+
+        context.progressStore.publishFailure("end-of-test")
+        var stages: [USBReceiveStage] = []
+        var startTimes: Set<Date> = []
+        for await progress in updates {
+            if progress.errorMessage == "end-of-test" { break }
+            stages.append(progress.stage)
+            if let startedAt = progress.startedAt { startTimes.insert(startedAt) }
+        }
+        XCTAssertTrue(stages.contains(.copyingToUSB))
+        XCTAssertTrue(stages.contains(.verifying))
+        XCTAssertEqual(startTimes.count, 1)
+    }
+
     func testPathBackedDestinationWithoutVolumeMetadataCanCopyAndKeepsOriginal() async throws {
         let context = try makeContext(
             volumeIdentity: { _ in nil },
