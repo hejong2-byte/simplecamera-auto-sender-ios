@@ -152,20 +152,71 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         )
     }
 
-    func testCapacityFailureDoesNotCreateDecisionOrDeleteSource() async throws {
-        let context = try makeContext(availableCapacity: { _ in 0 })
+    func testReportedZeroCapacityDoesNotBlockVerifiedCopyToWritableUSB() async throws {
+        let fileManager = ZeroCapacityUSBFileManager()
+        let context = try makeContext(fileManager: fileManager)
+        let payload = Data(repeating: 0x5a, count: 1_024 * 1_024 + 31)
         let file = try makeStoredFile(
-            name: "large.mov",
-            data: Data(repeating: 1, count: 16),
+            name: "capacity-report.zip",
+            data: payload,
             in: context.sourceDirectory
         )
+        let reported = try fileManager.attributesOfFileSystem(forPath: context.usbDirectory.path)
+        XCTAssertEqual((reported[.systemFreeSize] as? NSNumber)?.int64Value, 0)
+        let attributes = try FileManager.default.attributesOfFileSystem(
+            forPath: context.usbDirectory.path
+        )
+        let actualFree = try XCTUnwrap(attributes[.systemFreeSize] as? NSNumber)
+        XCTAssertGreaterThan(actualFree.int64Value, Int64(payload.count))
 
         let summary = await context.service.export([file], to: context.destination)
 
-        XCTAssertEqual(summary.verified, [])
-        XCTAssertEqual(summary.failed.map(\.sourceID), [file.id])
-        XCTAssertEqual(context.deletionStore.pending(), [])
-        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+        XCTAssertEqual(summary.failed, [])
+        XCTAssertEqual(summary.verified.map(\.sourceID), [file.id])
+        XCTAssertEqual(try Data(contentsOf: file.url), payload)
+        if let storedName = summary.verified.first?.usbStoredName {
+            XCTAssertEqual(
+                try Data(contentsOf: context.usbDirectory.appendingPathComponent(storedName)),
+                payload
+            )
+        }
+    }
+
+    func testFileSystemDiskFullErrorsStopCopyAndPreserveFiles() async throws {
+        let errors = [
+            NSError(domain: NSCocoaErrorDomain, code: CocoaError.Code.fileWriteOutOfSpace.rawValue),
+            NSError(domain: NSPOSIXErrorDomain, code: Int(POSIXErrorCode.ENOSPC.rawValue))
+        ]
+        for error in errors {
+            let context = try makeContext(fileManager: DiskFullUSBFileManager(error: error))
+            let payload = Data(repeating: 0x3c, count: 1_024 * 1_024 + 31)
+            let file = try makeStoredFile(
+                name: "keep-original.zip",
+                data: payload,
+                in: context.sourceDirectory
+            )
+            let existingURL = context.usbDirectory.appendingPathComponent("existing.txt")
+            let existingData = Data("do-not-touch-existing-usb-files".utf8)
+            try existingData.write(to: existingURL)
+
+            let summary = await context.service.export([file], to: context.destination)
+
+            XCTAssertEqual(summary.verified, [])
+            XCTAssertEqual(summary.failed.map(\.error), [.insufficientSpace], error.domain)
+            XCTAssertTrue(summary.errorMessage?.contains("저장 공간") == true, error.domain)
+            XCTAssertTrue(summary.errorMessage?.contains(error.domain) == true)
+            XCTAssertTrue(summary.errorMessage?.contains(String(error.code)) == true)
+            XCTAssertEqual(context.deletionStore.pending(), [])
+            XCTAssertEqual(try Data(contentsOf: file.url), payload)
+            XCTAssertEqual(try Data(contentsOf: existingURL), existingData)
+            XCTAssertFalse(FileManager.default.fileExists(
+                atPath: context.usbDirectory.appendingPathComponent(file.name).path
+            ))
+            let partialDirectory = context.usbDirectory.appendingPathComponent(
+                IPhoneUSBExportService.partialDirectoryName
+            )
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: partialDirectory.path), [])
+        }
     }
 
     func testUSBRemovalStopsLaterFileAndKeepsEverySource() async throws {
@@ -252,7 +303,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
     }
 
     private func makeContext(
-        availableCapacity: @escaping @Sendable (URL) throws -> Int64? = { _ in Int64.max },
+        fileManager: FileManager = .default,
         volumeIdentity: @escaping @Sendable (URL) throws -> String? = { _ in "volume-1" },
         destinationVolumeID: String? = "volume-1",
         canAccessSecurityScope: Bool = true
@@ -268,10 +319,10 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         let progressStore = USBReceiveProgressStore()
         let service = IPhoneUSBExportService(
             deletionStore: deletionStore,
+            fileManager: fileManager,
             startAccessing: { _ in canAccessSecurityScope },
             stopAccessing: { _ in },
             volumeIdentity: volumeIdentity,
-            availableCapacity: availableCapacity,
             progressStore: progressStore,
             now: { Date(timeIntervalSince1970: 456) }
         )
@@ -336,6 +387,28 @@ private struct ExportContext {
     let deletionStore: IPhoneUSBDeletionDecisionStore
     let service: IPhoneUSBExportService
     let progressStore: USBReceiveProgressStore
+}
+
+private final class ZeroCapacityUSBFileManager: FileManager, @unchecked Sendable {
+    override func attributesOfFileSystem(forPath path: String) throws -> [FileAttributeKey: Any] {
+        [.systemFreeSize: NSNumber(value: 0)]
+    }
+}
+
+private final class DiskFullUSBFileManager: FileManager, @unchecked Sendable {
+    private let writeError: NSError
+
+    init(error: NSError) {
+        self.writeError = error
+        super.init()
+    }
+
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        if srcURL.pathExtension == "partial" {
+            throw writeError
+        }
+        try super.moveItem(at: srcURL, to: dstURL)
+    }
 }
 
 private final class SequencedVolumeIdentity: @unchecked Sendable {
