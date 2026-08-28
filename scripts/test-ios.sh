@@ -9,5 +9,6 @@ xcodebuild test \
   -project SimpleCameraAutoSender.xcodeproj \
   -scheme SimpleCameraAutoSender \
   -destination "platform=iOS Simulator,id=${DEVICE_ID}" \
+  -resultBundlePath build/TestResults.xcresult \
   CODE_SIGNING_ALLOWED=NO
 

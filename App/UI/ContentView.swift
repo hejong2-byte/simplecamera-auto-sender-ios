@@ -34,6 +34,7 @@ struct ContentView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
+                    .accessibilityIdentifier("open-settings")
                 }
                 .padding()
             }
@@ -99,15 +100,20 @@ struct ContentView: View {
     }
 
     private var canPresentIncomingFiles: Bool {
-        scenePhase == .active && pickerKind == nil && readinessMessage == nil
-            && !receiverModel.isExportingToUSB && !receiverModel.isReceivingFile
-            && !receiverModel.needsLocalFallbackDecision && !receiverModel.needsDeletionDecision
+        let receiverIsBusy = navigationPath.last == .receiver
+            && (receiverModel.isReceivingFile || receiverModel.needsLocalFallbackDecision || receiverModel.needsDeletionDecision)
+        return scenePhase == .active && pickerKind == nil && readinessMessage == nil
+            && !receiverModel.isChoosingUSBFolder && !receiverModel.isShowingSettingsConfirmation
+            && !receiverModel.isExportingToUSB && !receiverIsBusy
     }
 
     private func acceptIncoming(_ batch: IPhoneIncomingBatch, destination: IPhoneReceiveDestination) {
         guard incomingModel.accept(batch, destination: destination) else { return }
         receiverModel.setSelectedDestination(destination)
         navigationPath = [.receiver]
+        if destination == .usb, !receiverModel.hasUSBDestination {
+            receiverModel.isChoosingUSBFolder = true
+        }
     }
 
     private var header: some View {
@@ -171,6 +177,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!canPresentIncomingFiles)
+                .accessibilityIdentifier("incoming-pending")
             } else {
                 Text(incomingModel.isMonitoring ? "앱을 열어둔 동안 새 파일 도착을 확인합니다." : "앱을 다시 열면 새 파일을 확인합니다.")
                     .font(.caption).foregroundStyle(.secondary)

@@ -18,6 +18,13 @@ jobs:
         run: brew install xcodegen
       - name: Run iOS tests
         run: bash scripts/test-ios.sh
+      - name: Upload simulator test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Simulator-test-results
+          path: build/TestResults.xcresult
+          retention-days: 3
       - name: Build unsigned SideStore IPA
         run: bash scripts/build-unsigned-ipa.sh
       - name: Upload IPA test artifact

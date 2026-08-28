@@ -7,7 +7,6 @@ struct SettingsView: View {
     @ObservedObject var receiverModel: USBReceiverViewModel
     @State private var credential = ""
     @State private var showingResetConfirmation = false
-    @State private var selectingUSBDestination = false
 
     var body: some View {
         ScrollView {
@@ -37,13 +36,17 @@ struct SettingsView: View {
             Text("초기화한 시점 이전 사진은 다시 전송되지 않습니다.")
         }
         .fileImporter(
-            isPresented: $selectingUSBDestination,
+            isPresented: $receiverModel.isChoosingUSBFolder,
             allowedContentTypes: [.folder],
             allowsMultipleSelection: false
         ) { result in
             guard case let .success(urls) = result, let url = urls.first else { return }
             Task { await receiverModel.selectDestination(url) }
         }
+        .onChange(of: showingResetConfirmation) { _, showing in
+            receiverModel.isShowingSettingsConfirmation = showing
+        }
+        .onDisappear { receiverModel.isShowingSettingsConfirmation = false }
     }
 
     private var receiverSettingsCard: some View {
@@ -65,34 +68,23 @@ struct SettingsView: View {
                 .buttonStyle(.borderedProminent)
             }
 
-            Picker(
-                "기본 저장 위치",
-                selection: Binding(
-                    get: { receiverModel.selectedDestination },
-                    set: { receiverModel.setSelectedDestination($0) }
-                )
-            ) {
-                Text("나의 iPhone").tag(IPhoneReceiveDestination.iphoneLocal)
-                Text("USB 직접 저장").tag(IPhoneReceiveDestination.usb)
-            }
-            .pickerStyle(.segmented)
-
-            if receiverModel.selectedDestination == .usb {
-                Label(
-                    receiverModel.usbDisplayName ?? "USB 폴더 미선택",
-                    systemImage: "externaldrive"
-                )
-                HStack {
-                    Button("USB 폴더 선택") { selectingUSBDestination = true }
-                        .buttonStyle(.borderedProminent)
-                    if receiverModel.hasUSBDestination {
-                        Button("선택 해제", role: .destructive) {
-                            Task { await receiverModel.clearDestination() }
-                        }
-                        .buttonStyle(.bordered)
+            Text("새 파일이 도착하면 iPhone 또는 USB 저장을 선택합니다.")
+                .font(.subheadline)
+            Label(
+                receiverModel.usbDisplayName ?? "USB 폴더 미선택",
+                systemImage: "externaldrive"
+            )
+            HStack {
+                Button("USB 폴더 선택") { receiverModel.isChoosingUSBFolder = true }
+                    .buttonStyle(.borderedProminent)
+                if receiverModel.hasUSBDestination {
+                    Button("선택 해제", role: .destructive) {
+                        Task { await receiverModel.clearDestination() }
                     }
+                    .buttonStyle(.bordered)
                 }
             }
+            .disabled(receiverModel.isExportingToUSB || receiverModel.isReceivingFile)
 
             Toggle(
                 "셀룰러에서도 파일 수신",

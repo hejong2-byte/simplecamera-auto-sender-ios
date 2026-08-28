@@ -10,11 +10,23 @@ struct SimpleCameraAutoSenderApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(
-                model: AppDependencies.shared.makeContentViewModel(),
-                receiverModel: USBReceiverDependencies.shared.makeViewModel(),
-                incomingModel: USBReceiverDependencies.shared.makeIncomingFilesViewModel()
-            )
+            #if DEBUG && targetEnvironment(simulator)
+            if let simulation = ForegroundReceiveSimulation.current {
+                ContentView(model: simulation.content, receiverModel: simulation.receiver, incomingModel: simulation.incoming)
+            } else {
+                liveContent
+            }
+            #else
+            liveContent
+            #endif
         }
+    }
+
+    private var liveContent: some View {
+        ContentView(
+            model: AppDependencies.shared.makeContentViewModel(),
+            receiverModel: USBReceiverDependencies.shared.makeViewModel(),
+            incomingModel: USBReceiverDependencies.shared.makeIncomingFilesViewModel()
+        )
     }
 }

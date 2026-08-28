@@ -4,6 +4,25 @@ import XCTest
 
 @MainActor
 final class USBReceiverViewModelTests: XCTestCase {
+    func testChoosingUSBFolderDoesNotStartReceiveOrFallback() async throws {
+        let model = fallbackModel(pending: { [UUID()] }, receiveLocal: {}, approve: { _ in })
+        model.isChoosingUSBFolder = true
+        await model.pollOnce()
+        XCTAssertFalse(model.isPerformingReceive)
+        XCTAssertFalse(model.needsLocalFallbackDecision)
+        XCTAssertNil(model.lastError)
+    }
+
+    func testOldUSBProgressDoesNotReportAnActiveReceiveAfterLeavingTheScreen() async throws {
+        let progress = USBReceiveProgressStore()
+        let model = try exportModel(files: [], receiveProgressStore: progress) { _, _ in
+            IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        progress.publish(testProgress(stage: .downloading, name: "paused.zip", bytes: 50))
+        await waitUntil { model.receiveProgress?.stage == .downloading }
+        XCTAssertFalse(model.isReceivingFile, "A paused USB progress snapshot is not a running operation")
+    }
+
     func testFallbackApprovalKeepsTheDisplayedBatchFrozen() async throws {
         let receiver = UUID()
         let first = UUID()

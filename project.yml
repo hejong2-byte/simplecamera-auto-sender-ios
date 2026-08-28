@@ -6,8 +6,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    CURRENT_PROJECT_VERSION: 14
-    MARKETING_VERSION: 0.3.3
+    CURRENT_PROJECT_VERSION: 15
+    MARKETING_VERSION: 0.3.4
 targets:
   SimpleCameraAutoSender:
     type: application
@@ -42,12 +42,26 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hejong2byte.simplecameraautosender.tests
         GENERATE_INFOPLIST_FILE: YES
+  SimpleCameraAutoSenderUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: SimpleCameraAutoSender
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hejong2byte.simplecameraautosender.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: SimpleCameraAutoSender
 schemes:
   SimpleCameraAutoSender:
     build:
       targets:
         SimpleCameraAutoSender: all
         SimpleCameraAutoSenderTests: [test]
+        SimpleCameraAutoSenderUITests: [test]
     test:
       targets:
         - SimpleCameraAutoSenderTests
+        - SimpleCameraAutoSenderUITests

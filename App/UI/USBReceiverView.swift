@@ -5,7 +5,6 @@ struct USBReceiverView: View {
     @ObservedObject var model: USBReceiverViewModel
     @ObservedObject var incomingModel: IPhoneIncomingFilesViewModel
     @Environment(\.scenePhase) private var scenePhase
-    @State private var selectingDestination = false
 
     var body: some View {
         ScrollView {
@@ -38,7 +37,7 @@ struct USBReceiverView: View {
         }
         .onDisappear { model.stopForegroundPolling() }
         .fileImporter(
-            isPresented: $selectingDestination,
+            isPresented: $model.isChoosingUSBFolder,
             allowedContentTypes: [.folder],
             allowsMultipleSelection: false
         ) { result in
@@ -103,19 +102,6 @@ struct USBReceiverView: View {
     private var destinationCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("선택한 수신 작업의 저장 위치").font(.headline)
-            Picker(
-                "저장 위치",
-                selection: Binding(
-                    get: { model.selectedDestination },
-                    set: { model.setSelectedDestination($0) }
-                )
-            ) {
-                Text("나의 iPhone").tag(IPhoneReceiveDestination.iphoneLocal)
-                Text("USB 직접 저장").tag(IPhoneReceiveDestination.usb)
-            }
-            .pickerStyle(.segmented)
-            .disabled(model.isExportingToUSB)
-
             if model.selectedDestination == .iphoneLocal {
                 Label("받은 파일 폴더에 저장", systemImage: "iphone.gen3")
                     .foregroundStyle(.green)
@@ -123,19 +109,18 @@ struct USBReceiverView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Label(
-                    model.usbDisplayName ?? "USB 폴더를 선택해 주세요",
-                    systemImage: model.hasUSBDestination
-                        ? "externaldrive.fill.badge.checkmark"
-                        : "externaldrive.badge.questionmark"
-                )
-                .foregroundStyle(model.hasUSBDestination ? .green : .orange)
-                Button(model.hasUSBDestination ? "USB 폴더 다시 선택" : "USB 폴더 선택") {
-                    selectingDestination = true
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.isExportingToUSB)
+                Label("USB에 직접 저장", systemImage: "externaldrive")
             }
+            Label(
+                model.usbDisplayName ?? "USB 폴더 미선택",
+                systemImage: model.hasUSBDestination ? "externaldrive.fill.badge.checkmark" : "externaldrive.badge.questionmark"
+            )
+            .foregroundStyle(model.hasUSBDestination ? .green : .orange)
+            Button(model.hasUSBDestination ? "USB 폴더 다시 선택" : "USB 폴더 선택") {
+                model.isChoosingUSBFolder = true
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.isExportingToUSB || model.isReceivingFile)
             Text("새 파일은 도착 안내에서 저장 위치를 선택한 뒤 받습니다. 이미 저장된 파일은 아래 목록에서 USB로 복사하세요.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -260,7 +245,7 @@ struct USBReceiverView: View {
                 Task { await model.exportSelectedFilesToUSB() }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!model.hasStoredFileSelection || model.isExportingToUSB)
+            .disabled(!model.hasStoredFileSelection || model.isExportingToUSB || model.isReceivingFile)
 
             if model.isExportingToUSB || model.usbExportProgress != nil || model.lastUSBExportError != nil {
                 usbExportStatus

@@ -35,6 +35,9 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var selectedStoredFileIDs: Set<String> = []
     @Published private(set) var needsLocalFallbackDecision = false
     @Published private(set) var needsDeletionDecision = false
+    @Published var isChoosingUSBFolder = false
+    @Published var isShowingSettingsConfirmation = false
+    @Published private(set) var isPerformingReceive = false
 
     private enum USBFallbackMode {
         case none
@@ -153,7 +156,8 @@ final class USBReceiverViewModel: ObservableObject {
     var pendingDeletionCount: Int { pendingDeletionDecisions().count }
     var isReceivingFile: Bool {
         guard let stage = receiveProgress?.stage else { return false }
-        return [.discovering, .downloading, .downloaded, .verifying, .finalizing, .acknowledging].contains(stage)
+        return (isPerformingReceive || receiveProgress?.destination == .iphoneLocal)
+            && [.discovering, .downloading, .downloaded, .verifying, .finalizing, .acknowledging].contains(stage)
     }
 
     func refresh() async {
@@ -252,7 +256,10 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     func pollOnce() async {
-        guard !isExportingToUSB else { return }
+        guard !isExportingToUSB, !isPerformingReceive, !isChoosingUSBFolder,
+              !needsLocalFallbackDecision, !needsDeletionDecision else { return }
+        isPerformingReceive = true
+        defer { isPerformingReceive = false }
         do {
             switch selectedDestination {
             case .iphoneLocal:
@@ -309,7 +316,7 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     func exportSelectedFilesToUSB() async {
-        guard !isExportingToUSB else { return }
+        guard !isExportingToUSB, !isReceivingFile else { return }
         let selected = storedFiles.filter { selectedStoredFileIDs.contains($0.id) }
         guard !selected.isEmpty else { return }
         isExportingToUSB = true
