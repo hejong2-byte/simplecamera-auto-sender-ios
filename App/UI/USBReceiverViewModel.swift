@@ -41,7 +41,6 @@ final class USBReceiverViewModel: ObservableObject {
 
     private enum USBFallbackMode {
         case none
-        case local(Set<UUID>)
         case serverWait(Set<UUID>)
     }
 
@@ -282,9 +281,7 @@ final class USBReceiverViewModel: ObservableObject {
         guard !promptedDeliveryIDs.isEmpty else { return }
         do {
             try approveLocalFallback(promptedDeliveryIDs)
-            fallbackMode = .local(promptedDeliveryIDs)
-            needsLocalFallbackDecision = false
-            lastError = nil
+            setSelectedDestination(.iphoneLocal)
             try await receiveLocalOnce()
         } catch { lastError = Self.message(for: error) }
     }
@@ -460,10 +457,6 @@ final class USBReceiverViewModel: ObservableObject {
 
     private func pollUSB() async throws {
         switch fallbackMode {
-        case .local:
-            let pending = try await pendingDeliveryIDs()
-            if pending.isEmpty { resetFallback() } else { try await receiveLocalOnce() }
-            return
         case let .serverWait(waiting):
             let pending = try await pendingDeliveryIDs()
             if pending.isEmpty {

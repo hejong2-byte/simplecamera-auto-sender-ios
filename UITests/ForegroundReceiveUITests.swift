@@ -12,7 +12,10 @@ final class ForegroundReceiveUITests: XCTestCase {
         XCTAssertTrue(app.buttons["서버에 대기"].waitForExistence(timeout: 10))
         keepScreenshot("usb-local-fallback-choice", app: app)
         app.buttons["iPhone에 저장"].tap()
-        XCTAssertTrue(app.staticTexts["받은 파일 폴더에 저장"].waitForExistence(timeout: 5))
+        let destination = app.staticTexts["받은 파일 폴더에 저장"]
+        reveal(destination, in: app)
+        XCTAssertTrue(destination.isHittable)
+        keepScreenshot("usb-fallback-iphone-destination", app: app)
     }
 
     func testMainScreenPresentsChoicesAndPostponedFilesCanBeReopened() {
