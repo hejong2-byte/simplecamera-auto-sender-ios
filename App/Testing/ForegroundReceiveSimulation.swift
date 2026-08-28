@@ -37,7 +37,15 @@ final class ForegroundReceiveSimulation {
             registrationStore: registration,
             bookmarkStore: USBBookmarkStore(fileURL: root.appendingPathComponent("destination.json")),
             registrar: SimulationRegistrar(),
-            receiveOnce: { USBReceiveSummary(discovered: 0, completed: 0) },
+            receiveOnce: {
+                let approved = try choices.allowedDeliveryIDs(receiverID: receiverID, destination: .usb)
+                if !approved.isEmpty { throw USBReceiveServiceError.missingDestination }
+                return USBReceiveSummary(discovered: 0, completed: 0)
+            },
+            pendingDeliveryIDs: { Set(try choices.destinations(receiverID: receiverID).keys) },
+            approveLocalFallback: { ids in
+                try choices.approve(ids, receiverID: receiverID, destination: .iphoneLocal)
+            },
             progressUpdates: { AsyncStream { $0.finish() } },
             defaultDeviceName: "수신 테스트 iPhone",
             preferences: preferences

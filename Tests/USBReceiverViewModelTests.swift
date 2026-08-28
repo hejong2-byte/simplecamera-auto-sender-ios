@@ -41,6 +41,7 @@ final class USBReceiverViewModelTests: XCTestCase {
 
         XCTAssertEqual(try store.destinations(receiverID: receiver), [first: .iphoneLocal])
         XCTAssertEqual(localCalls.value, 1)
+        XCTAssertEqual(model.selectedDestination, .iphoneLocal, "The screen must show the fallback destination actually chosen")
     }
 
     func testFailedFallbackApprovalCannotStartTheLocalReceiver() async throws {

@@ -1,6 +1,20 @@
 import XCTest
 
 final class ForegroundReceiveUITests: XCTestCase {
+    func testUSBChoiceOpensFolderPickerAndCancellationAllowsLocalFallback() {
+        let app = launchSimulation()
+        XCTAssertTrue(app.buttons["USB에 저장"].waitForExistence(timeout: 20))
+        app.buttons["USB에 저장"].tap()
+        let cancel = app.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "Cancel", "취소")).firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 15), "USB choice must open the system folder picker")
+        keepScreenshot("usb-folder-picker", app: app)
+        cancel.tap()
+        XCTAssertTrue(app.buttons["서버에 대기"].waitForExistence(timeout: 10))
+        keepScreenshot("usb-local-fallback-choice", app: app)
+        app.buttons["iPhone에 저장"].tap()
+        XCTAssertTrue(app.staticTexts["받은 파일 폴더에 저장"].waitForExistence(timeout: 5))
+    }
+
     func testMainScreenPresentsChoicesAndPostponedFilesCanBeReopened() {
         let app = launchSimulation()
         XCTAssertTrue(app.buttons["iPhone에 저장"].waitForExistence(timeout: 20))
