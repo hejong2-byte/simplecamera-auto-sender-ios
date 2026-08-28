@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct USBReceiverView: View {
     @ObservedObject var model: USBReceiverViewModel
+    @ObservedObject var incomingModel: IPhoneIncomingFilesViewModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectingDestination = false
 
@@ -10,6 +11,13 @@ struct USBReceiverView: View {
         ScrollView {
             VStack(spacing: 16) {
                 identityCard
+                if !incomingModel.pendingFiles.isEmpty {
+                    Button("수신 대기 \(incomingModel.pendingFiles.count)개 · 저장 위치 선택") {
+                        incomingModel.showPendingFiles()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.isExportingToUSB || model.isReceivingFile)
+                }
                 destinationCard
                 progressCard
                 storedFilesCard
@@ -94,7 +102,7 @@ struct USBReceiverView: View {
 
     private var destinationCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("PC에서 새로 받을 파일의 저장 위치").font(.headline)
+            Text("선택한 수신 작업의 저장 위치").font(.headline)
             Picker(
                 "저장 위치",
                 selection: Binding(
@@ -128,7 +136,7 @@ struct USBReceiverView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(model.isExportingToUSB)
             }
-            Text("iPhone에 이미 저장된 파일은 아래 목록에서 선택해 USB로 복사하세요.")
+            Text("새 파일은 도착 안내에서 저장 위치를 선택한 뒤 받습니다. 이미 저장된 파일은 아래 목록에서 USB로 복사하세요.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -197,7 +205,7 @@ struct USBReceiverView: View {
                     .font(.subheadline)
                     .foregroundStyle(.red)
             } else if model.receiveProgress == nil || model.receiveProgress?.stage == .idle {
-                Text("PC에서 이 iPhone 코드로 파일을 보내면 앱을 열었을 때 확인합니다.")
+                Text("PC에서 이 iPhone 코드로 파일을 보내면 앱을 열어둔 동안 도착 안내가 표시됩니다.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }

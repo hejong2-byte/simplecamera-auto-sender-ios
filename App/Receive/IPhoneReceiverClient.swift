@@ -83,15 +83,19 @@ protocol IPhoneReceiverRegistering: Sendable {
 }
 
 struct IPhoneReceiverClient: Sendable {
+    typealias AllowedDeliveryIDs = @Sendable (UUID) throws -> Set<UUID>?
     private let requests: IPhoneReceiverRequestFactory
     private let transport: any IPhoneReceiverTransport
+    private let allowedDeliveryIDs: AllowedDeliveryIDs
 
     init(
         baseURL: URL = AppConfiguration.relayAPIBaseURL,
-        transport: any IPhoneReceiverTransport = URLSessionIPhoneReceiverTransport()
+        transport: any IPhoneReceiverTransport = URLSessionIPhoneReceiverTransport(),
+        allowedDeliveryIDs: @escaping AllowedDeliveryIDs = { _ in nil }
     ) {
         requests = IPhoneReceiverRequestFactory(baseURL: baseURL)
         self.transport = transport
+        self.allowedDeliveryIDs = allowedDeliveryIDs
     }
 
     func register(
@@ -117,10 +121,12 @@ struct IPhoneReceiverClient: Sendable {
             receiverID: receiverID.uuidString.lowercased(),
             receiveSecret: receiveSecret
         )
-        return try IPhoneReceiverJSON.decoder.decode(
+        let deliveries = try IPhoneReceiverJSON.decoder.decode(
             [IPhoneDelivery].self,
             from: try await successfulData(for: request)
         )
+        guard let allowed = try allowedDeliveryIDs(receiverID) else { return deliveries }
+        return deliveries.filter { allowed.contains($0.deliveryID) }
     }
 
     func updateFeatures(

@@ -5,6 +5,7 @@ final class USBReceiverViewModel: ObservableObject {
     typealias ReceiveOnce = @Sendable () async throws -> USBReceiveSummary
     typealias ReceiveLocalOnce = @Sendable () async throws -> Void
     typealias PendingDeliveryIDs = @Sendable () async throws -> Set<UUID>
+    typealias ApproveLocalFallback = @Sendable (Set<UUID>) throws -> Void
     typealias StoredFilesProvider = @Sendable () throws -> [IPhoneStoredFile]
     typealias ExportFiles = @Sendable (
         [IPhoneStoredFile],
@@ -48,6 +49,7 @@ final class USBReceiverViewModel: ObservableObject {
     private let receiveOnce: ReceiveOnce
     private let receiveLocalOnce: ReceiveLocalOnce
     private let pendingDeliveryIDs: PendingDeliveryIDs
+    private let approveLocalFallback: ApproveLocalFallback
     private let storedFilesProvider: StoredFilesProvider
     private let exportFiles: ExportFiles
     private let pendingDeletionDecisions: PendingDeletionDecisions
@@ -71,6 +73,7 @@ final class USBReceiverViewModel: ObservableObject {
         receiveOnce: @escaping ReceiveOnce,
         receiveLocalOnce: @escaping ReceiveLocalOnce = {},
         pendingDeliveryIDs: @escaping PendingDeliveryIDs = { [] },
+        approveLocalFallback: @escaping ApproveLocalFallback = { _ in },
         storedFiles: @escaping StoredFilesProvider = { [] },
         exportFiles: @escaping ExportFiles = { _, _ in
             IPhoneUSBExportSummary(verified: [], failed: [])
@@ -94,6 +97,7 @@ final class USBReceiverViewModel: ObservableObject {
         self.receiveOnce = receiveOnce
         self.receiveLocalOnce = receiveLocalOnce
         self.pendingDeliveryIDs = pendingDeliveryIDs
+        self.approveLocalFallback = approveLocalFallback
         self.storedFilesProvider = storedFiles
         self.exportFiles = exportFiles
         self.pendingDeletionDecisions = pendingDeletionDecisions
@@ -115,6 +119,13 @@ final class USBReceiverViewModel: ObservableObject {
                 } else if previousStage == .failed || progress.stage != .idle {
                     if self?.needsLocalFallbackDecision == false {
                         self?.lastError = nil
+                    }
+                }
+                if progress.stage == .completed, progress.destination == .iphoneLocal {
+                    do {
+                        self?.storedFiles = try self?.storedFilesProvider() ?? []
+                    } catch {
+                        self?.lastError = "받은 파일 목록을 새로 고치지 못했습니다. " + Self.message(for: error)
                     }
                 }
             }
@@ -140,6 +151,10 @@ final class USBReceiverViewModel: ObservableObject {
     var hasUSBDestination: Bool { usbDisplayName != nil }
     var hasStoredFileSelection: Bool { !selectedStoredFileIDs.isEmpty }
     var pendingDeletionCount: Int { pendingDeletionDecisions().count }
+    var isReceivingFile: Bool {
+        guard let stage = receiveProgress?.stage else { return false }
+        return [.discovering, .downloading, .downloaded, .verifying, .finalizing, .acknowledging].contains(stage)
+    }
 
     func refresh() async {
         do {
@@ -197,6 +212,7 @@ final class USBReceiverViewModel: ObservableObject {
             lastError = destination?.isStale == true
                 ? "USB 폴더 권한이 만료되었습니다. 다시 선택해 주세요."
                 : nil
+            if destination != nil, destination?.isStale == false { resetFallback() }
         } catch {
             lastError = "선택한 USB 폴더를 저장하지 못했습니다."
         }
@@ -257,10 +273,13 @@ final class USBReceiverViewModel: ObservableObject {
 
     func chooseLocalFallback() async {
         guard !promptedDeliveryIDs.isEmpty else { return }
-        fallbackMode = .local(promptedDeliveryIDs)
-        needsLocalFallbackDecision = false
-        lastError = nil
-        do { try await receiveLocalOnce() } catch { lastError = Self.message(for: error) }
+        do {
+            try approveLocalFallback(promptedDeliveryIDs)
+            fallbackMode = .local(promptedDeliveryIDs)
+            needsLocalFallbackDecision = false
+            lastError = nil
+            try await receiveLocalOnce()
+        } catch { lastError = Self.message(for: error) }
     }
 
     func chooseServerWait() async {

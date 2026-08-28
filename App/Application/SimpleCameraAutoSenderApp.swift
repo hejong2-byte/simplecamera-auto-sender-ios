@@ -12,7 +12,8 @@ struct SimpleCameraAutoSenderApp: App {
         WindowGroup {
             ContentView(
                 model: AppDependencies.shared.makeContentViewModel(),
-                receiverModel: USBReceiverDependencies.shared.makeViewModel()
+                receiverModel: USBReceiverDependencies.shared.makeViewModel(),
+                incomingModel: USBReceiverDependencies.shared.makeIncomingFilesViewModel()
             )
         }
     }

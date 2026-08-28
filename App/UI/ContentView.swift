@@ -4,16 +4,22 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var model: ContentViewModel
     @StateObject private var receiverModel: USBReceiverViewModel
+    @StateObject private var incomingModel: IPhoneIncomingFilesViewModel
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var navigationPath: [Destination] = []
     @State private var pickerKind: ManualMediaKind?
     @State private var readinessMessage: String?
 
-    init(model: ContentViewModel, receiverModel: USBReceiverViewModel) {
+    private enum Destination: Hashable { case receiver, settings }
+
+    init(model: ContentViewModel, receiverModel: USBReceiverViewModel, incomingModel: IPhoneIncomingFilesViewModel) {
         _model = StateObject(wrappedValue: model)
         _receiverModel = StateObject(wrappedValue: receiverModel)
+        _incomingModel = StateObject(wrappedValue: incomingModel)
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             ScrollView {
                 VStack(spacing: 16) {
                     header
@@ -21,9 +27,7 @@ struct ContentView: View {
                     manualTransferCard
                     manualStatusCard
                     receiverCard
-                    NavigationLink {
-                        SettingsView(model: model, receiverModel: receiverModel)
-                    } label: {
+                    NavigationLink(value: Destination.settings) {
                         Label("설정", systemImage: "gearshape.fill")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
@@ -36,6 +40,14 @@ struct ContentView: View {
             .background(Color(.systemGroupedBackground))
             .navigationTitle("업무사진 전송")
             .task { await model.refresh() }
+            .navigationDestination(for: Destination.self) { destination in
+                switch destination {
+                case .receiver:
+                    USBReceiverView(model: receiverModel, incomingModel: incomingModel)
+                case .settings:
+                    SettingsView(model: model, receiverModel: receiverModel)
+                }
+            }
             .sheet(item: $pickerKind) { kind in
                 ManualMediaPicker(
                     kind: kind,
@@ -64,6 +76,38 @@ struct ContentView: View {
                 Text(readinessMessage ?? "")
             }
         }
+        .task { incomingModel.setActive(scenePhase == .active) }
+        .onChange(of: scenePhase) { _, phase in
+            incomingModel.setActive(phase == .active)
+        }
+        .confirmationDialog(
+            incomingModel.prompt?.title ?? "PC 파일 도착",
+            isPresented: Binding(
+                get: { incomingModel.prompt != nil && canPresentIncomingFiles },
+                set: { if !$0, canPresentIncomingFiles { incomingModel.postponePrompt() } }
+            ),
+            titleVisibility: .visible,
+            presenting: incomingModel.prompt
+        ) { batch in
+            Button("iPhone에 저장") { acceptIncoming(batch, destination: .iphoneLocal) }
+            Button("USB에 저장") { acceptIncoming(batch, destination: .usb) }
+            Button("나중에 받기", role: .cancel) { incomingModel.postponePrompt() }
+        } message: { batch in
+            Text(batch.message)
+        }
+        .onDisappear { incomingModel.setActive(false) }
+    }
+
+    private var canPresentIncomingFiles: Bool {
+        scenePhase == .active && pickerKind == nil && readinessMessage == nil
+            && !receiverModel.isExportingToUSB && !receiverModel.isReceivingFile
+            && !receiverModel.needsLocalFallbackDecision && !receiverModel.needsDeletionDecision
+    }
+
+    private func acceptIncoming(_ batch: IPhoneIncomingBatch, destination: IPhoneReceiveDestination) {
+        guard incomingModel.accept(batch, destination: destination) else { return }
+        receiverModel.setSelectedDestination(destination)
+        navigationPath = [.receiver]
     }
 
     private var header: some View {
@@ -103,26 +147,40 @@ struct ContentView: View {
     }
 
     private var receiverCard: some View {
-        NavigationLink {
-            USBReceiverView(model: receiverModel)
-        } label: {
-            VStack(alignment: .leading, spacing: 8) {
-                Label("PC 파일 수신", systemImage: "externaldrive.badge.icloud")
-                    .font(.headline)
-                Text("PC에서 보낸 파일을 iPhone에 저장하거나 USB로 직접 저장")
-                    .font(.subheadline)
+        VStack(alignment: .leading, spacing: 10) {
+            NavigationLink(value: Destination.receiver) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("PC 파일 수신", systemImage: "externaldrive.badge.icloud")
+                        .font(.headline)
+                    Text("PC에서 보낸 파일을 iPhone에 저장하거나 USB로 직접 저장")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Text(receiverModel.registrationCode.map { "코드 \($0)" } ?? "기기 등록 필요")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                    }
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
-                HStack {
-                    Text(receiverModel.registrationCode.map { "코드 \($0)" } ?? "기기 등록 필요")
-                    Spacer()
-                    Image(systemName: "chevron.right")
                 }
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
             }
-            .cardStyle()
+            .buttonStyle(.plain)
+            if !incomingModel.pendingFiles.isEmpty {
+                Button("수신 대기 \(incomingModel.pendingFiles.count)개 · 저장 위치 선택") {
+                    incomingModel.showPendingFiles()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canPresentIncomingFiles)
+            } else {
+                Text(incomingModel.isMonitoring ? "앱을 열어둔 동안 새 파일 도착을 확인합니다." : "앱을 다시 열면 새 파일을 확인합니다.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let error = incomingModel.lastError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.red)
+            }
         }
-        .buttonStyle(.plain)
+        .cardStyle()
         .task { await receiverModel.refresh() }
     }
 

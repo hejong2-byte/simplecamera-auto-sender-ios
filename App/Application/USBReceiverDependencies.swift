@@ -51,13 +51,36 @@ final class USBReceiverDependencies: @unchecked Sendable {
             fileURL: stateDirectory.appendingPathComponent("deletion-decisions.json")
         )
         let preferences = USBReceiverPreferences()
+        let approvalStore = IPhoneReceiveApprovalStore(
+            fileURL: stateDirectory.appendingPathComponent("receive-approvals.json")
+        )
         let client = IPhoneReceiverClient(
             transport: PolicyIPhoneReceiverTransport(preferences: preferences)
+        )
+        let localClient = IPhoneReceiverClient(
+            transport: PolicyIPhoneReceiverTransport(preferences: preferences),
+            allowedDeliveryIDs: { receiverID in
+                try approvalStore.allowedDeliveryIDs(
+                    receiverID: receiverID,
+                    destination: .iphoneLocal,
+                    resuming: Set(jobStore.load().jobs.map { $0.delivery.deliveryID })
+                )
+            }
+        )
+        let usbClient = IPhoneReceiverClient(
+            transport: PolicyIPhoneReceiverTransport(preferences: preferences),
+            allowedDeliveryIDs: { receiverID in
+                try approvalStore.allowedDeliveryIDs(
+                    receiverID: receiverID,
+                    destination: .usb,
+                    resuming: Set(ledger.allCheckpoints().map(\.deliveryID))
+                )
+            }
         )
         let progressStore = USBReceiveProgressStore()
         let exportProgressStore = USBReceiveProgressStore()
         let directUSBService = USBReceiveService(
-            client: client,
+            client: usbClient,
             ledger: ledger,
             credentials: { try registrationStore.load() },
             destination: { try bookmarkStore.resolve() },
@@ -65,12 +88,11 @@ final class USBReceiverDependencies: @unchecked Sendable {
         )
         let backgroundSession = BackgroundIPhoneReceiveSession.shared
         let localEngine = IPhoneLocalReceiveEngine(
-            client: client,
+            client: localClient,
             scheduler: backgroundSession,
             jobStore: jobStore,
             catalog: catalog,
             credentials: { try registrationStore.load() },
-            automaticDiscoveryAllowed: { preferences.selectedDestination == .iphoneLocal },
             progressStore: progressStore
         )
         backgroundSession.bind(sink: localEngine)
@@ -82,6 +104,9 @@ final class USBReceiverDependencies: @unchecked Sendable {
             registrationStore: registrationStore,
             bookmarkStore: bookmarkStore,
             preferences: preferences,
+            approvalStore: approvalStore,
+            jobStore: jobStore,
+            ledger: ledger,
             client: client,
             directUSBService: directUSBService,
             localEngine: localEngine,
@@ -98,6 +123,9 @@ final class USBReceiverDependencies: @unchecked Sendable {
     private let registrationStore: IPhoneReceiverRegistrationStore
     private let bookmarkStore: USBBookmarkStore
     private let preferences: USBReceiverPreferences
+    private let approvalStore: IPhoneReceiveApprovalStore
+    private let jobStore: IPhoneLocalReceiveJobStore
+    private let ledger: USBReceiveLedger
     private let client: IPhoneReceiverClient
     private let directUSBService: USBReceiveService
     private let localEngine: IPhoneLocalReceiveEngine
@@ -111,6 +139,9 @@ final class USBReceiverDependencies: @unchecked Sendable {
         registrationStore: IPhoneReceiverRegistrationStore,
         bookmarkStore: USBBookmarkStore,
         preferences: USBReceiverPreferences,
+        approvalStore: IPhoneReceiveApprovalStore,
+        jobStore: IPhoneLocalReceiveJobStore,
+        ledger: USBReceiveLedger,
         client: IPhoneReceiverClient,
         directUSBService: USBReceiveService,
         localEngine: IPhoneLocalReceiveEngine,
@@ -123,6 +154,9 @@ final class USBReceiverDependencies: @unchecked Sendable {
         self.registrationStore = registrationStore
         self.bookmarkStore = bookmarkStore
         self.preferences = preferences
+        self.approvalStore = approvalStore
+        self.jobStore = jobStore
+        self.ledger = ledger
         self.client = client
         self.directUSBService = directUSBService
         self.localEngine = localEngine
@@ -150,15 +184,26 @@ final class USBReceiverDependencies: @unchecked Sendable {
             receiveLocalOnce: { [localEngine] in
                 try await localEngine.discoverAndSchedule(force: true)
             },
-            pendingDeliveryIDs: { [client, registrationStore] in
+            pendingDeliveryIDs: { [client, registrationStore, approvalStore, ledger, jobStore] in
                 guard let credentials = try registrationStore.load() else { return [] }
                 let deliveries = try await client.list(
                     receiverID: credentials.identity.receiverID,
                     receiveSecret: credentials.secret
                 )
+                let approved = try approvalStore.destinations(receiverID: credentials.identity.receiverID)
+                let existing = Set(ledger.allCheckpoints().map(\.deliveryID))
+                    .union(try jobStore.load().jobs.map { $0.delivery.deliveryID })
                 return Set(deliveries.compactMap {
-                    [.available, .leased].contains($0.state) ? $0.deliveryID : nil
+                    [.available, .leased].contains($0.state)
+                        && (approved[$0.deliveryID] != nil || existing.contains($0.deliveryID))
+                        ? $0.deliveryID : nil
                 })
+            },
+            approveLocalFallback: { [approvalStore, registrationStore] ids in
+                guard let credentials = try registrationStore.load() else {
+                    throw USBReceiveServiceError.missingRegistration
+                }
+                try approvalStore.approve(ids, receiverID: credentials.identity.receiverID, destination: .iphoneLocal)
             },
             storedFiles: { [catalog] in try catalog.refresh() },
             exportFiles: { [exporter] files, destination in
@@ -181,6 +226,35 @@ final class USBReceiverDependencies: @unchecked Sendable {
             exportProgressUpdates: { [exportProgressStore] in exportProgressStore.updates() },
             defaultDeviceName: UIDevice.current.name,
             preferences: preferences
+        )
+    }
+
+    @MainActor
+    func makeIncomingFilesViewModel() -> IPhoneIncomingFilesViewModel {
+        IPhoneIncomingFilesViewModel(
+            loadPendingFiles: { [client, registrationStore, approvalStore, ledger, jobStore] in
+                guard let credentials = try registrationStore.load() else {
+                    return IPhoneIncomingSnapshot(receiverID: nil, files: [])
+                }
+                let receiverID = credentials.identity.receiverID
+                let files = try await client.list(receiverID: receiverID, receiveSecret: credentials.secret)
+                let current = try registrationStore.load()?.identity.receiverID
+                guard current == receiverID else {
+                    return IPhoneIncomingSnapshot(receiverID: current, files: [])
+                }
+                let approved = try approvalStore.destinations(receiverID: receiverID)
+                let existing = Set(ledger.allCheckpoints().map(\.deliveryID))
+                    .union(try jobStore.load().jobs.map { $0.delivery.deliveryID })
+                return IPhoneIncomingSnapshot(receiverID: receiverID, files: files.filter {
+                    approved[$0.deliveryID] == nil && !existing.contains($0.deliveryID)
+                })
+            },
+            approveFiles: { [approvalStore, registrationStore] receiverID, ids, destination in
+                guard try registrationStore.load()?.identity.receiverID == receiverID else {
+                    throw USBReceiveServiceError.missingRegistration
+                }
+                try approvalStore.approve(ids, receiverID: receiverID, destination: destination)
+            }
         )
     }
 }
