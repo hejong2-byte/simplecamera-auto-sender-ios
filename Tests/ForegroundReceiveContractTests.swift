@@ -25,6 +25,13 @@ final class ForegroundReceiveContractTests: XCTestCase {
         XCTAssertTrue(model.contains("approveLocalFallback"), "USB fallback may not consume unrelated unapproved files")
     }
 
+    func testDestinationChoiceIsNotOverriddenByAnUnappliedPicker() throws {
+        let receiver = try source("App/UI/USBReceiverView.swift")
+        let settings = try source("App/UI/SettingsView.swift")
+        XCTAssertFalse(receiver.contains("setSelectedDestination"))
+        XCTAssertFalse(settings.contains("setSelectedDestination"))
+    }
+
     private func source(_ path: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()

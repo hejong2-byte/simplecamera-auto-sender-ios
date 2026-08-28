@@ -4,6 +4,55 @@ import XCTest
 
 @MainActor
 final class USBReceiverViewModelTests: XCTestCase {
+    func testFallbackApprovalKeepsTheDisplayedBatchFrozen() async throws {
+        let receiver = UUID()
+        let first = UUID()
+        let next = UUID()
+        let pending = PendingReceiveIDs([first])
+        let store = IPhoneReceiveApprovalStore(fileURL: temporaryDirectory().appendingPathComponent("approvals.json"))
+        let localCalls = ReceiveCounter()
+        let model = fallbackModel(pending: { pending.value }, receiveLocal: { localCalls.increment() }, approve: {
+            try store.approve($0, receiverID: receiver, destination: .iphoneLocal)
+        })
+        await model.pollOnce()
+        XCTAssertTrue(model.needsLocalFallbackDecision)
+        pending.value = [first, next]
+        await model.pollOnce()
+        await model.chooseLocalFallback()
+
+        XCTAssertEqual(try store.destinations(receiverID: receiver), [first: .iphoneLocal])
+        XCTAssertEqual(localCalls.value, 1)
+    }
+
+    func testFailedFallbackApprovalCannotStartTheLocalReceiver() async throws {
+        let localCalls = ReceiveCounter()
+        let model = fallbackModel(pending: { [UUID()] }, receiveLocal: { localCalls.increment() }, approve: { _ in
+            throw CocoaError(.fileWriteNoPermission)
+        })
+        await model.pollOnce()
+        await model.chooseLocalFallback()
+
+        XCTAssertEqual(localCalls.value, 0)
+        XCTAssertTrue(model.needsLocalFallbackDecision)
+        XCTAssertNotNil(model.lastError)
+    }
+
+    func testCompletedLocalReceiveImmediatelyRefreshesSavedFiles() async throws {
+        let file = try storedFile()
+        let progress = USBReceiveProgressStore()
+        let model = try exportModel(files: [file], receiveProgressStore: progress) { _, _ in
+            IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        XCTAssertTrue(model.storedFiles.isEmpty)
+        progress.publish(USBReceiveProgress(
+            stage: .completed, destination: .iphoneLocal, deliveryID: UUID(), fileName: file.name,
+            currentIndex: 1, totalCount: 1, completedCount: 1,
+            bytesReceived: file.size, totalBytes: file.size, startedAt: nil, expiresAt: nil, errorMessage: nil
+        ))
+        await waitUntil { model.storedFiles.count == 1 }
+        XCTAssertEqual(model.storedFiles.map(\.id), [file.id])
+    }
+
     func testRecoveryToIdleClearsThePreviousPCError() async throws {
         let progress = USBReceiveProgressStore()
         let model = try exportModel(files: [], receiveProgressStore: progress) { _, _ in
@@ -305,6 +354,10 @@ final class USBReceiverViewModelTests: XCTestCase {
         XCTAssertEqual(usbCounter.value, 1)
         XCTAssertEqual(localCounter.value, 0)
         XCTAssertFalse(model.needsLocalFallbackDecision)
+
+        await model.selectDestination(temporaryDirectory())
+        await model.pollOnce()
+        XCTAssertEqual(usbCounter.value, 2, "Choosing a new USB folder must release server-wait")
     }
 
     func testRegistrationDestinationAndProgressArePublishedWithoutPhotoPermission() async throws {
@@ -414,6 +467,28 @@ final class USBReceiverViewModelTests: XCTestCase {
 
         model.stopForegroundPolling()
         XCTAssertFalse(model.isPolling)
+    }
+
+    private func fallbackModel(
+        pending: @escaping USBReceiverViewModel.PendingDeliveryIDs,
+        receiveLocal: @escaping USBReceiverViewModel.ReceiveLocalOnce,
+        approve: @escaping USBReceiverViewModel.ApproveLocalFallback
+    ) -> USBReceiverViewModel {
+        let preferences = isolatedPreferences()
+        preferences.selectedDestination = .usb
+        return USBReceiverViewModel(
+            uploadCredentialStore: InMemoryCredentialStore(),
+            registrationStore: IPhoneReceiverRegistrationStore(identityStore: InMemoryCredentialStore(), secretStore: InMemoryCredentialStore()),
+            bookmarkStore: USBBookmarkStore(fileURL: temporaryDirectory().appendingPathComponent("destination.json")),
+            registrar: StubReceiverRegistrar(),
+            receiveOnce: { throw USBReceiveServiceError.missingDestination },
+            receiveLocalOnce: receiveLocal,
+            pendingDeliveryIDs: pending,
+            approveLocalFallback: approve,
+            progressUpdates: { AsyncStream { $0.finish() } },
+            defaultDeviceName: "iPhone",
+            preferences: preferences
+        )
     }
 
     private func storedFile() throws -> IPhoneStoredFile {
@@ -615,5 +690,15 @@ private final class ReceiveCounter: @unchecked Sendable {
 
     func increment() {
         lock.withLock { count += 1 }
+    }
+}
+
+private final class PendingReceiveIDs: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ids: Set<UUID>
+    init(_ ids: Set<UUID>) { self.ids = ids }
+    var value: Set<UUID> {
+        get { lock.withLock { ids } }
+        set { lock.withLock { ids = newValue } }
     }
 }

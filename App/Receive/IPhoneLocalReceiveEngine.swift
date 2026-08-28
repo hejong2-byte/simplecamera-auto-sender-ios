@@ -78,6 +78,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
     private let now: @Sendable () -> Date
     private var progressDeliveryID: UUID?
     private var progressStartedAt: Date?
+    private var isDiscovering = false
 
     init(
         client: any IPhoneLocalReceiveNetworking,
@@ -102,6 +103,9 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
     }
 
     func discoverAndSchedule(force: Bool = false) async throws {
+        guard !isDiscovering else { return }
+        isDiscovering = true
+        defer { isDiscovering = false }
         guard force || automaticDiscoveryAllowed() else { return }
         let current = try jobStore.load().jobs
         if current.contains(where: { ![.completed, .failed].contains($0.stage) }) {

@@ -43,6 +43,7 @@ actor USBReceiveService {
     private let now: @Sendable () -> Date
     private let fileManager: FileManager
     private let progressStore: USBReceiveProgressStore
+    private var isRunning = false
 
     init(
         client: any IPhoneReceiverServing,
@@ -74,6 +75,9 @@ actor USBReceiveService {
     }
 
     func runOnce() async throws -> USBReceiveSummary {
+        guard !isRunning else { return USBReceiveSummary(discovered: 0, completed: 0) }
+        isRunning = true
+        defer { isRunning = false }
         do {
             return try await performRunOnce()
         } catch is CancellationError {
