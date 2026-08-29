@@ -27,6 +27,31 @@ final class ProjectSmokeTests: XCTestCase {
         )
     }
 
+    func testReleaseDeclaresModernLaunchScreen() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let project = try String(
+            contentsOf: repository.appendingPathComponent("project.yml"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(project.contains("UILaunchScreen: {}"))
+    }
+
+    func testMainScreenDoesNotKeepTheRedundantDecorativeHeader() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/ContentView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertFalse(source.contains("private var header: some View"))
+        XCTAssertFalse(source.contains("                    header\n"))
+    }
+
     func testPCReceiverCardAppearsBelowManualTransferStatus() throws {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

@@ -1,6 +1,22 @@
 import XCTest
 
 final class ForegroundReceiveUITests: XCTestCase {
+    func testMainScreenCriticalActionsAreHittableWithoutInitialScroll() {
+        let app = launchSimulation(delay: 60)
+
+        for identifier in [
+            "manual-photo",
+            "manual-screenshot",
+            "manual-video",
+            "open-receiver"
+        ] {
+            let element = app.buttons[identifier]
+            XCTAssertTrue(element.waitForExistence(timeout: 20), "Missing \(identifier)")
+            XCTAssertTrue(element.isHittable, "\(identifier) must be visible without scrolling")
+        }
+        keepScreenshot("main-fullscreen-compact", app: app)
+    }
+
     func testUSBChoiceOpensFolderPickerAndCancellationAllowsLocalFallback() {
         let app = launchSimulation()
         XCTAssertTrue(app.buttons["USB에 저장"].waitForExistence(timeout: 20))
