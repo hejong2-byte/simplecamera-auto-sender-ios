@@ -21,11 +21,12 @@ struct ContentView: View {
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ScrollView {
-                VStack(spacing: 16) {
-                    header
+                VStack(spacing: 12) {
                     automaticStatusCard
                     manualTransferCard
-                    manualStatusCard
+                    if model.manualProgress != nil || model.lastManualSummary != nil {
+                        manualStatusCard
+                    }
                     receiverCard
                     NavigationLink(value: Destination.settings) {
                         Label("설정", systemImage: "gearshape.fill")
@@ -36,7 +37,8 @@ struct ContentView: View {
                     .controlSize(.large)
                     .accessibilityIdentifier("open-settings")
                 }
-                .padding()
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("업무사진 전송")
@@ -116,22 +118,6 @@ struct ContentView: View {
         }
     }
 
-    private var header: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "arrow.up.circle.fill")
-                .font(.system(size: 64))
-                .foregroundStyle(.cyan, .black)
-            Text("사진·스크린샷·동영상 전송")
-                .font(.headline)
-            Text("보낼 항목을 직접 고르면 선택한 파일만 PC로 전송합니다.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-    }
-
     private var manualTransferCard: some View {
         VStack(spacing: 12) {
             ForEach(ManualMediaKind.allCases) { kind in
@@ -143,6 +129,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, minHeight: 34)
                 }
                 .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("manual-\(kind.rawValue)")
                 .disabled(model.isManualTransferWorking)
             }
             Text("여러 개를 한 번에 선택할 수 있습니다. 큰 동영상은 32MB 단위로 나눠 백그라운드에서 전송합니다.")
@@ -171,6 +158,7 @@ struct ContentView: View {
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("open-receiver")
             if !incomingModel.pendingFiles.isEmpty {
                 Button("수신 대기 \(incomingModel.pendingFiles.count)개 · 저장 위치 선택") {
                     incomingModel.showPendingFiles()
