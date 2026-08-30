@@ -253,7 +253,6 @@ final class USBReceiverViewModel: ObservableObject {
             receiveOutcome = registration.flatMap {
                 loadOutcome($0.identity.receiverID)
             }
-            if registration != nil { try await refreshFeatures() }
             let destination = try bookmarkStore.resolve()
             usbDisplayName = destination?.displayName
             storedFiles = try storedFilesProvider()
@@ -262,6 +261,7 @@ final class USBReceiverViewModel: ObservableObject {
             if selectedDestination == .usb, destination?.isStale == true {
                 lastError = "USB 폴더 권한이 만료되었습니다. 폴더를 다시 선택해 주세요."
             }
+            if registration != nil { try await refreshFeatures() }
         } catch {
             lastError = Self.message(for: error)
         }
