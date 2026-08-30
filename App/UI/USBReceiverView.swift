@@ -130,11 +130,14 @@ struct USBReceiverView: View {
 
     private var progressCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(model.receiveProgress?.stage == .completed ? "최근 PC 파일 수신 결과" : "PC 새 파일 수신 상태")
+            HStack {
+                Text(
+                    model.receiveStatus.kind == .saved || model.receiveStatus.kind == .failed
+                        ? "최근 PC 파일 수신 결과"
+                        : "PC 새 파일 수신 상태"
+                )
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            HStack {
-                Text(model.receiveStageTitle).font(.headline)
                 Spacer()
                 if model.isPolling {
                     Label(model.lastError == nil ? "감시 중" : "재확인 중", systemImage: "dot.radiowaves.left.and.right")
@@ -143,35 +146,23 @@ struct USBReceiverView: View {
                 }
             }
 
-            if let progress = model.receiveProgress, progress.stage != .idle {
-                if progress.stage == .discovering {
-                    ProgressView().tint(.cyan)
-                } else if !model.receivePercentText.isEmpty {
-                    ProgressView(value: Double(progress.percent), total: 100)
-                        .tint(progress.stage == .failed ? .red : .cyan)
-                    HStack {
-                        Text(model.receivePercentText)
-                            .font(.title3.monospacedDigit().bold())
-                        Spacer()
-                        Text(model.receiveByteText)
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    if !model.receiveSpeedText.isEmpty {
-                        HStack {
-                            Text(model.receiveSpeedText)
-                            Spacer()
-                            Text(model.receiveETAText)
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                }
+            PCReceiveStatusView(status: model.receiveStatus)
 
-                if let fileName = progress.fileName {
-                    Label(fileName, systemImage: "doc.fill")
-                        .font(.subheadline)
-                        .lineLimit(2)
+            if model.receiveStatus.kind == .active,
+               let progress = model.receiveProgress {
+                if !model.receiveByteText.isEmpty {
+                    Text(model.receiveByteText)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                if !model.receiveSpeedText.isEmpty {
+                    HStack {
+                        Text(model.receiveSpeedText)
+                        Spacer()
+                        Text(model.receiveETAText)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
                 if progress.totalCount > 0 {
                     Text("전체 \(progress.totalCount)개 · 저장 완료 \(progress.completedCount)개")
@@ -185,14 +176,15 @@ struct USBReceiverView: View {
                 }
             }
 
-            if let error = model.lastError {
+            if let error = model.lastError, model.receiveStatus.kind != .failed {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.subheadline)
                     .foregroundStyle(.red)
-            } else if model.receiveProgress == nil || model.receiveProgress?.stage == .idle {
-                Text("PC에서 이 iPhone 코드로 파일을 보내면 앱을 열어둔 동안 도착 안내가 표시됩니다.")
+            }
+            if let incomingError = incomingModel.lastError {
+                Label("도착 확인 오류 · \(incomingError)", systemImage: "exclamationmark.triangle.fill")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.red)
             }
         }
         .cardStyle()

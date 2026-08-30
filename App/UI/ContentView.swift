@@ -159,6 +159,9 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("open-receiver")
+
+            PCReceiveStatusView(status: receiverModel.receiveStatus, compact: true)
+
             if !incomingModel.pendingFiles.isEmpty {
                 Button("수신 대기 \(incomingModel.pendingFiles.count)개 · 저장 위치 선택") {
                     incomingModel.showPendingFiles()
@@ -167,7 +170,7 @@ struct ContentView: View {
                 .disabled(!canPresentIncomingFiles)
                 .accessibilityIdentifier("incoming-pending")
             } else {
-                Text(incomingModel.isMonitoring ? "앱을 열어둔 동안 새 파일 도착을 확인합니다." : "앱을 다시 열면 새 파일을 확인합니다.")
+                Text(incomingModel.isMonitoring ? "새 파일 도착 알림 감시 중" : "앱을 다시 열면 새 파일을 확인합니다.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let error = incomingModel.lastError {

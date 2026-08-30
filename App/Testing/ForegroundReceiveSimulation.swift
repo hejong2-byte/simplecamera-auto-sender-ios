@@ -9,14 +9,18 @@ final class ForegroundReceiveSimulation {
         guard arguments.contains("--ui-test-incoming") else { return nil }
         let index = arguments.firstIndex(of: "--ui-test-incoming-delay")
         let delay = index.flatMap { arguments.indices.contains($0 + 1) ? Double(arguments[$0 + 1]) : nil } ?? 0
-        return try! ForegroundReceiveSimulation(delay: delay)
+        let outcomeIndex = arguments.firstIndex(of: "--ui-test-receive-outcome")
+        let outcome = outcomeIndex.flatMap {
+            arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil
+        }
+        return try! ForegroundReceiveSimulation(delay: delay, outcome: outcome)
     }()
 
     let content: ContentViewModel
     let receiver: USBReceiverViewModel
     let incoming: IPhoneIncomingFilesViewModel
 
-    private init(delay: TimeInterval) throws {
+    private init(delay: TimeInterval, outcome: String?) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let receiverID = UUID()
         let registration = IPhoneReceiverRegistrationStore(identityStore: InMemoryCredentialStore(), secretStore: InMemoryCredentialStore())
@@ -25,6 +29,33 @@ final class ForegroundReceiveSimulation {
         let file = IPhoneDelivery(deliveryID: UUID(), fileName: "수신-시뮬레이션.txt", contentType: "text/plain", size: 16, sha256: String(repeating: "a", count: 64), state: .available, createdAt: Date(), expiresAt: Date().addingTimeInterval(3_600), deliveredAt: nil)
         let arrivalDate = Date().addingTimeInterval(delay)
         let preferences = USBReceiverPreferences(defaults: UserDefaults(suiteName: "ReceiveUITest.\(UUID().uuidString)")!)
+        let receiveOutcome: IPhoneReceiveOutcome?
+        switch outcome {
+        case "saved":
+            receiveOutcome = IPhoneReceiveOutcome(
+                receiverID: receiverID,
+                kind: .saved,
+                destination: .iphoneLocal,
+                fileName: "업무자료.zip",
+                totalCount: 1,
+                completedCount: 1,
+                message: "iPhone 저장 완료",
+                occurredAt: Date(timeIntervalSince1970: 1_787_990_400)
+            )
+        case "error":
+            receiveOutcome = IPhoneReceiveOutcome(
+                receiverID: receiverID,
+                kind: .failed,
+                destination: .iphoneLocal,
+                fileName: nil,
+                totalCount: 0,
+                completedCount: 0,
+                message: "서버 오류: 파일 정보를 확인하지 못했습니다.",
+                occurredAt: Date(timeIntervalSince1970: 1_787_990_400)
+            )
+        default:
+            receiveOutcome = nil
+        }
         content = ContentViewModel(
             credentialStore: InMemoryCredentialStore(),
             ledger: try UploadLedger(fileURL: root.appendingPathComponent("upload-ledger.json")),
@@ -47,6 +78,9 @@ final class ForegroundReceiveSimulation {
                 try choices.approve(ids, receiverID: receiverID, destination: .iphoneLocal)
             },
             progressUpdates: { AsyncStream { $0.finish() } },
+            loadOutcome: { id in
+                receiveOutcome?.receiverID == id ? receiveOutcome : nil
+            },
             defaultDeviceName: "수신 테스트 iPhone",
             preferences: preferences
         )
