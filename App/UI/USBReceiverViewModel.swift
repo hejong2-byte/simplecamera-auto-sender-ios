@@ -1,5 +1,21 @@
 import Foundation
 
+enum IPhoneReceiveStatusKind: Sendable, Equatable {
+    case waiting
+    case active
+    case saved
+    case failed
+}
+
+struct IPhoneReceiveStatus: Sendable, Equatable {
+    let kind: IPhoneReceiveStatusKind
+    let title: String
+    let message: String
+    let fileName: String?
+    let occurredAt: Date?
+    let percent: Int?
+}
+
 @MainActor
 final class USBReceiverViewModel: ObservableObject {
     typealias ReceiveOnce = @Sendable () async throws -> USBReceiveSummary
@@ -16,12 +32,17 @@ final class USBReceiverViewModel: ObservableObject {
     typealias DeleteOriginals = @Sendable (Set<UUID>) async -> IPhoneUSBDeletionSummary
     typealias RefreshFeatures = @Sendable () async throws -> Void
     typealias ProgressUpdates = @Sendable () -> AsyncStream<USBReceiveProgress>
+    typealias LoadOutcome = @Sendable (UUID) -> IPhoneReceiveOutcome?
+    typealias SaveOutcome = @Sendable (IPhoneReceiveOutcome) throws -> Void
+    typealias ClearOutcome = @Sendable (UUID) throws -> Void
+    typealias Now = @Sendable () -> Date
     typealias Sleep = @Sendable () async throws -> Void
 
     @Published private(set) var registrationCode: String?
     @Published private(set) var deviceName: String?
     @Published private(set) var usbDisplayName: String?
     @Published private(set) var receiveProgress: USBReceiveProgress?
+    @Published private(set) var receiveOutcome: IPhoneReceiveOutcome?
     @Published private(set) var usbExportProgress: USBReceiveProgress?
     @Published private(set) var lastUSBExportError: String?
     @Published private(set) var usbExportCompletionMessage: String?
@@ -58,6 +79,10 @@ final class USBReceiverViewModel: ObservableObject {
     private let keepOriginalFiles: KeepOriginals
     private let deleteOriginalFiles: DeleteOriginals
     private let refreshFeatures: RefreshFeatures
+    private let loadOutcome: LoadOutcome
+    private let saveOutcome: SaveOutcome
+    private let clearOutcome: ClearOutcome
+    private let now: Now
     private let defaultDeviceName: String
     private let sleep: Sleep
     private let preferences: USBReceiverPreferences
@@ -66,6 +91,7 @@ final class USBReceiverViewModel: ObservableObject {
     private var pollingTask: Task<Void, Never>?
     private var fallbackMode: USBFallbackMode = .none
     private var promptedDeliveryIDs: Set<UUID> = []
+    private var receiverID: UUID?
 
     init(
         uploadCredentialStore: CredentialStore,
@@ -88,6 +114,10 @@ final class USBReceiverViewModel: ObservableObject {
         refreshFeatures: @escaping RefreshFeatures = {},
         progressUpdates: @escaping ProgressUpdates,
         exportProgressUpdates: @escaping ProgressUpdates = { AsyncStream { $0.finish() } },
+        loadOutcome: @escaping LoadOutcome = { _ in nil },
+        saveOutcome: @escaping SaveOutcome = { _ in },
+        clearOutcome: @escaping ClearOutcome = { _ in },
+        now: @escaping Now = { Date() },
         defaultDeviceName: String,
         preferences: USBReceiverPreferences = USBReceiverPreferences(),
         sleep: @escaping Sleep = { try await Task.sleep(for: .seconds(2)) }
@@ -106,6 +136,10 @@ final class USBReceiverViewModel: ObservableObject {
         self.keepOriginalFiles = keepOriginals
         self.deleteOriginalFiles = deleteOriginals
         self.refreshFeatures = refreshFeatures
+        self.loadOutcome = loadOutcome
+        self.saveOutcome = saveOutcome
+        self.clearOutcome = clearOutcome
+        self.now = now
         self.defaultDeviceName = defaultDeviceName
         self.preferences = preferences
         allowsCellular = preferences.allowsCellular
@@ -114,22 +148,7 @@ final class USBReceiverViewModel: ObservableObject {
         progressTask = Task { [weak self] in
             for await progress in progressUpdates() {
                 guard !Task.isCancelled else { break }
-                let previousStage = self?.receiveProgress?.stage
-                self?.receiveProgress = progress
-                if progress.stage == .failed {
-                    self?.lastError = progress.errorMessage
-                } else if previousStage == .failed || progress.stage != .idle {
-                    if self?.needsLocalFallbackDecision == false {
-                        self?.lastError = nil
-                    }
-                }
-                if progress.stage == .completed, progress.destination == .iphoneLocal {
-                    do {
-                        self?.storedFiles = try self?.storedFilesProvider() ?? []
-                    } catch {
-                        self?.lastError = "받은 파일 목록을 새로 고치지 못했습니다. " + Self.message(for: error)
-                    }
-                }
+                self?.handleReceiveProgress(progress)
             }
         }
         exportProgressTask = Task { [weak self] in
@@ -156,14 +175,84 @@ final class USBReceiverViewModel: ObservableObject {
     var isReceivingFile: Bool {
         guard let stage = receiveProgress?.stage else { return false }
         return (isPerformingReceive || receiveProgress?.destination == .iphoneLocal)
-            && [.discovering, .downloading, .downloaded, .verifying, .finalizing, .acknowledging].contains(stage)
+            && [
+                .discovering, .waitingForDestination, .downloading, .downloaded,
+                .verifying, .finalizing, .copyingToUSB, .acknowledging
+            ].contains(stage)
+    }
+
+    var receiveStatus: IPhoneReceiveStatus {
+        if isReceivingFile, let progress = receiveProgress {
+            let message: String
+            switch progress.stage {
+            case .discovering:
+                message = "PC에서 새 파일을 확인하고 있습니다."
+            case .waitingForDestination:
+                message = "저장 위치를 선택해 주세요."
+            default:
+                message = progress.fileName ?? "파일을 안전하게 처리하고 있습니다."
+            }
+            return IPhoneReceiveStatus(
+                kind: .active,
+                title: receiveStageTitle,
+                message: message,
+                fileName: progress.fileName,
+                occurredAt: nil,
+                percent: progress.totalBytes > 0 ? progress.percent : nil
+            )
+        }
+
+        if let outcome = receiveOutcome {
+            let destination = outcome.destination == .iphoneLocal ? "iPhone" : "USB"
+            switch outcome.kind {
+            case .saved:
+                let count = max(outcome.totalCount, outcome.completedCount)
+                let message = count > 0
+                    ? "\(outcome.completedCount)/\(count)개 파일을 안전하게 저장했습니다."
+                    : "파일을 안전하게 저장했습니다."
+                return IPhoneReceiveStatus(
+                    kind: .saved,
+                    title: outcome.message,
+                    message: message,
+                    fileName: outcome.fileName,
+                    occurredAt: outcome.occurredAt,
+                    percent: 100
+                )
+            case .failed:
+                return IPhoneReceiveStatus(
+                    kind: .failed,
+                    title: outcome.fileName == nil
+                        ? "새 파일 확인 오류"
+                        : "\(destination) 수신 오류",
+                    message: outcome.message,
+                    fileName: outcome.fileName,
+                    occurredAt: outcome.occurredAt,
+                    percent: nil
+                )
+            }
+        }
+
+        return IPhoneReceiveStatus(
+            kind: .waiting,
+            title: isRegistered ? "PC 파일 수신 대기" : "수신 기기 등록 필요",
+            message: isRegistered
+                ? "PC에서 보내면 이 앱이 새 파일을 확인합니다."
+                : "설정에서 PC 파일 수신을 등록해 주세요.",
+            fileName: nil,
+            occurredAt: nil,
+            percent: nil
+        )
     }
 
     func refresh() async {
         do {
             let registration = try registrationStore.load()
+            receiverID = registration?.identity.receiverID
             registrationCode = registration?.identity.code
             deviceName = registration?.identity.deviceName
+            receiveOutcome = registration.flatMap {
+                loadOutcome($0.identity.receiverID)
+            }
             if registration != nil { try await refreshFeatures() }
             let destination = try bookmarkStore.resolve()
             usbDisplayName = destination?.displayName
@@ -189,8 +278,10 @@ final class USBReceiverViewModel: ObservableObject {
                 deviceName: defaultDeviceName
             )
             try registrationStore.save(registration)
+            receiverID = registration.receiverID
             registrationCode = registration.code
             deviceName = registration.deviceName
+            receiveOutcome = loadOutcome(registration.receiverID)
             try await refreshFeatures()
             lastError = nil
         } catch {
@@ -233,9 +324,16 @@ final class USBReceiverViewModel: ObservableObject {
 
     func resetRegistration() async {
         do {
+            let matchingReceiverID = receiverID
+                ?? (try registrationStore.load()?.identity.receiverID)
+            if let matchingReceiverID {
+                try clearOutcome(matchingReceiverID)
+            }
             try registrationStore.clear()
+            receiverID = nil
             registrationCode = nil
             deviceName = nil
+            receiveOutcome = nil
             lastError = nil
         } catch {
             lastError = "수신 기기 등록을 초기화하지 못했습니다."
@@ -453,6 +551,58 @@ final class USBReceiverViewModel: ObservableObject {
         let speed = Double(progress.bytesReceived) / elapsed
         let seconds = Int(Double(progress.totalBytes - progress.bytesReceived) / speed)
         return "약 \(max(seconds, 1))초 남음"
+    }
+
+    private func handleReceiveProgress(_ progress: USBReceiveProgress) {
+        let previousStage = receiveProgress?.stage
+        receiveProgress = progress
+        if progress.stage == .failed {
+            lastError = progress.errorMessage
+        } else if previousStage == .failed || progress.stage != .idle {
+            if !needsLocalFallbackDecision {
+                lastError = nil
+            }
+        }
+
+        if progress.stage == .completed || progress.stage == .failed {
+            recordTerminalOutcome(progress)
+        }
+
+        if progress.stage == .completed, progress.destination == .iphoneLocal {
+            do {
+                storedFiles = try storedFilesProvider()
+            } catch {
+                lastError = "받은 파일 목록을 새로 고치지 못했습니다. " + Self.message(for: error)
+            }
+        }
+    }
+
+    private func recordTerminalOutcome(_ progress: USBReceiveProgress) {
+        let activeReceiverID: UUID?
+        if let receiverID {
+            activeReceiverID = receiverID
+        } else {
+            activeReceiverID = try? registrationStore.load()?.identity.receiverID
+            receiverID = activeReceiverID
+        }
+        guard let activeReceiverID else { return }
+
+        let destination = progress.destination == .iphoneLocal ? "iPhone" : "USB"
+        let kind: IPhoneReceiveOutcomeKind = progress.stage == .completed ? .saved : .failed
+        let outcome = IPhoneReceiveOutcome(
+            receiverID: activeReceiverID,
+            kind: kind,
+            destination: progress.destination,
+            fileName: progress.fileName,
+            totalCount: max(progress.totalCount, progress.completedCount),
+            completedCount: progress.completedCount,
+            message: kind == .saved
+                ? "\(destination) 저장 완료"
+                : (progress.errorMessage ?? "\(destination) 수신에 실패했습니다."),
+            occurredAt: now()
+        )
+        receiveOutcome = outcome
+        try? saveOutcome(outcome)
     }
 
     private func pollUSB() async throws {

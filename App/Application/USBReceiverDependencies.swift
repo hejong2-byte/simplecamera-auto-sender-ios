@@ -54,6 +54,9 @@ final class USBReceiverDependencies: @unchecked Sendable {
         let approvalStore = IPhoneReceiveApprovalStore(
             fileURL: stateDirectory.appendingPathComponent("receive-approvals.json")
         )
+        let outcomeStore = IPhoneReceiveOutcomeStore(
+            fileURL: stateDirectory.appendingPathComponent("latest-receive-outcome.json")
+        )
         let client = IPhoneReceiverClient(
             transport: PolicyIPhoneReceiverTransport(preferences: preferences)
         )
@@ -114,7 +117,8 @@ final class USBReceiverDependencies: @unchecked Sendable {
             exporter: exporter,
             deletionStore: deletionStore,
             progressStore: progressStore,
-            exportProgressStore: exportProgressStore
+            exportProgressStore: exportProgressStore,
+            outcomeStore: outcomeStore
         )
         Task { await localEngine.restore() }
         return dependencies
@@ -134,6 +138,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
     private let deletionStore: IPhoneUSBDeletionDecisionStore
     private let progressStore: USBReceiveProgressStore
     private let exportProgressStore: USBReceiveProgressStore
+    private let outcomeStore: IPhoneReceiveOutcomeStore
 
     private init(
         registrationStore: IPhoneReceiverRegistrationStore,
@@ -149,7 +154,8 @@ final class USBReceiverDependencies: @unchecked Sendable {
         exporter: IPhoneUSBExportService,
         deletionStore: IPhoneUSBDeletionDecisionStore,
         progressStore: USBReceiveProgressStore,
-        exportProgressStore: USBReceiveProgressStore
+        exportProgressStore: USBReceiveProgressStore,
+        outcomeStore: IPhoneReceiveOutcomeStore
     ) {
         self.registrationStore = registrationStore
         self.bookmarkStore = bookmarkStore
@@ -165,6 +171,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
         self.deletionStore = deletionStore
         self.progressStore = progressStore
         self.exportProgressStore = exportProgressStore
+        self.outcomeStore = outcomeStore
     }
 
     func restoreLocalReceiver() async {
@@ -224,6 +231,15 @@ final class USBReceiverDependencies: @unchecked Sendable {
             },
             progressUpdates: { [progressStore] in progressStore.updates() },
             exportProgressUpdates: { [exportProgressStore] in exportProgressStore.updates() },
+            loadOutcome: { [outcomeStore] receiverID in
+                outcomeStore.load(receiverID: receiverID)
+            },
+            saveOutcome: { [outcomeStore] outcome in
+                try outcomeStore.save(outcome)
+            },
+            clearOutcome: { [outcomeStore] receiverID in
+                try outcomeStore.clear(receiverID: receiverID)
+            },
             defaultDeviceName: UIDevice.current.name,
             preferences: preferences
         )
