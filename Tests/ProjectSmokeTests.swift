@@ -60,7 +60,7 @@ final class ProjectSmokeTests: XCTestCase {
             contentsOf: repository.appendingPathComponent("App/UI/ContentView.swift"),
             encoding: .utf8
         )
-        let body = try XCTUnwrap(source.range(of: "VStack(spacing: 16)"))
+        let body = try XCTUnwrap(source.range(of: "VStack(spacing: 12)"))
         let manual = try XCTUnwrap(
             source.range(of: "manualStatusCard", range: body.upperBound..<source.endIndex)
         )
