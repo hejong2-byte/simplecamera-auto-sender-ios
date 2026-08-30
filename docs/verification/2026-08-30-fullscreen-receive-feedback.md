@@ -3,13 +3,14 @@
 ## Verified build
 
 - Source commit: `e1166e5ae277bf8a7848afc44bdd78064d8ae154`.
-- [Successful CI and test logs](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/actions/runs/33286561327).
+- [Successful branch CI and test logs](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/actions/runs/33286561327).
+- [Successful tag build and release logs](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/actions/runs/33287016257).
 - Tests: **206 logic/integration tests + 6 UI tests, zero failures**.
 - [SideStore release](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/releases/tag/v0.3.5).
 - Bundle: `com.hejong2byte.simplecameraautosender`; version `0.3.5`; build `16`; iPhoneOS; minimum iOS `17.0`.
-- IPA size: `1715087` bytes. ZIP integrity and Files visibility keys passed.
-- IPA SHA-256: `31fd05160d1946dc134d946be750a183dedb8d837955d7dfaece621ed7598fe7`.
-- The anonymously downloaded `releases/latest/download/SimpleCameraAutoSender.ipa` matched the CI artifact byte-for-byte by size and SHA-256.
+- Published IPA size: `1715093` bytes. ZIP integrity and Files visibility keys passed.
+- Published IPA SHA-256: `6f3cfc6b1949facb88c11861e069696bd24e9fda055de58292ceedbce7825474`.
+- The tag workflow rebuilt and published the IPA after running the full suite. Anonymous downloads from both the fixed `v0.3.5` URL and `releases/latest/download/SimpleCameraAutoSender.ipa` matched by size and SHA-256.
 - The public release QR matched the local QR by SHA-256 (`95af9ce2cd019829f803cb8d495923e6f4d9007db990434758d688ab8c55505b`). ZXing independently decoded it to the exact URI in `install-url.txt`.
 - Simulator fixture launch flags are absent from the Release executable.
 
