@@ -106,7 +106,6 @@ final class ProjectSmokeTests: XCTestCase {
 
         XCTAssertTrue(main.contains("PCReceiveStatusView(status: receiverModel.receiveStatus"))
         XCTAssertTrue(receiver.contains("PCReceiveStatusView(status: model.receiveStatus"))
-        XCTAssertTrue(shared.contains("pc-receive-status"))
         XCTAssertTrue(shared.contains("pc-receive-success"))
         XCTAssertTrue(shared.contains("pc-receive-error"))
     }

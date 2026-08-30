@@ -50,9 +50,6 @@ struct PCReceiveStatusView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(resultIdentifier)
-        .padding(1)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("pc-receive-status")
     }
 
     private var iconName: String {
