@@ -324,8 +324,12 @@ final class USBReceiverViewModel: ObservableObject {
 
     func resetRegistration() async {
         do {
-            let matchingReceiverID = receiverID
-                ?? (try registrationStore.load()?.identity.receiverID)
+            let matchingReceiverID: UUID?
+            if let receiverID {
+                matchingReceiverID = receiverID
+            } else {
+                matchingReceiverID = try registrationStore.load()?.identity.receiverID
+            }
             if let matchingReceiverID {
                 try clearOutcome(matchingReceiverID)
             }
