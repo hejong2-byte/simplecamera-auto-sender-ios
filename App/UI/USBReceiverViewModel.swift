@@ -246,22 +246,39 @@ final class USBReceiverViewModel: ObservableObject {
 
     func refresh() async {
         do {
+            storedFiles = try storedFilesProvider()
+            selectedStoredFileIDs.formIntersection(Set(storedFiles.map(\.id)))
+            needsDeletionDecision = !pendingDeletionDecisions().isEmpty
+        } catch {
+            lastError = Self.message(for: error)
+        }
+
+        do {
             let registration = try registrationStore.load()
             receiverID = registration?.identity.receiverID
             registrationCode = registration?.identity.code
             deviceName = registration?.identity.deviceName
-            receiveOutcome = registration.flatMap {
-                loadOutcome($0.identity.receiverID)
+            if let registration {
+                let outcome = loadOutcome(registration.identity.receiverID)
+                if let outcome,
+                   outcome.kind == .failed,
+                   IPhoneReceiveErrorMessage.isCancellationMessage(outcome.message) {
+                    try clearOutcome(registration.identity.receiverID)
+                    receiveOutcome = nil
+                } else {
+                    receiveOutcome = outcome
+                }
+            } else {
+                receiveOutcome = nil
             }
             let destination = try bookmarkStore.resolve()
             usbDisplayName = destination?.displayName
-            storedFiles = try storedFilesProvider()
-            selectedStoredFileIDs.formIntersection(Set(storedFiles.map(\.id)))
-            needsDeletionDecision = !pendingDeletionDecisions().isEmpty
             if selectedDestination == .usb, destination?.isStale == true {
                 lastError = "USB 폴더 권한이 만료되었습니다. 폴더를 다시 선택해 주세요."
             }
             if registration != nil { try await refreshFeatures() }
+        } catch let error where IPhoneReceiveErrorMessage.isCancellation(error) {
+            return
         } catch {
             lastError = Self.message(for: error)
         }
@@ -372,7 +389,7 @@ final class USBReceiverViewModel: ObservableObject {
                !needsLocalFallbackDecision {
                 lastError = nil
             }
-        } catch is CancellationError {
+        } catch let error where IPhoneReceiveErrorMessage.isCancellation(error) {
             return
         } catch {
             lastError = Self.message(for: error)

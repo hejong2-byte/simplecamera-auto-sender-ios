@@ -1,7 +1,23 @@
 import Foundation
 
 enum IPhoneReceiveErrorMessage {
+    static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        let value = error as NSError
+        return value.domain == NSURLErrorDomain
+            && value.code == URLError.Code.cancelled.rawValue
+    }
+
+    static func isCancellationMessage(_ message: String) -> Bool {
+        let value = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value == "수신이 일시정지되었습니다."
+            || value.hasSuffix("(-999)")
+    }
+
     static func message(_ error: Error) -> String {
+        if isCancellation(error) {
+            return "수신이 일시정지되었습니다."
+        }
         let value = error as NSError
         if value.domain == NSURLErrorDomain {
             return "네트워크 오류 · 인터넷 연결을 확인해 주세요. (\(value.code))"
@@ -57,8 +73,6 @@ enum IPhoneReceiveErrorMessage {
         case IPhoneReceiverClientError.invalidResponse,
              BackgroundIPhoneReceiveError.invalidResponse:
             return "서버 응답 오류 · 올바른 수신 응답을 받지 못했습니다."
-        case is CancellationError:
-            return "수신이 일시정지되었습니다."
         default:
             return "수신 오류 (\(value.domain) · \(value.code)) · 연결과 저장 위치를 확인해 주세요."
         }

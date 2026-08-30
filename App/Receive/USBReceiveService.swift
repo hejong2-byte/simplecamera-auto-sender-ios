@@ -80,7 +80,7 @@ actor USBReceiveService {
         defer { isRunning = false }
         do {
             return try await performRunOnce()
-        } catch is CancellationError {
+        } catch let error where IPhoneReceiveErrorMessage.isCancellation(error) {
             throw CancellationError()
         } catch {
             progressStore.publishFailure(Self.errorMessage(error))

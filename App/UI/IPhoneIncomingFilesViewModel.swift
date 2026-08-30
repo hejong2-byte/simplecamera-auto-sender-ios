@@ -115,7 +115,7 @@ final class IPhoneIncomingFilesViewModel: ObservableObject {
             }
             lastError = nil
             offerUnseenFiles()
-        } catch is CancellationError {
+        } catch let error where IPhoneReceiveErrorMessage.isCancellation(error) {
             return
         } catch {
             guard isMonitoring, generation == current else { return }

@@ -130,7 +130,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
                     }
                     return $0.createdAt < $1.createdAt
                 }
-        } catch is CancellationError {
+        } catch let error where IPhoneReceiveErrorMessage.isCancellation(error) {
             throw CancellationError()
         } catch {
             progressStore.publishDiscoveryFailure(
@@ -211,6 +211,8 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
                 return
             }
             try await discoverAndSchedule()
+        } catch let error where IPhoneReceiveErrorMessage.isCancellation(error) {
+            return
         } catch {
             progressStore.publishFailure(IPhoneReceiveErrorMessage.message(error))
         }
