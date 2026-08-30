@@ -147,6 +147,26 @@ final class USBReceiverReceiveStatusTests: XCTestCase {
         XCTAssertEqual(context.model.receiveStatus.title, "PC 파일 수신 대기")
     }
 
+    func testPersistedCancelledDiscoveryFailureIsRemovedOnRefresh() async throws {
+        let cancelled = IPhoneReceiveOutcome(
+            receiverID: receiverID,
+            kind: .failed,
+            destination: .iphoneLocal,
+            fileName: nil,
+            totalCount: 0,
+            completedCount: 0,
+            message: "네트워크 오류 · 인터넷 연결을 확인해 주세요. (-999)",
+            occurredAt: fixedNow.addingTimeInterval(-60)
+        )
+        let context = try makeContext(outcome: cancelled)
+
+        await context.model.refresh()
+
+        XCTAssertNil(context.outcomes.latest)
+        XCTAssertEqual(context.model.receiveStatus.kind, .waiting)
+        XCTAssertNil(context.model.lastError)
+    }
+
     private func makeContext(
         outcome: IPhoneReceiveOutcome? = nil
     ) throws -> (
