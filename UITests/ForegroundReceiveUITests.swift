@@ -65,10 +65,35 @@ final class ForegroundReceiveUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["PC 파일 수신"].waitForExistence(timeout: 10))
     }
 
-    private func launchSimulation(delay: Int = 0) -> XCUIApplication {
+    func testMainScreenShowsSavedPCReceiveOutcome() {
+        let app = launchSimulation(delay: 60, outcome: "saved")
+
+        XCTAssertTrue(app.otherElements["pc-receive-success"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["iPhone 저장 완료"].exists)
+        keepScreenshot("main-receive-success", app: app)
+    }
+
+    func testMainScreenShowsCategorizedPCReceiveFailure() {
+        let app = launchSimulation(delay: 60, outcome: "error")
+
+        XCTAssertTrue(app.otherElements["pc-receive-error"].waitForExistence(timeout: 20))
+        let serverError = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "서버 오류")
+        ).firstMatch
+        XCTAssertTrue(serverError.exists)
+        keepScreenshot("main-receive-error", app: app)
+    }
+
+    private func launchSimulation(
+        delay: Int = 0,
+        outcome: String? = nil
+    ) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-incoming", "--ui-test-incoming-delay", String(delay)]
+        if let outcome {
+            app.launchArguments += ["--ui-test-receive-outcome", outcome]
+        }
         app.launch()
         addTeardownBlock { app.terminate() }
         return app

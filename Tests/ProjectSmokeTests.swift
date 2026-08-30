@@ -86,5 +86,29 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(source.contains("fileURL: usbStateDirectory.appendingPathComponent(\"destination.json\")"))
         XCTAssertTrue(source.contains("fileURL: usbStateDirectory.appendingPathComponent(\"ledger.json\")"))
     }
+
+    func testMainAndReceiverScreensShareThePCReceiveStatusView() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let main = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/ContentView.swift"),
+            encoding: .utf8
+        )
+        let receiver = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/USBReceiverView.swift"),
+            encoding: .utf8
+        )
+        let shared = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/PCReceiveStatusView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(main.contains("PCReceiveStatusView(status: receiverModel.receiveStatus"))
+        XCTAssertTrue(receiver.contains("PCReceiveStatusView(status: model.receiveStatus"))
+        XCTAssertTrue(shared.contains("pc-receive-status"))
+        XCTAssertTrue(shared.contains("pc-receive-success"))
+        XCTAssertTrue(shared.contains("pc-receive-error"))
+    }
 }
 
