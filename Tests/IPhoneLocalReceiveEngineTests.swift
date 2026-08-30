@@ -4,6 +4,23 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneLocalReceiveEngineTests: XCTestCase {
+    func testCancelledDiscoveryDoesNotPublishReceiveFailure() async throws {
+        for cancelDuringFeatureUpdate in [false, true] {
+            let context = try makeContext(payloads: [:])
+            context.client.failNextDiscovery(
+                duringFeatureUpdate: cancelDuringFeatureUpdate,
+                code: .cancelled
+            )
+
+            await context.engine.restore()
+
+            var updates = context.progress.updates().makeAsyncIterator()
+            let latest = await updates.next()
+            XCTAssertEqual(latest?.stage, .idle)
+            XCTAssertNil(latest?.errorMessage)
+        }
+    }
+
     func testDiscoveryFailureAfterCompletionHasNoStaleFileAndRecoversToIdle() async throws {
         for failDuringFeatureUpdate in [false, true] {
             let payload = Data("completed file".utf8)
@@ -363,8 +380,8 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
     private var modes: [IPhoneReceiveLeaseMode] = []
     private var successfulAcks: [LocalReceiveAck] = []
     private var remainingAckFailures: Int
-    private var failFeatureUpdate = false
-    private var failListing = false
+    private var featureUpdateFailure: URLError.Code?
+    private var listingFailure: URLError.Code?
 
     init(deliveries: [IPhoneDelivery], ackFailures: Int) {
         availableDeliveries = deliveries
@@ -377,9 +394,9 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
         features: IPhoneReceiveFeatures
     ) async throws {
         try lock.withLock {
-            if failFeatureUpdate {
-                failFeatureUpdate = false
-                throw URLError(.notConnectedToInternet)
+            if let code = featureUpdateFailure {
+                featureUpdateFailure = nil
+                throw URLError(code)
             }
             advertisedFeatures.append(features)
         }
@@ -387,18 +404,21 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
 
     func list(receiverID: UUID, receiveSecret: String) async throws -> [IPhoneDelivery] {
         try lock.withLock {
-            if failListing {
-                failListing = false
-                throw URLError(.notConnectedToInternet)
+            if let code = listingFailure {
+                listingFailure = nil
+                throw URLError(code)
             }
             return availableDeliveries
         }
     }
 
-    func failNextDiscovery(duringFeatureUpdate: Bool) {
+    func failNextDiscovery(
+        duringFeatureUpdate: Bool,
+        code: URLError.Code = .notConnectedToInternet
+    ) {
         lock.withLock {
-            failFeatureUpdate = duringFeatureUpdate
-            failListing = !duringFeatureUpdate
+            featureUpdateFailure = duringFeatureUpdate ? code : nil
+            listingFailure = duringFeatureUpdate ? nil : code
         }
     }
 

@@ -138,6 +138,39 @@ final class USBReceiverViewModelTests: XCTestCase {
         XCTAssertNotNil(model.lastError, "The invalid USB bookmark must not hide local files")
     }
 
+    func testCancelledServerRefreshDoesNotReportNetworkFailureOrHideStoredFiles() async throws {
+        let file = try storedFile()
+        let registrationStore = IPhoneReceiverRegistrationStore(
+            identityStore: InMemoryCredentialStore(),
+            secretStore: InMemoryCredentialStore()
+        )
+        try registrationStore.save(IPhoneReceiverRegistration(
+            receiverID: UUID(),
+            code: "123456",
+            receiveSecret: "receive-secret",
+            deviceName: "테스트 iPhone"
+        ))
+        let model = USBReceiverViewModel(
+            uploadCredentialStore: InMemoryCredentialStore(),
+            registrationStore: registrationStore,
+            bookmarkStore: USBBookmarkStore(
+                fileURL: temporaryDirectory().appendingPathComponent("destination.json")
+            ),
+            registrar: StubReceiverRegistrar(),
+            receiveOnce: { USBReceiveSummary(discovered: 0, completed: 0) },
+            storedFiles: { [file] },
+            refreshFeatures: { throw URLError(.cancelled) },
+            progressUpdates: { AsyncStream { $0.finish() } },
+            defaultDeviceName: "iPhone",
+            preferences: isolatedPreferences()
+        )
+
+        await model.refresh()
+
+        XCTAssertEqual(model.storedFiles.map(\.id), [file.id])
+        XCTAssertNil(model.lastError)
+    }
+
     func testRecoveryToIdleClearsThePreviousPCError() async throws {
         let progress = USBReceiveProgressStore()
         let model = try exportModel(files: [], receiveProgressStore: progress) { _, _ in
