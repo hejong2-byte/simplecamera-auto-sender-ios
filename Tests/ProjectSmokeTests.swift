@@ -19,8 +19,8 @@ final class ProjectSmokeTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 15"))
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.4"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 16"))
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.5"))
         XCTAssertTrue(project.contains("UIFileSharingEnabled: true"))
         XCTAssertTrue(
             project.contains("INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES")
