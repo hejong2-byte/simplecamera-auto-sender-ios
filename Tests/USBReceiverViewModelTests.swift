@@ -106,6 +106,38 @@ final class USBReceiverViewModelTests: XCTestCase {
         XCTAssertNotNil(model.lastError, "The server failure must remain visible without hiding local files")
     }
 
+    func testRelaunchRestoresStoredFilesEvenWhenUSBBookmarkCannotResolve() async throws {
+        let file = try storedFile()
+        let bookmarkStore = USBBookmarkStore(
+            fileURL: temporaryDirectory().appendingPathComponent("destination.json"),
+            codec: FailingResolutionBookmarkCodec()
+        )
+        try bookmarkStore.save(
+            folderURL: URL(fileURLWithPath: "/Volumes/UNPLUGGED", isDirectory: true),
+            volumeID: "removed-volume",
+            displayName: "REMOVED USB"
+        )
+        let model = USBReceiverViewModel(
+            uploadCredentialStore: InMemoryCredentialStore(),
+            registrationStore: IPhoneReceiverRegistrationStore(
+                identityStore: InMemoryCredentialStore(),
+                secretStore: InMemoryCredentialStore()
+            ),
+            bookmarkStore: bookmarkStore,
+            registrar: StubReceiverRegistrar(),
+            receiveOnce: { USBReceiveSummary(discovered: 0, completed: 0) },
+            storedFiles: { [file] },
+            progressUpdates: { AsyncStream { $0.finish() } },
+            defaultDeviceName: "iPhone",
+            preferences: isolatedPreferences()
+        )
+
+        await model.refresh()
+
+        XCTAssertEqual(model.storedFiles.map(\.id), [file.id])
+        XCTAssertNotNil(model.lastError, "The invalid USB bookmark must not hide local files")
+    }
+
     func testRecoveryToIdleClearsThePreviousPCError() async throws {
         let progress = USBReceiveProgressStore()
         let model = try exportModel(files: [], receiveProgressStore: progress) { _, _ in
@@ -715,6 +747,14 @@ private struct ViewModelBookmarkCodec: USBBookmarkCoding {
     func makeBookmark(for url: URL) throws -> Data { Data("bookmark".utf8) }
     func resolve(_ data: Data) throws -> USBBookmarkResolution {
         USBBookmarkResolution(url: url, isStale: false)
+    }
+}
+
+private struct FailingResolutionBookmarkCodec: USBBookmarkCoding {
+    func makeBookmark(for url: URL) throws -> Data { Data("bookmark".utf8) }
+
+    func resolve(_ data: Data) throws -> USBBookmarkResolution {
+        throw CocoaError(.fileReadNoPermission)
     }
 }
 
