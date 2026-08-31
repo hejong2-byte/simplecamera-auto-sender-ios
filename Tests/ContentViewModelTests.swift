@@ -240,6 +240,57 @@ final class ContentViewModelTests: XCTestCase {
         )
     }
 
+    func testEmptyAutomaticRunDoesNotClaimZeroPhotoCompletion() async throws {
+        let ledger = try UploadLedger(fileURL: temporaryLedgerURL())
+        let store = AutomaticTransferProgressStore()
+        var empty = AutomaticTransferProgress.idle()
+        empty.stage = .completed
+        store.publish(empty)
+        let model = ContentViewModel(
+            credentialStore: InMemoryCredentialStore(), ledger: ledger,
+            uploader: NoOpUploader(), now: Date.init,
+            send: { _ in .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
+            automaticUpdates: { store.updates() }
+        )
+        await waitUntil { model.automaticProgress?.stage == .completed }
+
+        XCTAssertEqual(model.automaticStageTitle, "전송할 새 사진 없음")
+        XCTAssertEqual(model.automaticTransferMessage, "전송할 새 Simple Cam 사진이 없습니다.")
+    }
+
+    func testManualCompletionDoesNotResetActiveAutomaticProgressOrStartNewRun() async throws {
+        let ledger = try UploadLedger(fileURL: temporaryLedgerURL())
+        let store = AutomaticTransferProgressStore()
+        let feed = ManualProgressFeed()
+        var automatic = AutomaticTransferProgress.idle()
+        automatic.stage = .uploading
+        automatic.totalCount = 11
+        automatic.currentIndex = 4
+        automatic.uploadedCount = 3
+        store.publish(automatic)
+        let model = ContentViewModel(
+            credentialStore: InMemoryCredentialStore(), ledger: ledger,
+            uploader: NoOpUploader(), now: Date.init,
+            send: { _ in
+                XCTFail("Manual progress must not trigger automatic scanning.")
+                return .init(discovered: 0, matched: 0, uploaded: 0, failed: 0)
+            },
+            manualUpdates: { feed.stream },
+            automaticUpdates: { store.updates() }
+        )
+        await waitUntil { model.automaticProgress?.stage == .uploading }
+        feed.yield(progress(
+            stage: .completed, selected: 1, currentIndex: 1, uploaded: 1,
+            totalBytes: 350_000_000, confirmedBytes: 350_000_000
+        ))
+        await waitUntil { model.manualProgress?.stage == .completed }
+        await model.refresh()
+
+        XCTAssertEqual(model.automaticProgress, automatic)
+        XCTAssertEqual(model.automaticStageTitle, "PC로 자동전송 중 · 4/11장")
+        XCTAssertEqual(model.manualProgress?.uploadedCount, 1)
+    }
+
     private func temporaryLedgerURL() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

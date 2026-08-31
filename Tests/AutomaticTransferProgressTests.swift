@@ -2,6 +2,30 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class AutomaticTransferProgressTests: XCTestCase {
+    func testUnclassifiedCandidatesAreNotCountedAsTransfers() async {
+        let store = AutomaticTransferProgressStore()
+        let reporter = AutomaticTransferProgressReporter(store: store)
+        reporter.beginScanning()
+        reporter.beginPreparing(currentIndex: 1, knownCount: 11)
+
+        var iterator = store.updates().makeAsyncIterator()
+        let progress = await iterator.next()
+
+        XCTAssertEqual(progress?.totalCount, 0)
+        XCTAssertEqual(progress?.uploadedCount, 0)
+        XCTAssertEqual(progress?.failedCount, 0)
+    }
+
+    func testEmptyRunDoesNotShowOneHundredPercent() async {
+        let store = AutomaticTransferProgressStore()
+        let reporter = AutomaticTransferProgressReporter(store: store)
+        reporter.finishRun(uploadedCount: 0, failedCount: 0, failureCategories: [])
+        var iterator = store.updates().makeAsyncIterator()
+        let progress = await iterator.next()
+
+        XCTAssertEqual(progress?.percent, 0)
+    }
+
     func testPercentUsesCompletedAndCurrentActualBytes() {
         let progress = AutomaticTransferProgress(
             runID: UUID(),

@@ -3,6 +3,30 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class DirectUploadCoordinatorTests: XCTestCase {
+    func testCleanupCannotTurnAcknowledgedUploadIntoFailure() async throws {
+        let directory = temporaryDirectory()
+        let ledger = try UploadLedger(fileURL: directory.appendingPathComponent("ledger.json"))
+        try await ledger.recordDiscovery(id: "confirmed", createdAt: .now)
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("test-secret")
+        let transport = ControlledHTTPFileUploader()
+        let coordinator = BackgroundUploadCoordinator(
+            ledger: ledger, credentialStore: credentials, transport: transport
+        )
+        let fileURL = directory.appendingPathComponent("confirmed.jpg")
+        try Data("photo".utf8).write(to: fileURL)
+        let upload = Task {
+            try await coordinator.upload(assetID: "confirmed", fileURL: fileURL)
+        }
+        await transport.waitUntilStarted()
+        try FileManager.default.removeItem(at: fileURL)
+        await transport.succeed(statusCode: 201)
+
+        try await upload.value
+        let record = try await ledger.record(id: "confirmed")
+        XCTAssertEqual(record?.state, .uploaded)
+    }
+
     func testUploadReturnsOnlyAfterHTTP2xxAndThenMarksUploaded() async throws {
         let directory = temporaryDirectory()
         let ledger = try UploadLedger(
