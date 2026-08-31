@@ -15,12 +15,11 @@ struct USBReceiverView: View {
                         incomingModel.showPendingFiles()
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(model.isExportingToUSB || model.isReceivingFile)
+                    .disabled(model.isExportingToUSB || model.isReceivingFile || model.isDeletingStoredFiles)
                 }
                 destinationCard
                 progressCard
                 storedFilesCard
-                operationNotice
             }
             .padding()
         }
@@ -75,6 +74,23 @@ struct USBReceiverView: View {
         } message: {
             Text("USB에서 크기와 SHA-256 검증을 마친 파일만 대상입니다.")
         }
+        .alert(
+            "선택한 iPhone 파일 \(model.storedFilesPendingDeletion.count)개를 삭제할까요?",
+            isPresented: Binding(
+                get: { model.needsStoredFileDeletionConfirmation },
+                set: { _ in }
+            )
+        ) {
+            Button("취소", role: .cancel) { model.cancelStoredFileDeletion() }
+            Button("삭제", role: .destructive) {
+                Task { await model.deleteConfirmedStoredFiles() }
+            }
+        } message: {
+            let names = model.storedFilesPendingDeletion.prefix(3).map(\.name).joined(separator: "\n")
+            let remaining = model.storedFilesPendingDeletion.count - 3
+            Text(names + (remaining > 0 ? "\n외 \(remaining)개" : "")
+                + "\n\niPhone에 저장된 선택 파일만 삭제하며 되돌릴 수 없습니다. USB와 PC의 파일은 삭제하지 않습니다.")
+        }
     }
 
     private var identityCard: some View {
@@ -120,7 +136,7 @@ struct USBReceiverView: View {
                 model.isChoosingUSBFolder = true
             }
             .buttonStyle(.borderedProminent)
-            .disabled(model.isExportingToUSB || model.isReceivingFile)
+            .disabled(model.isExportingToUSB || model.isReceivingFile || model.isDeletingStoredFiles)
             Text("새 파일은 도착 안내에서 저장 위치를 선택한 뒤 받습니다. 이미 저장된 파일은 아래 목록에서 USB로 복사하세요.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -204,7 +220,7 @@ struct USBReceiverView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else {
-                Text("파일을 눌러 선택한 뒤 아래 복사 버튼을 누르세요. 선택 \(model.selectedStoredFileIDs.count)개")
+                Text("파일을 선택한 뒤 USB로 복사하거나 삭제하세요. 선택 \(model.selectedStoredFileIDs.count)개")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ForEach(model.storedFiles) { file in
@@ -229,7 +245,8 @@ struct USBReceiverView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(model.isExportingToUSB)
+                    .disabled(model.isExportingToUSB || model.isDeletingStoredFiles)
+                    .accessibilityIdentifier("stored-file-\(file.name)")
                     Divider()
                 }
             }
@@ -237,7 +254,28 @@ struct USBReceiverView: View {
                 Task { await model.exportSelectedFilesToUSB() }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!model.hasStoredFileSelection || model.isExportingToUSB || model.isReceivingFile)
+            .disabled(!model.hasStoredFileSelection || model.isExportingToUSB || model.isReceivingFile || model.isDeletingStoredFiles)
+
+            Button("선택 파일 삭제", role: .destructive) {
+                model.requestStoredFileDeletion()
+            }
+            .buttonStyle(.bordered)
+            .disabled(!model.canDeleteStoredFiles)
+            .accessibilityIdentifier("stored-files-delete")
+
+            if model.isDeletingStoredFiles {
+                ProgressView("선택 파일 삭제 중…")
+            }
+            if let message = model.storedFileDeletionMessage {
+                Label(message, systemImage: "checkmark.circle.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.green)
+            }
+            if let error = model.storedFileDeletionError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.red)
+            }
 
             if model.isExportingToUSB || model.usbExportProgress != nil || model.lastUSBExportError != nil {
                 usbExportStatus
@@ -293,20 +331,6 @@ struct USBReceiverView: View {
                     .foregroundStyle(.secondary)
             }
         }
-    }
-
-    private var operationNotice: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("안전한 저장 방식", systemImage: "checkmark.shield.fill")
-                .font(.headline)
-            Text("파일은 최종 크기와 SHA-256이 일치한 뒤에만 완료 처리합니다.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text("USB 직접 저장과 USB 복사는 이 화면이 앞에 있을 때 진행됩니다. 전원 공급형 Lightning-USB 어댑터와 exFAT USB를 권장합니다.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .cardStyle()
     }
 
     private func updatePolling(for phase: ScenePhase) {

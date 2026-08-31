@@ -23,6 +23,7 @@ final class USBReceiverViewModel: ObservableObject {
     typealias PendingDeliveryIDs = @Sendable () async throws -> Set<UUID>
     typealias ApproveLocalFallback = @Sendable (Set<UUID>) throws -> Void
     typealias StoredFilesProvider = @Sendable () throws -> [IPhoneStoredFile]
+    typealias DeleteStoredFiles = @Sendable ([IPhoneStoredFile]) async throws -> IPhoneStoredFileDeletionSummary
     typealias ExportFiles = @Sendable (
         [IPhoneStoredFile],
         USBBookmarkDestination
@@ -54,6 +55,10 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var selectedDestination: IPhoneReceiveDestination
     @Published private(set) var storedFiles: [IPhoneStoredFile] = []
     @Published private(set) var selectedStoredFileIDs: Set<String> = []
+    @Published private(set) var storedFilesPendingDeletion: [IPhoneStoredFile] = []
+    @Published private(set) var isDeletingStoredFiles = false
+    @Published private(set) var storedFileDeletionMessage: String?
+    @Published private(set) var storedFileDeletionError: String?
     @Published private(set) var needsLocalFallbackDecision = false
     @Published private(set) var needsDeletionDecision = false
     @Published var isChoosingUSBFolder = false
@@ -74,6 +79,7 @@ final class USBReceiverViewModel: ObservableObject {
     private let pendingDeliveryIDs: PendingDeliveryIDs
     private let approveLocalFallback: ApproveLocalFallback
     private let storedFilesProvider: StoredFilesProvider
+    private let deleteStoredFiles: DeleteStoredFiles
     private let exportFiles: ExportFiles
     private let pendingDeletionDecisions: PendingDeletionDecisions
     private let keepOriginalFiles: KeepOriginals
@@ -103,6 +109,9 @@ final class USBReceiverViewModel: ObservableObject {
         pendingDeliveryIDs: @escaping PendingDeliveryIDs = { [] },
         approveLocalFallback: @escaping ApproveLocalFallback = { _ in },
         storedFiles: @escaping StoredFilesProvider = { [] },
+        deleteStoredFiles: @escaping DeleteStoredFiles = { _ in
+            throw CocoaError(.featureUnsupported)
+        },
         exportFiles: @escaping ExportFiles = { _, _ in
             IPhoneUSBExportSummary(verified: [], failed: [])
         },
@@ -131,6 +140,7 @@ final class USBReceiverViewModel: ObservableObject {
         self.pendingDeliveryIDs = pendingDeliveryIDs
         self.approveLocalFallback = approveLocalFallback
         self.storedFilesProvider = storedFiles
+        self.deleteStoredFiles = deleteStoredFiles
         self.exportFiles = exportFiles
         self.pendingDeletionDecisions = pendingDeletionDecisions
         self.keepOriginalFiles = keepOriginals
@@ -171,6 +181,12 @@ final class USBReceiverViewModel: ObservableObject {
     var isRegistered: Bool { registrationCode != nil }
     var hasUSBDestination: Bool { usbDisplayName != nil }
     var hasStoredFileSelection: Bool { !selectedStoredFileIDs.isEmpty }
+    var needsStoredFileDeletionConfirmation: Bool { !storedFilesPendingDeletion.isEmpty }
+    var canDeleteStoredFiles: Bool {
+        hasStoredFileSelection && !isDeletingStoredFiles && !isExportingToUSB
+            && !isReceivingFile && !isPerformingReceive && !isChoosingUSBFolder
+            && !needsDeletionDecision && !needsLocalFallbackDecision
+    }
     var pendingDeletionCount: Int { pendingDeletionDecisions().count }
     var isReceivingFile: Bool {
         guard let stage = receiveProgress?.stage else { return false }
@@ -375,7 +391,8 @@ final class USBReceiverViewModel: ObservableObject {
 
     func pollOnce() async {
         guard !isExportingToUSB, !isPerformingReceive, !isChoosingUSBFolder,
-              !needsLocalFallbackDecision, !needsDeletionDecision else { return }
+              !needsLocalFallbackDecision, !needsDeletionDecision,
+              !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation else { return }
         isPerformingReceive = true
         defer { isPerformingReceive = false }
         do {
@@ -424,6 +441,7 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     func toggleStoredFileSelection(_ id: String) {
+        guard !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation else { return }
         if selectedStoredFileIDs.contains(id) {
             selectedStoredFileIDs.remove(id)
         } else {
@@ -431,8 +449,54 @@ final class USBReceiverViewModel: ObservableObject {
         }
     }
 
+    func requestStoredFileDeletion() {
+        guard canDeleteStoredFiles, !needsStoredFileDeletionConfirmation else { return }
+        storedFilesPendingDeletion = storedFiles.filter { selectedStoredFileIDs.contains($0.id) }
+    }
+
+    func cancelStoredFileDeletion() {
+        storedFilesPendingDeletion = []
+    }
+
+    func deleteConfirmedStoredFiles() async {
+        guard !storedFilesPendingDeletion.isEmpty, !isDeletingStoredFiles else { return }
+        guard !isReceivingFile, !isPerformingReceive, !isExportingToUSB else {
+            storedFilesPendingDeletion = []
+            storedFileDeletionError = "전송 중에는 삭제할 수 없습니다. 전송이 끝난 뒤 다시 선택해 주세요."
+            return
+        }
+        let confirmedFiles = storedFilesPendingDeletion
+        storedFilesPendingDeletion = []
+        isDeletingStoredFiles = true
+        storedFileDeletionMessage = nil
+        storedFileDeletionError = nil
+        defer { isDeletingStoredFiles = false }
+        do {
+            let summary = try await deleteStoredFiles(confirmedFiles)
+            let deletedIDs = Set(summary.deletedIDs)
+            selectedStoredFileIDs.subtract(deletedIDs)
+            storedFiles.removeAll { deletedIDs.contains($0.id) }
+            if !deletedIDs.isEmpty {
+                storedFileDeletionMessage = "iPhone 파일 \(deletedIDs.count)개 삭제 완료"
+            }
+            if let failure = summary.failures.first {
+                storedFileDeletionError = "\(summary.failures.count)개 삭제 실패 · \(failure.name)\n\(failure.message)"
+            }
+        } catch {
+            storedFileDeletionError = "파일을 삭제하지 못했습니다. \(error.localizedDescription)"
+        }
+        do {
+            storedFiles = try storedFilesProvider()
+            selectedStoredFileIDs.formIntersection(Set(storedFiles.map(\.id)))
+        } catch {
+            let detail = "저장 파일 목록을 다시 읽지 못했습니다. \(error.localizedDescription)"
+            storedFileDeletionError = [storedFileDeletionError, detail].compactMap { $0 }.joined(separator: "\n")
+        }
+    }
+
     func exportSelectedFilesToUSB() async {
-        guard !isExportingToUSB, !isReceivingFile else { return }
+        guard !isExportingToUSB, !isReceivingFile,
+              !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation else { return }
         let selected = storedFiles.filter { selectedStoredFileIDs.contains($0.id) }
         guard !selected.isEmpty else { return }
         isExportingToUSB = true

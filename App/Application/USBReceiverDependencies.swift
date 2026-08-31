@@ -213,6 +213,12 @@ final class USBReceiverDependencies: @unchecked Sendable {
                 try approvalStore.approve(ids, receiverID: credentials.identity.receiverID, destination: .iphoneLocal)
             },
             storedFiles: { [catalog] in try catalog.refresh() },
+            deleteStoredFiles: { [catalog, jobStore] files in
+                let protectedNames = Set(try jobStore.load().jobs
+                    .filter { $0.stage != .completed }
+                    .compactMap(\.finalFileName))
+                return catalog.delete(files, protectedFileNames: protectedNames)
+            },
             exportFiles: { [exporter] files, destination in
                 await exporter.export(files, to: destination)
             },

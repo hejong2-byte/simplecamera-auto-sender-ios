@@ -106,6 +106,7 @@ struct ContentView: View {
             && (receiverModel.isReceivingFile || receiverModel.needsLocalFallbackDecision || receiverModel.needsDeletionDecision)
         return scenePhase == .active && pickerKind == nil && readinessMessage == nil
             && !receiverModel.isChoosingUSBFolder && !receiverModel.isShowingSettingsConfirmation
+            && !receiverModel.isDeletingStoredFiles && !receiverModel.needsStoredFileDeletionConfirmation
             && !receiverModel.isExportingToUSB && !receiverIsBusy
     }
 

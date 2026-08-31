@@ -93,6 +93,7 @@ final class ForegroundReceiveSimulation {
                 try choices.approve(ids, receiverID: receiverID, destination: .iphoneLocal)
             },
             storedFiles: { try catalog.refresh() },
+            deleteStoredFiles: { files in catalog.delete(files) },
             progressUpdates: { AsyncStream { $0.finish() } },
             loadOutcome: { id in
                 receiveOutcome?.receiverID == id ? receiveOutcome : nil

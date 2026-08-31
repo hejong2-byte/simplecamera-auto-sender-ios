@@ -18,6 +18,36 @@ struct IPhoneStoredFile: Identifiable, Equatable, Sendable {
     let receivedRecord: IPhoneReceivedFileRecord?
 }
 
+struct IPhoneStoredFileDeletionFailure: Sendable, Equatable {
+    let name: String
+    let message: String
+}
+
+struct IPhoneStoredFileDeletionSummary: Sendable, Equatable {
+    let deletedIDs: [String]
+    let failures: [IPhoneStoredFileDeletionFailure]
+}
+
+private enum IPhoneStoredFileDeletionError: LocalizedError {
+    case invalidLocation
+    case notRegularFile
+    case changed
+    case pendingReceipt
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidLocation:
+            return "앱의 받은 파일 폴더 안에 있는 파일만 삭제할 수 있습니다."
+        case .notRegularFile:
+            return "폴더나 연결 파일은 삭제하지 않습니다."
+        case .changed:
+            return "선택한 뒤 파일이 변경되었습니다. 목록에서 다시 선택해 주세요."
+        case .pendingReceipt:
+            return "수신 완료 확인이 끝나지 않은 파일입니다. 수신이 끝난 뒤 삭제해 주세요."
+        }
+    }
+}
+
 final class IPhoneReceivedFileCatalog: @unchecked Sendable {
     private struct RecordState: Codable {
         let version: Int
@@ -84,6 +114,73 @@ final class IPhoneReceivedFileCatalog: @unchecked Sendable {
 
     func record(for deliveryID: UUID) -> IPhoneReceivedFileRecord? {
         lock.withLock { records.first { $0.deliveryID == deliveryID } }
+    }
+
+    func delete(
+        _ files: [IPhoneStoredFile],
+        protectedFileNames: Set<String> = []
+    ) -> IPhoneStoredFileDeletionSummary {
+        lock.withLock {
+            var deletedIDs: [String] = []
+            var failures: [IPhoneStoredFileDeletionFailure] = []
+            for file in files {
+                do {
+                    guard !protectedFileNames.contains(file.url.lastPathComponent) else {
+                        throw IPhoneStoredFileDeletionError.pendingReceipt
+                    }
+                    try validateDeletion(file, at: file.url)
+                    var coordinationError: NSError?
+                    var deletionError: Error?
+                    var deleted = false
+                    NSFileCoordinator().coordinate(
+                        writingItemAt: file.url,
+                        options: .forDeleting,
+                        error: &coordinationError
+                    ) { coordinatedURL in
+                        do {
+                            try validateDeletion(file, at: coordinatedURL)
+                            try fileManager.removeItem(at: coordinatedURL)
+                            deleted = true
+                        } catch {
+                            deletionError = error
+                        }
+                    }
+                    if let deletionError { throw deletionError }
+                    if let coordinationError { throw coordinationError }
+                    guard deleted else { throw CocoaError(.fileWriteUnknown) }
+                    deletedIDs.append(file.id)
+                } catch {
+                    failures.append(IPhoneStoredFileDeletionFailure(
+                        name: file.name,
+                        message: error.localizedDescription
+                    ))
+                }
+            }
+            // Receipt history stays intact so a deliberately deleted file is not received again.
+            return IPhoneStoredFileDeletionSummary(deletedIDs: deletedIDs, failures: failures)
+        }
+    }
+
+    private func validateDeletion(_ file: IPhoneStoredFile, at url: URL) throws {
+        let target = url.standardizedFileURL
+        let directory = receivedDirectory.standardizedFileURL
+        guard url.isFileURL,
+              target.path == file.id,
+              target.lastPathComponent == file.name,
+              target.deletingLastPathComponent().path == directory.path,
+              target.deletingLastPathComponent().resolvingSymlinksInPath().path
+                == directory.resolvingSymlinksInPath().path else {
+            throw IPhoneStoredFileDeletionError.invalidLocation
+        }
+        let attributes = try fileManager.attributesOfItem(atPath: target.path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular else {
+            throw IPhoneStoredFileDeletionError.notRegularFile
+        }
+        guard (attributes[.size] as? NSNumber)?.int64Value == file.size,
+              attributes[.modificationDate] as? Date == file.modifiedAt,
+              records.first(where: { $0.storedName == file.name }) == file.receivedRecord else {
+            throw IPhoneStoredFileDeletionError.changed
+        }
     }
 
     func refresh() throws -> [IPhoneStoredFile] {
