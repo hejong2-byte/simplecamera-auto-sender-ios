@@ -23,7 +23,7 @@
 
 **Interfaces:** Existing PhotoSyncService.run(trigger:), AutomaticTransferProgressReporter, HTTPFileUploading, and ContentViewModel.
 
-- [ ] Add regressions for rejected candidate counts, orphan queued photos,
+- [x] Add regressions for rejected candidate counts, orphan queued photos,
   pending metadata after an earlier success, success-preserving interruption,
   and export cleanup after HTTP acknowledgement. Keep fixture upload semantics
   faithful: successful upload marks uploaded, not just queued.
@@ -35,9 +35,9 @@ XCTAssertEqual(progress?.failedCount, 0)
 XCTAssertEqual(record?.state, .uploaded)
 ~~~
 
-- [ ] Commit tests only and push the existing branch; run CI bash scripts/test-ios.sh.
+- [x] Commit tests only and push the existing branch; run CI bash scripts/test-ios.sh.
   Expect behavioral assertion failures, not compilation failures.
-- [ ] Fix only the traced paths in App/Sync/PhotoSyncService.swift,
+- [x] Fix only the traced paths in App/Sync/PhotoSyncService.swift,
   App/Sync/AutomaticTransferProgress.swift, App/Photos/SimpleCameraMetadataMatcher.swift,
   App/Ledger/UploadLedger.swift, App/Upload/BackgroundUploadCoordinator.swift,
   and automatic presentation in App/UI/ContentViewModel.swift / ContentView.swift.
@@ -50,10 +50,10 @@ guard try metadataMatcher.matches(fileURL: fileURL) else {
 }
 ~~~
 
-- [ ] Recover persisted pending work on the next automatic run or explicit retry;
+- [x] Recover persisted pending work on the next automatic run or explicit retry;
   do not add photo scanning to manual transfer callbacks or general UI refresh.
   Verify manual-progress updates leave automatic progress intact.
-- [ ] Run complete simulator tests and confirm the regressions pass.
+- [x] Run complete simulator tests and confirm the regressions pass.
 
 ### Task 2: Confirmed manual local-file deletion
 
@@ -64,10 +64,10 @@ App/Application/USBReceiverDependencies.swift, catalog/view-model/UI tests.
 **Interfaces:** IPhoneStoredFile, catalog refresh(), captured selected file
 snapshots, injected asynchronous delete action returning deleted IDs and failures.
 
-- [ ] Add failing tests for selected-only deletion, cancel, changed/missing
+- [x] Add failing tests for selected-only deletion, cancel, changed/missing
   originals, paths outside the received directory, partial failure, and
   selection/list refresh.
-- [ ] Implement catalog validation and per-file deletion; preserve records as
+- [x] Implement catalog validation and per-file deletion; preserve records as
   transfer history and prevent duplicate receipt of deliberately removed files.
 
 ~~~swift
@@ -77,7 +77,7 @@ guard file.url.standardizedFileURL.deletingLastPathComponent()
 }
 ~~~
 
-- [ ] Add a confirmation driven by a captured selection, busy guards, and clear
+- [x] Add a confirmation driven by a captured selection, busy guards, and clear
   completion/error text. Remove only the operationNotice view and call.
 - [ ] Run the full simulator suite; inspect deletion UI in a fixture with
   synthetic files and verify cancel does not delete anything.
@@ -86,7 +86,7 @@ guard file.url.standardizedFileURL.deletingLastPathComponent()
 
 **Files:** project.yml, Tests/ProjectSmokeTests.swift, docs/install.md, release notes.
 
-- [ ] Prepare the next unused release version after tests pass.
+- [x] Prepare the next unused release version after tests pass.
 - [ ] Build with bash scripts/build-unsigned-ipa.sh on macOS CI.
 - [ ] Download the release IPA; run python scripts/verify-ipa.py, inspect its
   Info.plist, check ZIP integrity, and compare SHA-256 after the Desktop copy.

@@ -18,6 +18,19 @@ jobs:
         run: brew install xcodegen
       - name: Run iOS tests
         run: bash scripts/test-ios.sh
+      - name: Export UI test screenshots
+        if: always()
+        run: |
+          if [ -d build/TestResults.xcresult ]; then
+            xcrun xcresulttool export attachments --path build/TestResults.xcresult --output-path build/ui-test-attachments
+          fi
+      - name: Upload UI test screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: UI-test-screenshots
+          path: build/ui-test-attachments
+          retention-days: 3
       - name: Upload simulator test results
         if: always()
         uses: actions/upload-artifact@v4
