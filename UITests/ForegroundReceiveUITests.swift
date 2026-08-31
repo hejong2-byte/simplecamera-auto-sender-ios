@@ -1,6 +1,41 @@
 import XCTest
 
 final class ForegroundReceiveUITests: XCTestCase {
+    func testLocalFileDeletionRequiresConfirmationAndPreservesUnselectedFile() {
+        let app = launchSimulation(delay: 3_600, withStoredFiles: true)
+        let receiver = app.buttons["open-receiver"]
+        XCTAssertTrue(receiver.waitForExistence(timeout: 20))
+        receiver.tap()
+        let selected = app.buttons["stored-file-delete-me.txt"]
+        reveal(selected, in: app)
+        XCTAssertTrue(selected.isHittable)
+        selected.tap()
+        let delete = app.buttons["stored-files-delete"]
+        reveal(delete, in: app)
+        XCTAssertTrue(delete.isHittable)
+        delete.tap()
+
+        let cancel = app.alerts.buttons["취소"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        keepScreenshot("local-file-delete-confirmation", app: app)
+        cancel.tap()
+        XCTAssertTrue(selected.exists, "Cancel must retain the selected file")
+        delete.tap()
+        let confirm = app.alerts.buttons["삭제"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
+
+        let removed = expectation(
+            for: NSPredicate(format: "exists == false"),
+            evaluatedWith: selected
+        )
+        wait(for: [removed], timeout: 10)
+        XCTAssertTrue(app.buttons["stored-file-keep-me.txt"].exists)
+        XCTAssertTrue(app.staticTexts["iPhone 파일 1개 삭제 완료"].exists)
+        XCTAssertFalse(app.staticTexts["안전한 저장 방식"].exists)
+        keepScreenshot("local-file-delete-completed", app: app)
+    }
+
     func testMainScreenCriticalActionsAreHittableWithoutInitialScroll() {
         let app = launchSimulation(delay: 60)
 
@@ -86,7 +121,8 @@ final class ForegroundReceiveUITests: XCTestCase {
 
     private func launchSimulation(
         delay: Int = 0,
-        outcome: String? = nil
+        outcome: String? = nil,
+        withStoredFiles: Bool = false
     ) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -94,6 +130,7 @@ final class ForegroundReceiveUITests: XCTestCase {
         if let outcome {
             app.launchArguments += ["--ui-test-receive-outcome", outcome]
         }
+        if withStoredFiles { app.launchArguments.append("--ui-test-stored-files") }
         app.launch()
         addTeardownBlock { app.terminate() }
         return app

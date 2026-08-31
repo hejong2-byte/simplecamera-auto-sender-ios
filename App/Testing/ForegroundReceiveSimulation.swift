@@ -13,15 +13,30 @@ final class ForegroundReceiveSimulation {
         let outcome = outcomeIndex.flatMap {
             arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil
         }
-        return try! ForegroundReceiveSimulation(delay: delay, outcome: outcome)
+        return try! ForegroundReceiveSimulation(
+            delay: delay, outcome: outcome,
+            withStoredFiles: arguments.contains("--ui-test-stored-files")
+        )
     }()
 
     let content: ContentViewModel
     let receiver: USBReceiverViewModel
     let incoming: IPhoneIncomingFilesViewModel
 
-    private init(delay: TimeInterval, outcome: String?) throws {
+    private init(delay: TimeInterval, outcome: String?, withStoredFiles: Bool) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let catalog = try IPhoneReceivedFileCatalog(
+            receivedDirectory: root.appendingPathComponent("Received", isDirectory: true),
+            stagingDirectory: root.appendingPathComponent("Staging", isDirectory: true),
+            recordsFileURL: root.appendingPathComponent("records.json")
+        )
+        if withStoredFiles {
+            for name in ["delete-me.txt", "keep-me.txt"] {
+                try Data("simulated local file".utf8).write(
+                    to: catalog.receivedDirectory.appendingPathComponent(name)
+                )
+            }
+        }
         let receiverID = UUID()
         let registration = IPhoneReceiverRegistrationStore(identityStore: InMemoryCredentialStore(), secretStore: InMemoryCredentialStore())
         try registration.save(IPhoneReceiverRegistration(receiverID: receiverID, code: "123456", receiveSecret: "simulation-only", deviceName: "수신 테스트 iPhone"))
@@ -77,6 +92,7 @@ final class ForegroundReceiveSimulation {
             approveLocalFallback: { ids in
                 try choices.approve(ids, receiverID: receiverID, destination: .iphoneLocal)
             },
+            storedFiles: { try catalog.refresh() },
             progressUpdates: { AsyncStream { $0.finish() } },
             loadOutcome: { id in
                 receiveOutcome?.receiverID == id ? receiveOutcome : nil

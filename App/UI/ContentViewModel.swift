@@ -70,6 +70,9 @@ final class ContentViewModel: ObservableObject {
             for await progress in automaticUpdates() {
                 guard !Task.isCancelled else { break }
                 self?.automaticProgress = progress
+                if [.completed, .failed, .paused].contains(progress.stage) {
+                    await self?.refresh()
+                }
             }
         }
     }
