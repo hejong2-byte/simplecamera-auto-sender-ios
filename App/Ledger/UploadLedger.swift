@@ -102,7 +102,7 @@ actor UploadLedger {
 
     func retryableRecords() throws -> [AssetRecord] {
         snapshot.records.values
-            .filter { $0.state == .discovered || $0.state == .failed }
+            .filter { $0.state == .discovered || $0.state == .failed || $0.state == .queued }
             .sorted { $0.createdAt < $1.createdAt }
     }
 

@@ -241,11 +241,14 @@ final class ContentViewModel: ObservableObject {
         switch progress.stage {
         case .idle: return "자동전송 대기"
         case .scanning: return "새 사진 확인 중"
-        case .preparing: return "원본 준비 중 · \(position)"
+        case .preparing:
+            return "사진 조건 확인 중 · \(progress.candidateIndex)/\(progress.candidateCount)장"
         case .uploading: return "PC로 자동전송 중 · \(position)"
         case .verifying: return "서버 저장 확인 중 · \(position)"
-        case .completed: return "자동전송 완료"
-        case .failed: return "자동전송 완료 · 실패 있음"
+        case .completed:
+            return progress.uploadedCount == 0 ? "전송할 새 사진 없음" : "자동전송 완료"
+        case .failed: return "자동전송 오류"
+        case .paused: return "자동전송 일시중단"
         }
     }
 
@@ -264,17 +267,21 @@ final class ContentViewModel: ObservableObject {
         case .scanning:
             return "Simple Cam으로 촬영한 새 사진을 확인하고 있습니다."
         case .preparing:
-            return "전송할 원본 파일을 준비하고 있습니다."
+            return "해상도와 iPhone 표시를 확인 중입니다. 조건에 맞는 사진만 전송합니다."
         case .uploading:
             return "\(progress.uploadedCount)장 완료 · \(progress.failedCount)장 실패"
         case .verifying:
             return "PC 수신 서버의 저장 응답을 확인하고 있습니다."
         case .completed:
-            return "자동전송 완료 · \(progress.uploadedCount)장"
+            return progress.uploadedCount == 0
+                ? "전송할 새 Simple Cam 사진이 없습니다."
+                : "자동전송 완료 · \(progress.uploadedCount)장"
         case .failed:
             let reason = progress.failureCategories.uploadFailureDescription
                 ?? "알 수 없는 오류"
             return "자동전송 실패 포함 · \(reason)"
+        case .paused:
+            return "\(progress.uploadedCount)장 완료 · 남은 사진은 다음 자동실행 때 다시 전송합니다."
         }
     }
 

@@ -2,7 +2,11 @@ import Foundation
 import ImageIO
 
 protocol SimpleCameraMetadataMatching: Sendable {
-    func matches(fileURL: URL) -> Bool
+    func matches(fileURL: URL) throws -> Bool
+}
+
+enum SimpleCameraMetadataError: Error {
+    case unreadableImage
 }
 
 struct SimpleCameraPhotoProperties: Sendable, Equatable {
@@ -13,13 +17,14 @@ struct SimpleCameraPhotoProperties: Sendable, Equatable {
 }
 
 struct SimpleCameraMetadataMatcher: SimpleCameraMetadataMatching {
-    func matches(fileURL: URL) -> Bool {
+    func matches(fileURL: URL) throws -> Bool {
         guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, nil),
               let values = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
                 as? [CFString: Any],
               let width = (values[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
-              let height = (values[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue else {
-            return false
+              let height = (values[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+              width > 0, height > 0 else {
+            throw SimpleCameraMetadataError.unreadableImage
         }
 
         let tiff = values[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]

@@ -36,6 +36,9 @@ struct SyncTransferSummary: Sendable, Equatable {
             let reason = failureDescription.map { " (\($0))" } ?? ""
             return "\(uploaded)장 완료, \(failed)장 재시도 대기\(reason)"
         }
+        if uploaded == 0 {
+            return "전송할 새 Simple Cam 사진이 없습니다."
+        }
         return "\(uploaded)장 전송 완료"
     }
 }
@@ -68,6 +71,7 @@ actor PhotoSyncService {
     private let scanDelaysNanoseconds: [UInt64]
     private let automaticProgressStore: AutomaticTransferProgressStore
     private var inFlight: Task<SyncTransferSummary, Error>?
+    private var libraryScanRequested = false
 
     init(
         credentialStore: CredentialStore,
@@ -91,46 +95,45 @@ actor PhotoSyncService {
     }
 
     func run(trigger: SyncTrigger) async throws -> SyncTransferSummary {
+        switch trigger {
+        case .automation, .manual:
+            libraryScanRequested = true
+        case .retry:
+            break
+        }
         if let inFlight {
             return try await inFlight.value
         }
 
         let task = Task { [self] in
-            try await performRun(trigger: trigger)
+            defer {
+                inFlight = nil
+                libraryScanRequested = false
+            }
+            return try await performRun()
         }
         inFlight = task
-        do {
-            let result = try await task.value
-            inFlight = nil
-            return result
-        } catch {
-            inFlight = nil
-            throw error
-        }
+        return try await task.value
     }
 
-    private func performRun(trigger: SyncTrigger) async throws -> SyncTransferSummary {
+    private func performRun() async throws -> SyncTransferSummary {
         let progressReporter = AutomaticTransferProgressReporter(
             store: automaticProgressStore
         )
         progressReporter.beginScanning()
         do {
             return try await performValidatedRun(
-                trigger: trigger,
                 progressReporter: progressReporter
             )
         } catch {
-            progressReporter.finishRun(
-                uploadedCount: 0,
-                failedCount: 1,
-                failureCategories: [Self.errorCategory(for: error)]
+            progressReporter.interrupt(
+                category: Self.isCancellation(error) ? nil : Self.errorCategory(for: error)
             )
             throw error
         }
     }
 
     private func performValidatedRun(
-        trigger: SyncTrigger,
         progressReporter: AutomaticTransferProgressReporter
     ) async throws -> SyncTransferSummary {
         guard let credential = try credentialStore.load(),
@@ -155,23 +158,38 @@ actor PhotoSyncService {
         var uploadedIDs = Set<String>()
         var failuresByID: [String: UploadErrorCategory] = [:]
         var completedUploadInEarlierScan = false
+        var hasScannedLibrary = false
+        var scanIndex = 0
 
-        for (scanIndex, delay) in scanDelaysNanoseconds.enumerated() {
+        while scanIndex < scanDelaysNanoseconds.count
+            || (libraryScanRequested && !hasScannedLibrary) {
+            let delay = scanIndex < scanDelaysNanoseconds.count
+                ? scanDelaysNanoseconds[scanIndex] : 0
+            scanIndex += 1
             if delay > 0 {
                 try await Task.sleep(nanoseconds: delay)
             }
             progressReporter.beginScanning()
-            let candidates = try await photoSource.candidates(
-                createdAfter: baseline.addingTimeInterval(-60)
-            )
+            let candidates: [PhotoCandidate]
+            if libraryScanRequested {
+                candidates = try await photoSource.candidates(
+                    createdAfter: baseline.addingTimeInterval(-60)
+                )
+                hasScannedLibrary = true
+            } else {
+                candidates = try await ledger.retryableRecords().map {
+                    PhotoCandidate(localIdentifier: $0.id, creationDate: $0.createdAt)
+                }
+            }
             var candidatesToTransfer: [PhotoCandidate] = []
 
             for candidate in candidates {
                 if discoveredIDs.insert(candidate.localIdentifier).inserted {
                     discovered += 1
                 }
+                if uploadedIDs.contains(candidate.localIdentifier) { continue }
                 if let record = try await ledger.record(id: candidate.localIdentifier),
-                   record.state == .queued || record.state == .uploaded || record.state == .ignored {
+                   record.state == .uploaded || record.state == .ignored {
                     continue
                 }
 
@@ -182,13 +200,16 @@ actor PhotoSyncService {
                 candidatesToTransfer.append(candidate)
             }
 
-            let outcomes = await transfer(
+            let outcomes = try await transfer(
                 candidates: candidatesToTransfer,
-                isFinalScan: scanIndex == scanDelaysNanoseconds.indices.last,
                 progressReporter: progressReporter
             )
             let completedUploadsThisScan = outcomes.reduce(0) { $0 + $1.uploaded }
             for outcome in outcomes {
+                if outcome.matched == 0 && outcome.failed == 0 {
+                    failuresByID.removeValue(forKey: outcome.candidateID)
+                    matchedIDs.remove(outcome.candidateID)
+                }
                 if outcome.matched > 0 { _ = matchedIDs.insert(outcome.candidateID) }
                 if outcome.uploaded > 0 {
                     _ = uploadedIDs.insert(outcome.candidateID)
@@ -201,7 +222,9 @@ actor PhotoSyncService {
                 }
             }
 
-            if completedUploadInEarlierScan && completedUploadsThisScan == 0 {
+            if completedUploadInEarlierScan && completedUploadsThisScan == 0
+                && failuresByID.isEmpty
+                && !(libraryScanRequested && !hasScannedLibrary) {
                 break
             }
             if completedUploadsThisScan > 0 {
@@ -226,9 +249,8 @@ actor PhotoSyncService {
 
     private func transfer(
         candidates: [PhotoCandidate],
-        isFinalScan: Bool,
         progressReporter: AutomaticTransferProgressReporter
-    ) async -> [CandidateTransferOutcome] {
+    ) async throws -> [CandidateTransferOutcome] {
         let orderedCandidates = candidates.sorted { left, right in
             if left.creationDate == right.creationDate {
                 return left.localIdentifier < right.localIdentifier
@@ -237,6 +259,11 @@ actor PhotoSyncService {
         }
         var prepared: [PreparedCandidate] = []
         var outcomes: [CandidateTransferOutcome] = []
+        defer {
+            for item in prepared {
+                try? FileManager.default.removeItem(at: item.fileURL)
+            }
+        }
 
         for (offset, candidate) in orderedCandidates.enumerated() {
             progressReporter.beginPreparing(
@@ -252,10 +279,9 @@ actor PhotoSyncService {
                     localIdentifier: candidate.localIdentifier,
                     to: fileURL
                 )
-                guard metadataMatcher.matches(fileURL: fileURL) else {
-                    if isFinalScan {
-                        try await ledger.markIgnored(id: candidate.localIdentifier)
-                    }
+                guard try metadataMatcher.matches(fileURL: fileURL) else {
+                    try await ledger.markIgnored(id: candidate.localIdentifier)
+                    progressReporter.discardUnmatchedFile(id: candidate.localIdentifier)
                     try? FileManager.default.removeItem(at: fileURL)
                     outcomes.append(CandidateTransferOutcome(
                         candidateID: candidate.localIdentifier,
@@ -280,6 +306,10 @@ actor PhotoSyncService {
                     bytes: fileBytes
                 )
             } catch {
+                if Self.isCancellation(error) {
+                    try? FileManager.default.removeItem(at: fileURL)
+                    throw error
+                }
                 let category = Self.errorCategory(for: error)
                 try? await ledger.markFailed(
                     id: candidate.localIdentifier,
@@ -330,6 +360,7 @@ actor PhotoSyncService {
                     failureCategory: nil
                 ))
             } catch {
+                if Self.isCancellation(error) { throw error }
                 let category = Self.errorCategory(for: error)
                 try? await ledger.markFailed(
                     id: item.candidate.localIdentifier,
@@ -352,6 +383,12 @@ actor PhotoSyncService {
         }
 
         return outcomes
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        let value = error as NSError
+        return error is CancellationError
+            || (value.domain == NSURLErrorDomain && value.code == NSURLErrorCancelled)
     }
 
     private static func errorCategory(for error: Error) -> UploadErrorCategory {

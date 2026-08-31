@@ -197,7 +197,7 @@ final class BackgroundUploadCoordinator: UploadCoordinating, @unchecked Sendable
         )
         try validate(response: response)
         try await ledger.markUploaded(id: assetID)
-        try FileManager.default.removeItem(at: fileURL)
+        try? FileManager.default.removeItem(at: fileURL)
     }
 
     private func validate(response: URLResponse) throws {

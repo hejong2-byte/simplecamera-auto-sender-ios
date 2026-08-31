@@ -50,8 +50,9 @@ guard try metadataMatcher.matches(fileURL: fileURL) else {
 }
 ~~~
 
-- [ ] Retry persisted pending work on foreground restoration without scanning
-  unrelated photos. Verify manual-progress updates leave automatic progress intact.
+- [ ] Recover persisted pending work on the next automatic run or explicit retry;
+  do not add photo scanning to manual transfer callbacks or general UI refresh.
+  Verify manual-progress updates leave automatic progress intact.
 - [ ] Run complete simulator tests and confirm the regressions pass.
 
 ### Task 2: Confirmed manual local-file deletion
@@ -83,7 +84,7 @@ guard file.url.standardizedFileURL.deletingLastPathComponent()
 
 ### Task 3: Build and deliver
 
-**Files:** project.yml, Tests/AppSmokeTests.swift, docs/install.md, release notes.
+**Files:** project.yml, Tests/ProjectSmokeTests.swift, docs/install.md, release notes.
 
 - [ ] Prepare the next unused release version after tests pass.
 - [ ] Build with bash scripts/build-unsigned-ipa.sh on macOS CI.

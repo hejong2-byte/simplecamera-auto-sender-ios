@@ -52,6 +52,18 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertFalse(source.contains("                    header\n"))
     }
 
+    func testReceiverDoesNotKeepTheRedundantSafetyInformationCard() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/USBReceiverView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertFalse(source.contains("안전한 저장 방식"))
+        XCTAssertFalse(source.contains("operationNotice"))
+    }
+
     func testPCReceiverCardAppearsBelowManualTransferStatus() throws {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

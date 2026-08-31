@@ -192,7 +192,7 @@ struct ContentView: View {
                 case .scanning, .preparing:
                     ProgressView()
                         .tint(.cyan)
-                case .uploading, .verifying, .completed, .failed:
+                case .uploading, .verifying, .completed, .failed, .paused:
                     if progress.totalBytes > 0 {
                         ProgressView(
                             value: Double(progress.percent),
@@ -294,6 +294,7 @@ struct ContentView: View {
         switch stage {
         case .completed: return .green
         case .failed: return .red
+        case .paused: return .orange
         default: return .cyan
         }
     }

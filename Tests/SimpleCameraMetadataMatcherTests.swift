@@ -35,7 +35,7 @@ final class SimpleCameraMetadataMatcherTests: XCTestCase {
     func testRejectsUnreadableFile() {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-        XCTAssertFalse(matcher.matches(fileURL: url))
+        XCTAssertThrowsError(try matcher.matches(fileURL: url))
     }
 
     private func fixture(

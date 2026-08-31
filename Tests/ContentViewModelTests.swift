@@ -291,6 +291,36 @@ final class ContentViewModelTests: XCTestCase {
         XCTAssertEqual(model.manualProgress?.uploadedCount, 1)
     }
 
+    func testAutomaticCompletionRefreshesStaleLedgerFailureMessage() async throws {
+        let ledger = try UploadLedger(fileURL: temporaryLedgerURL())
+        try await ledger.recordDiscovery(id: "recovered", createdAt: .now)
+        try await ledger.markFailed(id: "recovered", category: .server)
+        let store = AutomaticTransferProgressStore()
+        let model = ContentViewModel(
+            credentialStore: InMemoryCredentialStore(), ledger: ledger,
+            uploader: NoOpUploader(), now: Date.init,
+            send: { _ in .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
+            automaticUpdates: { store.updates() }
+        )
+        await model.refresh()
+        XCTAssertEqual(model.automaticFailureMessage, "서버 오류")
+
+        try await ledger.markUploaded(id: "recovered")
+        var completed = AutomaticTransferProgress.idle()
+        completed.stage = .completed
+        completed.uploadedCount = 1
+        completed.totalCount = 1
+        store.publish(completed)
+        await waitUntil {
+            model.automaticProgress?.stage == .completed
+                && model.automaticFailureMessage == nil
+        }
+
+        XCTAssertNil(model.automaticFailureMessage)
+        XCTAssertEqual(model.failedCount, 0)
+        XCTAssertEqual(model.uploadedCount, 1)
+    }
+
     private func temporaryLedgerURL() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

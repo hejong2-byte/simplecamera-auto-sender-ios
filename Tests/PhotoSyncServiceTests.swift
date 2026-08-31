@@ -524,6 +524,54 @@ final class PhotoSyncServiceTests: XCTestCase {
         XCTAssertEqual(progress?.failureCategories, [])
     }
 
+    func testTwelveMatchingPhotosAreAllUploadedWithoutACountLimit() async throws {
+        let ledger = try await makeLedger()
+        let source = FakePhotoSource(items: (1...12).map {
+            (PhotoCandidate(
+                localIdentifier: "batch-\($0)",
+                creationDate: Date(timeIntervalSince1970: Double($0))
+            ), "Simple Camera")
+        })
+        let uploader = RecordingUploader(ledger: ledger)
+        let service = makeService(ledger: ledger, source: source, uploader: uploader)
+
+        let summary = try await service.run(trigger: .automation)
+
+        XCTAssertEqual(summary.uploaded, 12)
+        XCTAssertEqual(summary.failed, 0)
+        XCTAssertEqual(uploader.recordedIDs, (1...12).map { "batch-\($0)" })
+    }
+
+    func testJoiningAutomationPromotesRetryToIncludeNewPhotos() async throws {
+        let ledger = try await makeLedger()
+        try await ledger.recordDiscovery(id: "retry-first", createdAt: .now)
+        try await ledger.markFailed(id: "retry-first", category: .network)
+        let source = FakePhotoSource(items: [
+            (PhotoCandidate(localIdentifier: "retry-first", creationDate: .now), "Simple Camera"),
+            (PhotoCandidate(localIdentifier: "new-photo", creationDate: .now), "Simple Camera")
+        ])
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("test-secret")
+        let uploader = GatedPhotoUploader(ledger: ledger)
+        let service = PhotoSyncService(
+            credentialStore: credentials, photoSource: source,
+            metadataMatcher: TextMetadataMatcher(), ledger: ledger,
+            uploader: uploader, uploadsDirectory: temporaryDirectory(),
+            scanDelaysNanoseconds: [0]
+        )
+        let retry = Task { try await service.run(trigger: .retry) }
+        await uploader.waitForFirstUpload()
+        let automatic = Task { try await service.run(trigger: .automation) }
+        // Keep the transport suspended while the joining actor call is scheduled.
+        try await Task.sleep(nanoseconds: 50_000_000)
+        await uploader.releaseFirstUpload()
+        _ = try await retry.value
+        _ = try await automatic.value
+        let ids = await uploader.uploadedIDs
+
+        XCTAssertEqual(ids, ["retry-first", "new-photo"])
+    }
+
     private func makeService(
         ledger: UploadLedger,
         source: FakePhotoSource,
@@ -672,10 +720,13 @@ private struct AlwaysMatchingMetadataMatcher: SimpleCameraMetadataMatching {
 }
 
 private struct TextMetadataMatcher: SimpleCameraMetadataMatching {
-    func matches(fileURL: URL) -> Bool {
+    func matches(fileURL: URL) throws -> Bool {
         guard let data = try? Data(contentsOf: fileURL),
               let value = String(data: data, encoding: .utf8)?.lowercased() else {
             return false
+        }
+        if value == "metadata pending" {
+            throw SimpleCameraMetadataError.unreadableImage
         }
         return value == "simple camera" || value.hasPrefix("simple camera ")
     }
@@ -856,4 +907,43 @@ private struct CancelledExportPhotoSource: PhotoAssetSourcing {
     func exportOriginal(localIdentifier: String, to destination: URL) async throws {
         throw URLError(.cancelled)
     }
+}
+
+private actor GatedPhotoUploader: UploadCoordinating {
+    let ledger: UploadLedger
+    private(set) var uploadedIDs: [String] = []
+    private var firstUpload: CheckedContinuation<Void, Never>?
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var didStart = false
+
+    init(ledger: UploadLedger) { self.ledger = ledger }
+
+    func upload(
+        assetID: String, fileURL: URL,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
+    ) async throws {
+        if !didStart {
+            didStart = true
+            await withCheckedContinuation { continuation in
+                firstUpload = continuation
+                startWaiters.forEach { $0.resume() }
+                startWaiters.removeAll()
+            }
+        }
+        uploadedIDs.append(assetID)
+        try await ledger.markUploaded(id: assetID)
+    }
+
+    func waitForFirstUpload() async {
+        if didStart { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func releaseFirstUpload() {
+        firstUpload?.resume()
+        firstUpload = nil
+    }
+
+    nonisolated func authenticationBlocked() -> Bool { false }
+    nonisolated func credentialDidChange() {}
 }
