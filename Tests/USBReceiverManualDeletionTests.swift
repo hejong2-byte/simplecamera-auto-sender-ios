@@ -4,6 +4,60 @@ import XCTest
 
 @MainActor
 final class USBReceiverManualDeletionTests: XCTestCase {
+    func testSelectionControlsDeletionButtonDuringRepeatedIdlePolls() async throws {
+        for destination in IPhoneReceiveDestination.allCases {
+            let gate = StoredDeletionGate()
+            let fixture = try makeFixture(beforePoll: { await gate.wait() })
+            await fixture.model.refresh()
+            fixture.model.setSelectedDestination(destination)
+            let file = try XCTUnwrap(fixture.model.storedFiles.first)
+            XCTAssertFalse(fixture.model.canDeleteStoredFiles)
+            fixture.model.toggleStoredFileSelection(file.id)
+
+            for _ in 0..<3 {
+                await gate.reset()
+                let poll = Task { await fixture.model.pollOnce() }
+                await waitUntil { fixture.model.isPerformingReceive }
+
+                XCTAssertTrue(fixture.model.canDeleteStoredFiles,
+                              "An idle server check must not disable the selected-file button")
+                fixture.model.toggleStoredFileSelection(file.id)
+                XCTAssertFalse(fixture.model.canDeleteStoredFiles)
+                fixture.model.toggleStoredFileSelection(file.id)
+                XCTAssertTrue(fixture.model.canDeleteStoredFiles)
+
+                await gate.release()
+                await poll.value
+                XCTAssertTrue(fixture.model.canDeleteStoredFiles)
+            }
+            XCTAssertEqual(try fixture.catalog.refresh().count, 2)
+        }
+    }
+
+    func testConfirmedDeletionSucceedsWhileIdleServerCheckIsWaiting() async throws {
+        for destination in IPhoneReceiveDestination.allCases {
+            let gate = StoredDeletionGate()
+            let fixture = try makeFixture(beforePoll: { await gate.wait() })
+            await fixture.model.refresh()
+            fixture.model.setSelectedDestination(destination)
+            let file = try XCTUnwrap(fixture.model.storedFiles.first)
+            fixture.model.toggleStoredFileSelection(file.id)
+            let poll = Task { await fixture.model.pollOnce() }
+            await waitUntil { fixture.model.isPerformingReceive }
+
+            fixture.model.requestStoredFileDeletion()
+            XCTAssertTrue(fixture.model.needsStoredFileDeletionConfirmation)
+            await fixture.model.deleteConfirmedStoredFiles()
+
+            XCTAssertEqual(try fixture.catalog.refresh().count, 1)
+            XCTAssertEqual(fixture.model.storedFileDeletionMessage, "iPhone 파일 1개 삭제 완료")
+            XCTAssertNil(fixture.model.storedFileDeletionError)
+            XCTAssertFalse(fixture.model.canDeleteStoredFiles)
+            await gate.release()
+            await poll.value
+        }
+    }
+
     func testCancellationDoesNotDeleteAnyFile() async throws {
         let fixture = try makeFixture()
         await fixture.model.refresh()
@@ -85,10 +139,37 @@ final class USBReceiverManualDeletionTests: XCTestCase {
         ))
         await waitUntil { fixture.model.isReceivingFile }
 
+        XCTAssertTrue(fixture.model.canDeleteStoredFiles,
+                      "Selection keeps the button enabled; an actual transfer is explained on tap")
         fixture.model.requestStoredFileDeletion()
 
         XCTAssertFalse(fixture.model.needsStoredFileDeletionConfirmation)
+        XCTAssertTrue(fixture.model.storedFileDeletionError?.contains("전송 중") == true)
         XCTAssertEqual(try fixture.catalog.refresh().count, 2)
+    }
+
+    func testReceiveStartingAfterConfirmationStillProtectsFiles() async throws {
+        let progress = USBReceiveProgressStore()
+        let fixture = try makeFixture(progress: progress)
+        await fixture.model.refresh()
+        let file = try XCTUnwrap(fixture.model.storedFiles.first)
+        fixture.model.toggleStoredFileSelection(file.id)
+        fixture.model.requestStoredFileDeletion()
+        XCTAssertTrue(fixture.model.needsStoredFileDeletionConfirmation)
+        progress.publish(USBReceiveProgress(
+            stage: .downloading, destination: .iphoneLocal, deliveryID: UUID(),
+            fileName: "incoming.zip", currentIndex: 1, totalCount: 1, completedCount: 0,
+            bytesReceived: 1, totalBytes: 10, startedAt: .now,
+            expiresAt: nil, errorMessage: nil
+        ))
+        await waitUntil { fixture.model.isReceivingFile }
+
+        await fixture.model.deleteConfirmedStoredFiles()
+
+        XCTAssertEqual(try fixture.catalog.refresh().count, 2)
+        XCTAssertTrue(fixture.model.canDeleteStoredFiles)
+        XCTAssertFalse(fixture.model.needsStoredFileDeletionConfirmation)
+        XCTAssertTrue(fixture.model.storedFileDeletionError?.contains("전송 중") == true)
     }
 
     func testRepeatedConfirmationCannotStartTwoDeletes() async throws {
@@ -101,6 +182,7 @@ final class USBReceiverManualDeletionTests: XCTestCase {
         let deletion = Task { await fixture.model.deleteConfirmedStoredFiles() }
         await waitUntil { fixture.model.isDeletingStoredFiles }
 
+        XCTAssertFalse(fixture.model.canDeleteStoredFiles)
         fixture.model.requestStoredFileDeletion()
         await fixture.model.deleteConfirmedStoredFiles()
         await gate.release()
@@ -114,6 +196,7 @@ final class USBReceiverManualDeletionTests: XCTestCase {
 
     private func makeFixture(
         progress: USBReceiveProgressStore = USBReceiveProgressStore(),
+        beforePoll: @escaping @Sendable () async -> Void = {},
         beforeDelete: @escaping @Sendable () async -> Void = {}
     ) throws -> (model: USBReceiverViewModel, catalog: IPhoneReceivedFileCatalog) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -136,7 +219,11 @@ final class USBReceiverManualDeletionTests: XCTestCase {
             ),
             bookmarkStore: USBBookmarkStore(fileURL: root.appendingPathComponent("bookmark.json")),
             registrar: ManualDeletionRegistrar(),
-            receiveOnce: { .init(discovered: 0, completed: 0) },
+            receiveOnce: {
+                await beforePoll()
+                return .init(discovered: 0, completed: 0)
+            },
+            receiveLocalOnce: { await beforePoll() },
             storedFiles: { try catalog.refresh() },
             deleteStoredFiles: { files in
                 await beforeDelete()
@@ -179,5 +266,10 @@ private actor StoredDeletionGate {
         released = true
         continuation?.resume()
         continuation = nil
+    }
+
+    func reset() {
+        precondition(continuation == nil)
+        released = false
     }
 }
