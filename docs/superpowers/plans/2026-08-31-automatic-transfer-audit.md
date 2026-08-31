@@ -79,7 +79,7 @@ guard file.url.standardizedFileURL.deletingLastPathComponent()
 
 - [x] Add a confirmation driven by a captured selection, busy guards, and clear
   completion/error text. Remove only the operationNotice view and call.
-- [ ] Run the full simulator suite; inspect deletion UI in a fixture with
+- [x] Run the full simulator suite; inspect deletion UI in a fixture with
   synthetic files and verify cancel does not delete anything.
 
 ### Task 3: Build and deliver
@@ -87,8 +87,8 @@ guard file.url.standardizedFileURL.deletingLastPathComponent()
 **Files:** project.yml, Tests/ProjectSmokeTests.swift, docs/install.md, release notes.
 
 - [x] Prepare the next unused release version after tests pass.
-- [ ] Build with bash scripts/build-unsigned-ipa.sh on macOS CI.
-- [ ] Download the release IPA; run python scripts/verify-ipa.py, inspect its
+- [x] Build with bash scripts/build-unsigned-ipa.sh on macOS CI.
+- [x] Download the release IPA; run python scripts/verify-ipa.py, inspect its
   Info.plist, check ZIP integrity, and compare SHA-256 after the Desktop copy.
-- [ ] Provide verified Desktop IPA and concise verified causes/test results;
+- [x] Provide verified Desktop IPA and concise verified causes/test results;
   explicitly distinguish simulator coverage from physical-device acceptance.

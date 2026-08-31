@@ -44,8 +44,20 @@
 - [초기 자동전송 회귀 테스트](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/actions/runs/33349386501): 새 회귀 검사가 기존 구현에서 실패함을 확인했다.
 - [핵심 수정 후 재검사](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/actions/runs/33349963118): 자동전송 핵심 회귀 검사는 통과. 추가한 종료 후 이전 오류 표시 검사와 아직 제거하지 않은 안내 카드 검사만 실패했다. 로직 227개, UI 6개 실행.
 - [수동 삭제 구현 전 검사](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/actions/runs/33350621657): 아직 없는 삭제 API를 호출하는 신규 테스트가 컴파일 단계에서 실패했다. 삭제 동작 자체의 실패를 재현한 것으로 간주하지 않는다.
+- [통합 수정 후 검사](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/actions/runs/33350886717): 커밋 52bc3cf5cb574bb206826a5608a256e9aa518924에서 로직 241개와 UI 7개, 총 248개가 모두 통과했다. unsigned IPA 빌드와 파일 앱 표시 설정 검사도 통과했다.
 
-최종 통합 검사 및 IPA 검증 결과는 완료 후 이 문서에 기록한다.
+## 최종 배포 검증
+
+- 버전 0.3.7, 빌드 18. 태그 v0.3.7의 로컬/원격 peeled 커밋은 모두 6ae25bfa586f211d2b9b01971a365937a4347ee6이다.
+- [배포 버전 CI](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/actions/runs/33351285646) 및 [별도 릴리스 빌드](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/actions/runs/33351288192) 모두 성공했다. 각각 로직 241개 + UI 7개 = 248개, 실패 0건이다.
+- 삭제 확인창과 완료 화면을 CI의 iPhone 16 Pro 시뮬레이터 캡처로 직접 확인했다. 취소/삭제 버튼과 삭제 대상 이름이 보이고, 완료 후 선택한 파일만 사라지며 남은 파일 1개 및 “iPhone 파일 1개 삭제 완료”가 표시된다. 불필요한 안내 카드는 없다.
+- 배포 IPA: 1,741,936바이트. SHA-256: 1284959FAD2B0647C6CB6DD3A20ECB3C5184847C45FAD242C55E799DF0F54709.
+- ZIP 무결성, arm64, iPhoneOS, 최소 iOS 17.0, 기존 앱 식별자, 0.3.7/18 버전, launch screen, 사진 접근 안내 및 파일 앱 표시 키를 확인했다. Release 실행 파일에 시뮬레이터 플래그와 가짜 저장 파일 내용은 없다.
+- 인증된 릴리스 다운로드, 비로그인 버전 고정 URL, 비로그인 latest URL 및 바탕화면 사본의 IPA 해시가 모두 같다.
+- QR은 ZXing으로 독립 디코딩하여 저장소의 SideStore 설치 URI와 정확히 일치함을 확인했다. QR SHA-256: 95AF9CE2CD019829F803CB8D495923E6F4D9007DB990434758D688AB8C55505B.
+- 바탕화면 IPA: C:/Users/user/Desktop/SimpleCameraAutoSender-v0.3.7-build18.ipa.
+- 바탕화면 QR: C:/Users/user/Desktop/SimpleCameraAutoSender-v0.3.7-install-qr.png.
+- [공개 릴리스](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/releases/tag/v0.3.7).
 
 ## 한계
 
