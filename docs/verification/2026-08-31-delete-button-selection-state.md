@@ -23,5 +23,14 @@
 - 크기: 1,741,569바이트.
 - SHA-256: `CFBDA72128BD7D25E46DDA4812957FCEFB3AE970FFBA3AA27A3D274053B64D80`.
 - ZIP 무결성, arm64, iPhoneOS, 최소 iOS 17.0, 버전, 파일 앱 표시, launch screen, 사진 접근 설명, 시뮬레이터 전용 코드 제외를 검사했다. 내려받은 IPA와 바탕화면 사본의 해시가 일치한다.
-- 이번 전달은 CI에서 빌드한 unsigned IPA이며 SideStore가 서명한다. 공개 릴리스 태그 및 기존 QR 링크는 변경하지 않았다.
+- 이번 전달은 CI에서 빌드한 unsigned IPA이며 SideStore가 서명한다. 최초 IPA 전달 이후 사용자의 QR 요청에 따라 아래 공개 배포도 완료했다.
 - 실제 iPhone/USB 하드웨어에서는 직접 시험하지 않았다. 기존 저장 파일을 유지하려면 앱 삭제 없이 SideStore에서 업데이트 설치한다.
+
+## 설치 QR 공개 배포
+
+- [v0.3.8 릴리스](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/releases/tag/v0.3.8)를 latest로 게시했다. 원격 태그는 검증된 소스 `b438bceabf1473eb9fe11520bc3876ec2b5a0597`을 가리킨다.
+- CI 33379353794의 검증된 IPA를 그대로 첨부했다. 태그 생성으로 시작된 중복 릴리스 실행 33385648130은 이 파일을 재빌드로 교체하지 않도록 취소했고 취소 완료를 확인했다.
+- 비로그인 latest 및 버전 고정 URL로 내려받은 IPA의 SHA-256은 위 바탕화면 IPA와 같으며, 모두 0.3.8/19 및 ZIP 무결성을 확인했다.
+- 공개 QR을 독립 디코더 ZXing으로 읽어 저장소의 SideStore 설치 URI와 일치함을 확인했다. 해당 URI의 latest 다운로드가 0.3.8/19를 제공한다.
+- QR: `C:/Users/user/Desktop/SimpleCameraAutoSender-v0.3.8-install-qr.png`.
+- QR SHA-256: `95AF9CE2CD019829F803CB8D495923E6F4D9007DB990434758D688AB8C55505B`.
