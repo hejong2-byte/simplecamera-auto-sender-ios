@@ -183,9 +183,7 @@ final class USBReceiverViewModel: ObservableObject {
     var hasStoredFileSelection: Bool { !selectedStoredFileIDs.isEmpty }
     var needsStoredFileDeletionConfirmation: Bool { !storedFilesPendingDeletion.isEmpty }
     var canDeleteStoredFiles: Bool {
-        hasStoredFileSelection && !isDeletingStoredFiles && !isExportingToUSB
-            && !isReceivingFile && !isPerformingReceive && !isChoosingUSBFolder
-            && !needsDeletionDecision && !needsLocalFallbackDecision
+        hasStoredFileSelection && !isDeletingStoredFiles
     }
     var pendingDeletionCount: Int { pendingDeletionDecisions().count }
     var isReceivingFile: Bool {
@@ -450,7 +448,14 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     func requestStoredFileDeletion() {
-        guard canDeleteStoredFiles, !needsStoredFileDeletionConfirmation else { return }
+        guard canDeleteStoredFiles, !needsStoredFileDeletionConfirmation,
+              !isChoosingUSBFolder, !needsDeletionDecision,
+              !needsLocalFallbackDecision else { return }
+        guard !isReceivingFile, !isExportingToUSB else {
+            storedFileDeletionError = "전송 중에는 삭제할 수 없습니다. 전송이 끝난 뒤 다시 눌러 주세요."
+            return
+        }
+        storedFileDeletionError = nil
         storedFilesPendingDeletion = storedFiles.filter { selectedStoredFileIDs.contains($0.id) }
     }
 
@@ -460,9 +465,9 @@ final class USBReceiverViewModel: ObservableObject {
 
     func deleteConfirmedStoredFiles() async {
         guard !storedFilesPendingDeletion.isEmpty, !isDeletingStoredFiles else { return }
-        guard !isReceivingFile, !isPerformingReceive, !isExportingToUSB else {
+        guard !isReceivingFile, !isExportingToUSB else {
             storedFilesPendingDeletion = []
-            storedFileDeletionError = "전송 중에는 삭제할 수 없습니다. 전송이 끝난 뒤 다시 선택해 주세요."
+            storedFileDeletionError = "전송 중에는 삭제할 수 없습니다. 전송이 끝난 뒤 다시 눌러 주세요."
             return
         }
         let confirmedFiles = storedFilesPendingDeletion

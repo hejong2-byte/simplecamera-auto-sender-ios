@@ -9,8 +9,15 @@ final class ForegroundReceiveUITests: XCTestCase {
         let selected = app.buttons["stored-file-delete-me.txt"]
         reveal(selected, in: app)
         XCTAssertTrue(selected.isHittable)
-        selected.tap()
         let delete = app.buttons["stored-files-delete"]
+        XCTAssertTrue(delete.exists)
+        XCTAssertFalse(delete.isEnabled, "No selection must leave deletion disabled")
+        selected.tap()
+        XCTAssertTrue(delete.isEnabled)
+        selected.tap()
+        XCTAssertFalse(delete.isEnabled)
+        selected.tap()
+        XCTAssertTrue(delete.isEnabled)
         reveal(delete, in: app)
         XCTAssertTrue(delete.isHittable)
         delete.tap()
@@ -20,6 +27,7 @@ final class ForegroundReceiveUITests: XCTestCase {
         keepScreenshot("local-file-delete-confirmation", app: app)
         cancel.tap()
         XCTAssertTrue(selected.exists, "Cancel must retain the selected file")
+        XCTAssertTrue(delete.isEnabled, "Cancel keeps the selection and enabled deletion button")
         delete.tap()
         let confirm = app.alerts.buttons["삭제"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))
@@ -31,6 +39,7 @@ final class ForegroundReceiveUITests: XCTestCase {
         )
         wait(for: [removed], timeout: 10)
         XCTAssertTrue(app.buttons["stored-file-keep-me.txt"].exists)
+        XCTAssertFalse(delete.isEnabled, "Deleting the only selected file clears the selection")
         XCTAssertTrue(app.staticTexts["iPhone 파일 1개 삭제 완료"].exists)
         XCTAssertFalse(app.staticTexts["안전한 저장 방식"].exists)
         keepScreenshot("local-file-delete-completed", app: app)
