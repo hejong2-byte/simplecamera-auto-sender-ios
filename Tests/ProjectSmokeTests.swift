@@ -19,8 +19,8 @@ final class ProjectSmokeTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 19"))
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.8"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 20"))
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.9"))
         XCTAssertTrue(project.contains("UIFileSharingEnabled: true"))
         XCTAssertTrue(
             project.contains("INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES")
@@ -37,6 +37,49 @@ final class ProjectSmokeTests: XCTestCase {
         )
 
         XCTAssertTrue(project.contains("UILaunchScreen: {}"))
+    }
+
+    func testAppIconMasterIsUnifiedOpaqueRGB1024() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let master = try Data(
+            contentsOf: repository.appendingPathComponent("design/icon-base.png")
+        )
+        let appIcon = try Data(
+            contentsOf: repository.appendingPathComponent(
+                "App/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+            )
+        )
+
+        XCTAssertEqual(master, appIcon)
+        XCTAssertGreaterThanOrEqual(appIcon.count, 26)
+        XCTAssertEqual(Array(appIcon.prefix(8)), [137, 80, 78, 71, 13, 10, 26, 10])
+        XCTAssertEqual(
+            appIcon[16..<20].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) },
+            1024
+        )
+        XCTAssertEqual(
+            appIcon[20..<24].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) },
+            1024
+        )
+        XCTAssertEqual(appIcon[24], 8)
+        XCTAssertEqual(appIcon[25], 2)
+    }
+
+    func testAppIconGeneratorDoesNotReintroduceLegacyBadge() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let generator = try String(
+            contentsOf: repository.appendingPathComponent("scripts/generate-app-icon.py"),
+            encoding: .utf8
+        )
+
+        XCTAssertFalse(generator.contains("자동전송"))
+        XCTAssertFalse(generator.contains("ADD-ON"))
+        XCTAssertFalse(generator.contains("ImageDraw"))
+        XCTAssertFalse(generator.contains("ImageFont"))
     }
 
     func testMainScreenDoesNotKeepTheRedundantDecorativeHeader() throws {
