@@ -84,7 +84,7 @@ final class USBReceiverViewModel: ObservableObject {
     private let approveLocalFallback: ApproveLocalFallback
     private let storedFilesProvider: StoredFilesProvider
     private let previewStoredFile: StoredFilePreviewAction
-    private let canPreviewFile: (URL) -> Bool
+    private let canPreviewFile: @MainActor (URL) -> Bool
     private let deleteStoredFiles: DeleteStoredFiles
     private let exportFiles: ExportFiles
     private let pendingDeletionDecisions: PendingDeletionDecisions
@@ -118,7 +118,7 @@ final class USBReceiverViewModel: ObservableObject {
         previewStoredFile: @escaping StoredFilePreviewAction = { _ in
             throw IPhoneStoredFilePreviewError.unavailable
         },
-        canPreviewFile: @escaping (URL) -> Bool = { QLPreviewController.canPreview($0 as NSURL) },
+        canPreviewFile: @escaping @MainActor (URL) -> Bool = { QLPreviewController.canPreview($0 as NSURL) },
         deleteStoredFiles: @escaping DeleteStoredFiles = { _ in
             throw CocoaError(.featureUnsupported)
         },

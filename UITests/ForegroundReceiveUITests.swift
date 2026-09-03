@@ -54,6 +54,10 @@ final class ForegroundReceiveUITests: XCTestCase {
 
         let close = app.buttons["stored-preview-close"]
         XCTAssertTrue(close.waitForExistence(timeout: 10))
+        let contents = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label CONTAINS %@ OR value CONTAINS %@", "simulated local file", "simulated local file"
+        )).firstMatch
+        XCTAssertTrue(contents.waitForExistence(timeout: 15), "Quick Look must display the stored file contents")
         keepScreenshot("stored-file-readonly-preview", app: app)
         close.tap()
         XCTAssertTrue(selected.waitForExistence(timeout: 5))

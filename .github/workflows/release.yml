@@ -20,6 +20,19 @@ jobs:
           .release-venv/bin/pip install 'qrcode[pil]'
       - name: Run iOS tests
         run: bash scripts/test-ios.sh
+      - name: Export release UI test screenshots
+        if: always()
+        run: |
+          if [ -d build/TestResults.xcresult ]; then
+            xcrun xcresulttool export attachments --path build/TestResults.xcresult --output-path build/ui-test-attachments
+          fi
+      - name: Upload release UI test screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Release-UI-test-screenshots
+          path: build/ui-test-attachments
+          retention-days: 3
       - name: Build unsigned IPA
         run: bash scripts/build-unsigned-ipa.sh
       - name: Generate SideStore QR
