@@ -1,6 +1,51 @@
 import XCTest
 
 final class ForegroundReceiveUITests: XCTestCase {
+    func testKakaoFileActionAppearsAfterVideoAndFolderIsConfigurable() {
+        let app = launchSimulation(delay: 3_600)
+        let files = app.buttons["manual-kakao-file"]
+        XCTAssertTrue(files.waitForExistence(timeout: 20))
+        reveal(files, in: app)
+        XCTAssertTrue(files.isHittable)
+        XCTAssertGreaterThan(files.frame.minY, app.buttons["manual-video"].frame.minY)
+        keepScreenshot("main-kakao-file-action", app: app)
+
+        let settings = app.buttons["open-settings"]
+        reveal(settings, in: app)
+        settings.tap()
+        let folder = app.buttons["kakao-folder-select"]
+        reveal(folder, in: app)
+        XCTAssertTrue(folder.isHittable)
+        keepScreenshot("settings-kakao-folder", app: app)
+    }
+
+    func testStoredFilePreviewPreservesSelectionAndReceiverCardIsRemoved() {
+        let app = launchSimulation(delay: 3_600, withStoredFiles: true)
+        let receiver = app.buttons["open-receiver"]
+        XCTAssertTrue(receiver.waitForExistence(timeout: 20))
+        receiver.tap()
+        XCTAssertFalse(app.staticTexts["수신 기기"].exists)
+        XCTAssertFalse(app.staticTexts["PC 입력 코드"].exists)
+
+        let selected = app.buttons["stored-file-keep-me.txt"]
+        reveal(selected, in: app)
+        selected.tap()
+        let delete = app.buttons["stored-files-delete"]
+        XCTAssertTrue(delete.isEnabled)
+        let open = app.buttons["stored-file-open-keep-me.txt"]
+        XCTAssertTrue(open.isHittable)
+        open.tap()
+
+        let close = app.buttons["stored-preview-close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 10))
+        keepScreenshot("stored-file-readonly-preview", app: app)
+        close.tap()
+        XCTAssertTrue(selected.waitForExistence(timeout: 5))
+        XCTAssertTrue(delete.isEnabled, "Preview must preserve the USB/delete selection")
+        XCTAssertTrue(app.buttons["stored-file-delete-me.txt"].exists)
+        keepScreenshot("stored-file-preview-return", app: app)
+    }
+
     func testLocalFileDeletionRequiresConfirmationAndPreservesUnselectedFile() {
         let app = launchSimulation(delay: 3_600, withStoredFiles: true)
         let receiver = app.buttons["open-receiver"]

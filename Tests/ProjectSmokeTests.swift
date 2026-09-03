@@ -107,6 +107,35 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertFalse(source.contains("operationNotice"))
     }
 
+    func testReceiverReplacesIdentityCardWithSeparateLocalPreviewAction() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/USBReceiverView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertFalse(source.contains("identityCard"))
+        XCTAssertTrue(source.contains("model.openStoredFile(file)"))
+        XCTAssertTrue(source.contains("stored-file-open-"))
+        XCTAssertTrue(source.contains("StoredFilePreview("))
+    }
+
+    func testManualFilePickerDoesNotUseThePhotoLibrary() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/ContentView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("DocumentFilePicker("))
+        XCTAssertTrue(source.contains("model.sendSelectedFiles("))
+        XCTAssertTrue(source.contains("model.fileTransferReadinessMessage"))
+    }
+
     func testPCReceiverCardAppearsBelowManualTransferStatus() throws {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
