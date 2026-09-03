@@ -92,11 +92,11 @@ func sendSelectedFiles(_ urls: [URL]) async
 
 ## Task 6: Verify and hand off
 
-- [ ] Run the worker's `npm test` and `npm run typecheck`; compare no pre-existing test regressions.
-- [ ] Run iOS CI with all XCTest and UI tests, then `scripts/build-unsigned-ipa.sh` / `scripts/verify-ipa.py` through the configured workflow.
-- [ ] Inspect screenshot attachments for the fourth action, Settings folder section, local preview and cleaned receiver screen.
-- [ ] Review diffs for automatic filtering/credential/data changes and inspect git status for unrelated edits.
-- [ ] Record CI commit/result, artifact path/hash, worker test counts and any live-deployment/device limitations. Do not label a source-only feature installed or live.
+- [x] Run the worker's `npm test` and `npm run typecheck`; compare no pre-existing test regressions.
+- [x] Run iOS CI with all XCTest and UI tests, then `scripts/build-unsigned-ipa.sh` / `scripts/verify-ipa.py` through the configured workflow.
+- [x] Inspect screenshot attachments for the fourth action, Settings folder section, local preview and cleaned receiver screen.
+- [x] Review diffs for automatic filtering/credential/data changes and inspect git status for unrelated edits.
+- [x] Record CI commit/result, artifact path/hash, worker test counts and any live-deployment/device limitations. Do not label a source-only feature installed or live.
 
 Windows test command: `gh run view <run-id> --repo hejong2-byte/simplecamera-auto-sender-ios --json status,conclusion,headSha,jobs`.
 
@@ -111,3 +111,12 @@ macOS test command: `bash scripts/test-ios.sh` (the workflow installs XcodeGen f
 - Isolated relay tests: 49 passed; both TypeScript checks and Wrangler dry-run passed. Existing deployed multipart final-metadata verification was preserved before adding general-file endpoints.
 - Relay version `58c605dd-1c8b-4f9a-b6a9-a7f9e8cadd0e` is deployed from backend `9d8e55e`. Downloaded code and R2/D1/cron bindings matched committed source exactly; normalized code SHA-256 `53f5a45f8405dea4a2b46a3a8dd966a5e1d754b84993bacdb45ef381286f5cec`. Health returned 200; unauthenticated new upload route returned 403.
 - No live file upload, ACK, source deletion, registration/secret reset, or installed Windows receiver replacement was performed. Physical iPhone/USB/Kakao provider selection remains device verification.
+
+## Released artifact
+
+- Tag `v0.3.10`, commit `5bb188d79c2b8b924c576ddc50dc96589eb6c584`, release run `33703008047`: success. 270 unit tests and 10 UI tests passed again; actual Quick Look text was visible in the screenshot. The newly introduced preview actor-isolation warning is resolved.
+- Downloaded IPA verified as `com.hejong2byte.simplecameraautosender`, version `0.3.10`, build `21`, minimum iOS `17.0`; ZIP integrity and Files visibility checks passed.
+- IPA SHA-256: `a8db33d7b1d1497146c9a91b59b01185c159b0ab8085733355036f947f840414` (2,261,602 bytes).
+- QR PNG SHA-256: `95af9ce2cd019829f803cb8d495923e6f4d9007db990434758d688ab8c55505b` (876 x 876). Both files match GitHub release asset digests.
+- The QR's `releases/latest/download/SimpleCameraAutoSender.ipa` target was downloaded independently: HTTP 200 and the same IPA SHA-256, not the previous version.
+- Delivered IPA and QR in `C:/Users/user/Desktop/SimpleCamera-iPhone-0.3.10/`. No physical-device installation or live user-file transfer was claimed.
