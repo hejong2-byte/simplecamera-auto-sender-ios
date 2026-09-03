@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @ObservedObject var model: ContentViewModel
     @ObservedObject var receiverModel: USBReceiverViewModel
+    @ObservedObject var filePickerModel: KakaoFilePickerModel
     @State private var credential = ""
     @State private var showingResetConfirmation = false
 
@@ -13,6 +14,7 @@ struct SettingsView: View {
             VStack(spacing: 16) {
                 photoAccessCard
                 credentialCard
+                kakaoFolderCard
                 monitoringCard
                 automationCard
                 receiverSettingsCard
@@ -47,6 +49,22 @@ struct SettingsView: View {
             receiverModel.isShowingSettingsConfirmation = showing
         }
         .onDisappear { receiverModel.isShowingSettingsConfirmation = false }
+    }
+
+    private var kakaoFolderCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("카카오톡 파일전송 기본 폴더").font(.headline)
+            Label(filePickerModel.folderName ?? "폴더 미선택", systemImage: "folder")
+            Button(filePickerModel.folderName == nil ? "폴더 선택" : "폴더 다시 선택") {
+                filePickerModel.changeFolder()
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("kakao-folder-select")
+            Text("카카오톡에서 ‘파일에 저장’한 폴더를 선택하세요. 다음 파일 선택 시 시작 위치로 사용합니다. 선택한 파일만 보내며 원본은 유지합니다.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .cardStyle()
     }
 
     private var receiverSettingsCard: some View {

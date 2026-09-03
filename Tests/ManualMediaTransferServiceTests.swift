@@ -3,6 +3,85 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class ManualMediaTransferServiceTests: XCTestCase {
+    func testSelectedDocumentsKeepSameNamesDistinctContentsAndDoNotUsePhotoKit() async throws {
+        let root = temporaryDirectory()
+        let originals = try ["first", "second"].map { folder -> URL in
+            let directory = root.appendingPathComponent(folder)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent("카카오톡 자료.hwpx")
+            try Data("different original \(folder)".utf8).write(to: url)
+            return url
+        }
+        let hashes = try originals.map { try UploadFileFingerprinter.fingerprint(fileURL: $0) }
+        let source = FakeManualMediaSource(directory: root)
+        let engine = RecordingManualTransferEngine()
+        let store = ManualTransferJobStore(fileURL: root.appendingPathComponent("queue.json"))
+        let service = ManualMediaTransferService(source: source, jobStore: store, engine: engine,
+            exportDirectory: root.appendingPathComponent("exports"))
+
+        let summary = await service.enqueueFiles(originals + [originals[0], root.appendingPathComponent("missing.zip")])
+        let jobs = await engine.recordedJobs()
+        let photoRequests = await source.recordedIdentifiers()
+
+        XCTAssertEqual(summary.selected, 3)
+        XCTAssertEqual(summary.failed, 1)
+        XCTAssertEqual(summary.failureCategories, [.fileAccess])
+        XCTAssertTrue(photoRequests.isEmpty)
+        XCTAssertEqual(jobs.map(\.kind), [.file, .file])
+        XCTAssertEqual(jobs.map(\.originalFileName), ["카카오톡 자료.hwpx", "카카오톡 자료.hwpx"])
+        XCTAssertEqual(Set(jobs.map(\.remoteID)).count, 2)
+        XCTAssertTrue(jobs.allSatisfy { $0.assetIdentifier.hasPrefix("document-") })
+        XCTAssertEqual(try originals.map { try UploadFileFingerprinter.fingerprint(fileURL: $0) }, hashes)
+    }
+
+    func test300MiBDocumentUsesTenPersistentPartsAndRestoresFileKind() async throws {
+        let root = temporaryDirectory()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let original = root.appendingPathComponent("large.zip")
+        try Data("synthetic large file".utf8).write(to: original)
+        let handle = try FileHandle(forWritingTo: original)
+        try handle.truncate(atOffset: 300 * 1024 * 1024)
+        try handle.close()
+        let hash = try UploadFileFingerprinter.fingerprint(fileURL: original)
+        let stateURL = root.appendingPathComponent("queue.json")
+        let store = ManualTransferJobStore(fileURL: stateURL)
+        let engine = RecordingManualTransferEngine()
+        let service = ManualMediaTransferService(source: FakeManualMediaSource(directory: root),
+            jobStore: store, engine: engine, exportDirectory: root.appendingPathComponent("exports"))
+        let summary = await service.enqueueFiles([original])
+        let jobs = await engine.recordedJobs()
+        let job = try XCTUnwrap(jobs.first)
+        XCTAssertEqual(summary.failed, 0)
+        XCTAssertEqual(job.totalBytes, 300 * 1024 * 1024)
+        XCTAssertEqual(job.parts.count, 10)
+        XCTAssertEqual(job.parts.dropLast().map(\.size), Array(repeating: Int64(32 * 1024 * 1024), count: 9))
+        XCTAssertEqual(job.parts.last?.size, 12 * 1024 * 1024)
+        XCTAssertEqual(job.sha256, hash.sha256)
+        XCTAssertEqual(try UploadFileFingerprinter.fingerprint(fileURL: original), hash)
+
+        var state = try await store.load()
+        state.jobs = jobs
+        try await store.replace(state)
+        let restored = try await ManualTransferJobStore(fileURL: stateURL).load()
+        XCTAssertEqual(restored.jobs.first?.kind, .file)
+        XCTAssertEqual(restored.jobs.first?.exportedFileURL, job.exportedFileURL)
+        XCTAssertTrue(job.parts.allSatisfy { FileManager.default.fileExists(atPath: $0.fileURL.path) })
+    }
+
+    func testEmptyDocumentSelectionDoesNotCreateAnyBatchOrStagingFile() async throws {
+        let root = temporaryDirectory()
+        let stateURL = root.appendingPathComponent("queue.json")
+        let engine = RecordingManualTransferEngine()
+        let service = ManualMediaTransferService(source: FakeManualMediaSource(directory: root),
+            jobStore: ManualTransferJobStore(fileURL: stateURL), engine: engine,
+            exportDirectory: root.appendingPathComponent("exports"))
+        let summary = await service.enqueueFiles([])
+        let jobs = await engine.recordedJobs()
+        XCTAssertEqual(summary, .empty)
+        XCTAssertTrue(jobs.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stateURL.path))
+    }
+
     func testEnqueuesOnlyDistinctSelectedAssetsAndPreservesOriginalMetadata() async throws {
         let directory = temporaryDirectory()
         let store = ManualTransferJobStore(fileURL: directory.appendingPathComponent("queue.json"))

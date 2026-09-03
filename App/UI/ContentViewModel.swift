@@ -8,6 +8,7 @@ final class ContentViewModel: ObservableObject {
         ManualMediaSelection,
         ManualMediaKind
     ) async -> ManualMediaTransferSummary
+    typealias ManualFileEnqueueAction = @Sendable ([URL]) async -> ManualMediaTransferSummary
     typealias ManualUpdatesAction = @Sendable () async -> AsyncStream<ManualTransferProgress>
     typealias AutomaticUpdatesAction = @Sendable () -> AsyncStream<AutomaticTransferProgress>
 
@@ -33,6 +34,7 @@ final class ContentViewModel: ObservableObject {
     private let now: @Sendable () -> Date
     private let send: SendAction
     private let manualEnqueue: ManualEnqueueAction
+    private let manualFileEnqueue: ManualFileEnqueueAction
     private var manualProgressTask: Task<Void, Never>?
     private var automaticProgressTask: Task<Void, Never>?
 
@@ -43,6 +45,7 @@ final class ContentViewModel: ObservableObject {
         now: @escaping @Sendable () -> Date,
         send: @escaping SendAction,
         manualEnqueue: @escaping ManualEnqueueAction = { _, _ in .empty },
+        manualFileEnqueue: @escaping ManualFileEnqueueAction = { _ in .empty },
         manualUpdates: @escaping ManualUpdatesAction = {
             AsyncStream { continuation in continuation.finish() }
         },
@@ -57,6 +60,7 @@ final class ContentViewModel: ObservableObject {
         self.now = now
         self.send = send
         self.manualEnqueue = manualEnqueue
+        self.manualFileEnqueue = manualFileEnqueue
         photoAuthorizationStatus = initialPhotoAuthorizationStatus
             ?? PHPhotoLibrary.authorizationStatus(for: .readWrite)
         manualProgressTask = Task { [weak self] in
@@ -90,6 +94,10 @@ final class ContentViewModel: ObservableObject {
         if !hasFullPhotoAccess {
             return "설정에서 사진 전체 접근을 먼저 허용해 주세요."
         }
+        return fileTransferReadinessMessage
+    }
+
+    var fileTransferReadinessMessage: String? {
         if !hasCredential {
             return "설정에서 전송 인증값을 먼저 저장해 주세요."
         }
@@ -151,6 +159,34 @@ final class ContentViewModel: ObservableObject {
         isManualTransferWorking = true
         manualTransferMessage = "\(selection.assetIdentifiers.count + selection.unavailableCount)개 항목 전송 중…"
         let summary = await manualEnqueue(selection, kind)
+        finishManualEnqueue(summary, kind: kind)
+        await refresh()
+    }
+
+    func sendSelectedFiles(_ urls: [URL]) async {
+        guard !urls.isEmpty, !isManualTransferWorking else { return }
+        guard fileTransferReadinessMessage == nil else {
+            manualTransferMessage = fileTransferReadinessMessage
+            return
+        }
+        manualProgress = nil
+        lastManualSummary = nil
+        isManualTransferWorking = true
+        manualTransferMessage = "\(urls.count)개 파일 준비 중…"
+        let summary = await manualFileEnqueue(urls)
+        // A tiny file may have completed while preparation was returning its summary.
+        if let progress = manualProgress,
+           progress.kind == .file,
+           progress.completedCount == progress.selectedCount,
+           !Self.activeManualStages.contains(progress.stage) {
+            apply(progress)
+        } else {
+            finishManualEnqueue(summary, kind: .file)
+        }
+        await refresh()
+    }
+
+    private func finishManualEnqueue(_ summary: ManualMediaTransferSummary, kind: ManualMediaKind) {
         lastManualSummary = summary
         if summary.selected == 0 || summary.failed == summary.selected {
             manualTransferMessage = Self.manualMessage(kind: kind, summary: summary)
@@ -158,7 +194,6 @@ final class ContentViewModel: ObservableObject {
         } else {
             manualTransferMessage = "\(kind.title) 백그라운드 전송을 시작했습니다."
         }
-        await refresh()
     }
 
     func retryFailed() async {
@@ -207,6 +242,10 @@ final class ContentViewModel: ObservableObject {
         var detail = "\(kind.title): \(summary.uploaded)개 완료, \(summary.failed)개 실패"
         if summary.failureCategories.contains(.tooLarge) {
             detail += " (2GiB 초과 파일 포함)"
+        } else if summary.failureCategories.contains(.storage) {
+            detail += " (iPhone 전송 준비 공간 부족)"
+        } else if summary.failureCategories.contains(.fileAccess) {
+            detail += " (파일 다운로드·접근 권한 확인 필요)"
         } else if summary.failureCategories.contains(.authentication) {
             detail += " (인증 설정 확인 필요)"
         } else if summary.failureCategories.contains(.network) {
@@ -297,6 +336,8 @@ final class ContentViewModel: ObservableObject {
         case .server?: categories = [.server]
         case .unsupported?: categories = [.unsupported]
         case .tooLarge?: categories = [.tooLarge]
+        case .fileAccess?: categories = [.fileAccess]
+        case .storage?: categories = [.storage]
         case .other?: categories = [.other]
         case nil: categories = []
         }
@@ -360,6 +401,10 @@ final class ContentViewModel: ObservableObject {
             return prefix + " · 지원하지 않는 형식입니다."
         case .tooLarge?:
             return prefix + " · 2GiB를 초과한 파일입니다."
+        case .fileAccess?:
+            return prefix + " · 파일 앱의 다운로드와 접근 권한을 확인해 주세요."
+        case .storage?:
+            return prefix + " · iPhone 전송 준비 공간이 부족합니다."
         case .other?, nil:
             return prefix + " · 파일을 전송하지 못했습니다."
         }

@@ -17,6 +17,8 @@ enum ManualTransferFailure: Codable, Sendable, Equatable {
     case server(statusCode: Int, code: String?)
     case unsupported
     case tooLarge
+    case fileAccess
+    case storage
     case other
 }
 

@@ -3,6 +3,36 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class ManualBackgroundTransferEngineTests: XCTestCase {
+    func testRestoredFileJobsKeepTheirDedicatedRouteOnRetry() async throws {
+        let cases: [(Int64, String?, [Int64], Set<Int>, String)] = [
+            (10, nil, [], [], "/api/files/"),
+            (100_000_000, nil, [], [], "/api/files/multipart"),
+            (10, "upload-1", [10], [], "/parts/1"),
+            (10, "upload-1", [10], [1], "/complete")
+        ]
+        for (size, uploadID, parts, completed, path) in cases {
+            let fixture = try await makeFixture(totalBytes: size, uploadID: uploadID,
+                partSizes: parts, completedPartNumbers: completed, kind: .file)
+            let scheduler = FakeManualUploadScheduler()
+            let engine = makeEngine(fixture: fixture, scheduler: scheduler)
+            await engine.restore()
+            let initial = await scheduler.recorded()
+            let request = try XCTUnwrap(initial.first)
+            XCTAssertTrue(request.request.url?.path.contains(path) == true)
+            XCTAssertTrue(request.request.url?.path.hasPrefix("/api/files/") == true)
+            await engine.taskCompleted(request.descriptor, response: .status(503), body: Data(), error: nil)
+            let retried = await scheduler.recorded()
+            XCTAssertEqual(retried.count, 2)
+            XCTAssertEqual(retried.last?.request.url, request.request.url)
+            if path == "/complete" {
+                await engine.taskCompleted(request.descriptor, response: .status(422), body: Data(), error: nil)
+                let aborted = await scheduler.recorded()
+                XCTAssertEqual(aborted.last?.descriptor.operation, .abort)
+                XCTAssertEqual(aborted.last?.request.url?.path, "/api/files/multipart/\(fixture.job.remoteID)")
+            }
+        }
+    }
+
     func testTaskDescriptorRoundTripsWithoutSecretsOrLocations() throws {
         let descriptor = ManualUploadTaskDescriptor(
             batchID: UUID(),
@@ -192,7 +222,8 @@ final class ManualBackgroundTransferEngineTests: XCTestCase {
         totalBytes: Int64,
         uploadID: String?,
         partSizes: [Int64] = [],
-        completedPartNumbers: Set<Int> = []
+        completedPartNumbers: Set<Int> = [],
+        kind: ManualMediaKind = .video
     ) async throws -> EngineFixture {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ManualEngineTests-\(UUID().uuidString)", isDirectory: true)
@@ -202,7 +233,7 @@ final class ManualBackgroundTransferEngineTests: XCTestCase {
         try Data(repeating: 1, count: max(1, Int(min(totalBytes, 128)))).write(to: exported)
         let batch = ManualTransferBatch(
             id: UUID(),
-            kind: .video,
+            kind: kind,
             selectedCount: 1,
             preparedCount: 1,
             uploadedCount: 0,
@@ -225,7 +256,7 @@ final class ManualBackgroundTransferEngineTests: XCTestCase {
             id: UUID(),
             batchID: batch.id,
             assetIdentifier: "selected-video",
-            kind: .video,
+            kind: kind,
             selectedCount: 1,
             currentIndex: 1,
             exportedFileURL: exported,

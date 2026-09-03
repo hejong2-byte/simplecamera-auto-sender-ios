@@ -3,6 +3,56 @@ import XCTest
 
 @MainActor
 final class ContentViewModelTests: XCTestCase {
+    func testDocumentTransferNeedsCredentialButNotPhotoAccessAndLeavesAutomaticLedgerAlone() async throws {
+        let ledger = try UploadLedger(fileURL: temporaryLedgerURL())
+        let baseline = Date(timeIntervalSince1970: 1_234)
+        try await ledger.setBaseline(baseline)
+        try await ledger.recordDiscovery(id: "existing-auto-photo", createdAt: baseline)
+        let before = await ledger.allRecords()
+        let url = URL(fileURLWithPath: "/synthetic/selected.pdf")
+        let feed = ManualProgressFeed()
+        let model = ContentViewModel(credentialStore: InMemoryCredentialStore(), ledger: ledger,
+            uploader: NoOpUploader(), now: Date.init,
+            send: { _ in XCTFail("Document input must not trigger automatic sync"); return .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
+            manualFileEnqueue: { urls in
+                XCTAssertEqual(urls, [url])
+                return .init(selected: 1, uploaded: 0, failed: 0, failureCategories: [])
+            }, manualUpdates: { feed.stream }, photoAuthorizationStatus: .denied)
+        XCTAssertNotNil(model.fileTransferReadinessMessage)
+        try await model.saveCredential("Bearer synthetic-test")
+        XCTAssertNil(model.fileTransferReadinessMessage)
+        XCTAssertNotNil(model.manualTransferReadinessMessage)
+        await model.sendSelectedFiles([url])
+        XCTAssertTrue(model.isManualTransferWorking)
+        feed.yield(progress(kind: .file, stage: .uploading, selected: 1, currentIndex: 1,
+            totalBytes: 100, confirmedBytes: 20, taskBytesSent: 30))
+        await waitUntil { model.manualProgress?.percent == 50 }
+        XCTAssertEqual(model.manualProgress?.percent, 50)
+        feed.yield(progress(kind: .file, stage: .completed, selected: 1, currentIndex: 1,
+            uploaded: 1, totalBytes: 100, confirmedBytes: 100))
+        await waitUntil { !model.isManualTransferWorking }
+        XCTAssertEqual(model.lastManualSummary?.uploaded, 1)
+        let after = await ledger.allRecords()
+        let afterBaseline = try await ledger.baseline()
+        XCTAssertEqual(after, before)
+        XCTAssertEqual(afterBaseline, baseline)
+    }
+
+    func testCancelledFilePickerChangesNoCountersAndMissingCredentialNeverEnqueues() async throws {
+        let model = ContentViewModel(credentialStore: InMemoryCredentialStore(),
+            ledger: try UploadLedger(fileURL: temporaryLedgerURL()), uploader: NoOpUploader(), now: Date.init,
+            send: { _ in .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
+            manualFileEnqueue: { _ in XCTFail("No enqueue expected"); return .empty },
+            photoAuthorizationStatus: .denied)
+        await model.sendSelectedFiles([])
+        XCTAssertNil(model.lastManualSummary)
+        XCTAssertNil(model.manualTransferMessage)
+        await model.sendSelectedFiles([URL(fileURLWithPath: "/selected.pdf")])
+        XCTAssertNil(model.lastManualSummary)
+        XCTAssertTrue(model.manualTransferMessage?.contains("인증값") == true)
+        XCTAssertFalse(model.isManualTransferWorking)
+    }
+
     func testEnableAutomaticSendingRecordsCurrentBaseline() async throws {
         let ledger = try UploadLedger(fileURL: temporaryLedgerURL())
         let expected = Date(timeIntervalSince1970: 1_234)

@@ -45,6 +45,8 @@ enum ManualMediaResourceSelection {
         case .video:
             guard assetMediaType == .video else { return nil }
             return firstAvailable([.video, .fullSizeVideo], in: resourceTypes)
+        case .file:
+            return nil
         }
     }
 

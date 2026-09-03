@@ -9,7 +9,6 @@ struct USBReceiverView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                identityCard
                 if !incomingModel.pendingFiles.isEmpty {
                     Button("수신 대기 \(incomingModel.pendingFiles.count)개 · 저장 위치 선택") {
                         incomingModel.showPendingFiles()
@@ -35,6 +34,17 @@ struct USBReceiverView: View {
             if phase == .active { Task { await model.refresh() } }
         }
         .onDisappear { model.stopForegroundPolling() }
+        .sheet(item: $model.previewFile) { file in
+            StoredFilePreview(file: file, onClose: { model.previewFile = nil })
+        }
+        .alert("파일 열기 실패", isPresented: Binding(
+            get: { model.storedFilePreviewError != nil },
+            set: { if !$0 { model.storedFilePreviewError = nil } }
+        )) {
+            Button("확인", role: .cancel) { model.storedFilePreviewError = nil }
+        } message: {
+            Text(model.storedFilePreviewError ?? "")
+        }
         .fileImporter(
             isPresented: $model.isChoosingUSBFolder,
             allowedContentTypes: [.folder],
@@ -91,28 +101,6 @@ struct USBReceiverView: View {
             Text(names + (remaining > 0 ? "\n외 \(remaining)개" : "")
                 + "\n\niPhone에 저장된 선택 파일만 삭제하며 되돌릴 수 없습니다. USB와 PC의 파일은 삭제하지 않습니다.")
         }
-    }
-
-    private var identityCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("수신 기기").font(.headline)
-            if model.isRegistered {
-                Label(model.deviceName ?? "iPhone", systemImage: "iphone")
-                HStack {
-                    Text("PC 입력 코드").foregroundStyle(.secondary)
-                    Spacer()
-                    Text(model.registrationCode ?? "------")
-                        .font(.title2.monospacedDigit().bold())
-                        .textSelection(.enabled)
-                }
-            } else {
-                Label("수신 기기 등록이 필요합니다", systemImage: "iphone.badge.exclamationmark")
-                    .foregroundStyle(.orange)
-                Button("이 iPhone 등록") { Task { await model.registerDevice() } }
-                    .buttonStyle(.borderedProminent)
-            }
-        }
-        .cardStyle()
     }
 
     private var destinationCard: some View {
@@ -224,29 +212,38 @@ struct USBReceiverView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ForEach(model.storedFiles) { file in
-                    Button {
-                        model.toggleStoredFileSelection(file.id)
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: model.selectedStoredFileIDs.contains(file.id)
-                                ? "checkmark.circle.fill"
-                                : "circle")
-                                .foregroundStyle(.cyan)
-                            Image(systemName: "doc.fill")
-                                .foregroundStyle(.secondary)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(file.name).lineLimit(2)
-                                Text("\(byteText(file.size)) · \(file.modifiedAt.formatted(date: .abbreviated, time: .shortened))")
-                                    .font(.caption)
+                    HStack(spacing: 8) {
+                        Button {
+                            model.toggleStoredFileSelection(file.id)
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: model.selectedStoredFileIDs.contains(file.id)
+                                    ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(.cyan)
+                                Image(systemName: "doc.fill")
                                     .foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(file.name).lineLimit(2)
+                                    Text("\(byteText(file.size)) · \(file.modifiedAt.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
                             }
-                            Spacer()
+                            .contentShape(Rectangle())
                         }
-                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
+                        .disabled(model.isExportingToUSB || model.isDeletingStoredFiles)
+                        .accessibilityIdentifier("stored-file-\(file.name)")
+                        Button { model.openStoredFile(file) } label: {
+                            Label("열기", systemImage: "eye")
+                                .font(.caption)
+                                .frame(minHeight: 44)
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(model.isDeletingStoredFiles)
+                        .accessibilityIdentifier("stored-file-open-\(file.name)")
                     }
-                    .buttonStyle(.plain)
-                    .disabled(model.isExportingToUSB || model.isDeletingStoredFiles)
-                    .accessibilityIdentifier("stored-file-\(file.name)")
                     Divider()
                 }
             }

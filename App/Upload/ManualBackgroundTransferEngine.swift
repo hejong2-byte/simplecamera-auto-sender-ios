@@ -294,7 +294,8 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
                 try requestFactory.makeManualMediaRequest(
                     credential: credential,
                     fingerprint: fingerprint,
-                    metadata: metadata
+                    metadata: metadata,
+                    fileTransfer: job.kind == .file
                 ),
                 job.exportedFileURL
             )
@@ -303,7 +304,8 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
                 try requestFactory.makeMultipartStartRequest(
                     credential: credential,
                     fingerprint: fingerprint,
-                    metadata: metadata
+                    metadata: metadata,
+                    fileTransfer: job.kind == .file
                 ),
                 emptyFile
             )
@@ -318,7 +320,8 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
                     remoteID: job.remoteID,
                     uploadID: uploadID,
                     partNumber: number,
-                    partSize: Int(part.size)
+                    partSize: Int(part.size),
+                    fileTransfer: job.kind == .file
                 ),
                 part.fileURL
             )
@@ -342,7 +345,8 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
                 try requestFactory.makeMultipartCompleteRequest(
                     credential: credential,
                     remoteID: job.remoteID,
-                    uploadID: uploadID
+                    uploadID: uploadID,
+                    fileTransfer: job.kind == .file
                 ),
                 bodyFile
             )
@@ -354,7 +358,8 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
                 try requestFactory.makeMultipartAbortRequest(
                     credential: credential,
                     remoteID: job.remoteID,
-                    uploadID: uploadID
+                    uploadID: uploadID,
+                    fileTransfer: job.kind == .file
                 ),
                 emptyFile
             )

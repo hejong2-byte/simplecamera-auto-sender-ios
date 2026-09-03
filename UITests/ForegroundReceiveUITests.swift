@@ -1,6 +1,22 @@
 import XCTest
 
 final class ForegroundReceiveUITests: XCTestCase {
+    func testKakaoFolderPickerCancellationDoesNotRequestPhotoPermissionOrStartTransfer() {
+        let app = launchSimulation(delay: 3_600)
+        let files = app.buttons["manual-kakao-file"]
+        XCTAssertTrue(files.waitForExistence(timeout: 20))
+        reveal(files, in: app)
+        files.tap()
+        let cancel = app.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "Cancel", "취소")).firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 15), "Files input must open a folder picker, not photo permission")
+        keepScreenshot("kakao-folder-picker", app: app)
+        cancel.tap()
+        XCTAssertTrue(files.waitForExistence(timeout: 10))
+        XCTAssertTrue(files.isEnabled)
+        XCTAssertFalse(app.staticTexts["파일 준비 중"].exists)
+        XCTAssertFalse(app.staticTexts["전송 완료"].exists)
+    }
+
     func testKakaoFileActionAppearsAfterVideoAndFolderIsConfigurable() {
         let app = launchSimulation(delay: 3_600)
         let files = app.buttons["manual-kakao-file"]

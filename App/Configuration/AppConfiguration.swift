@@ -8,9 +8,9 @@ enum AppConfiguration {
         string: "https://simplecamera-work-photo-relay.simplecamera-work-photo-relay.workers.dev/api/shortcut/photos"
     )!
 
-    static func manualMediaEndpoint(id: String) -> URL {
+    static func manualMediaEndpoint(id: String, fileTransfer: Bool = false) -> URL {
         relayAPIBaseURL
-            .appendingPathComponent("photos", isDirectory: false)
+            .appendingPathComponent(fileTransfer ? "files" : "photos", isDirectory: false)
             .appendingPathComponent(id, isDirectory: false)
     }
 
@@ -20,12 +20,17 @@ enum AppConfiguration {
             .appendingPathComponent("multipart", isDirectory: false)
     }
 
+    static var manualFileMultipartEndpoint: URL {
+        relayAPIBaseURL.appendingPathComponent("files").appendingPathComponent("multipart")
+    }
+
     static func manualMultipartEndpoint(
         id: String,
         suffix: [String] = [],
-        uploadID: String? = nil
+        uploadID: String? = nil,
+        fileTransfer: Bool = false
     ) -> URL {
-        var url = manualMultipartEndpoint
+        var url = (fileTransfer ? manualFileMultipartEndpoint : manualMultipartEndpoint)
             .appendingPathComponent(id, isDirectory: false)
         for component in suffix {
             url.appendPathComponent(component, isDirectory: false)

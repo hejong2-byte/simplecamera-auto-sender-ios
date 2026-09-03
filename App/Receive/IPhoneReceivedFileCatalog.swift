@@ -28,6 +28,20 @@ struct IPhoneStoredFileDeletionSummary: Sendable, Equatable {
     let failures: [IPhoneStoredFileDeletionFailure]
 }
 
+enum IPhoneStoredFilePreviewError: LocalizedError {
+    case unavailable
+    case changed
+    case unsupported
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable: "파일을 읽을 수 없습니다. 저장된 파일 목록을 다시 확인해 주세요."
+        case .changed: "파일이 변경되었습니다. 목록에서 다시 열어 주세요."
+        case .unsupported: "이 파일 형식은 iPhone 미리보기가 지원하지 않습니다."
+        }
+    }
+}
+
 private enum IPhoneStoredFileDeletionError: LocalizedError {
     case invalidLocation
     case notRegularFile
@@ -114,6 +128,30 @@ final class IPhoneReceivedFileCatalog: @unchecked Sendable {
 
     func record(for deliveryID: UUID) -> IPhoneReceivedFileRecord? {
         lock.withLock { records.first { $0.deliveryID == deliveryID } }
+    }
+
+    func previewURL(for file: IPhoneStoredFile) throws -> URL {
+        try lock.withLock {
+            let target = file.url.standardizedFileURL
+            let directory = receivedDirectory.standardizedFileURL
+            guard target.isFileURL,
+                  target.path == file.id,
+                  target.lastPathComponent == file.name,
+                  target.deletingLastPathComponent().path == directory.path,
+                  target.resolvingSymlinksInPath().deletingLastPathComponent().path
+                    == directory.resolvingSymlinksInPath().path,
+                  let attributes = try? fileManager.attributesOfItem(atPath: target.path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
+                  fileManager.isReadableFile(atPath: target.path) else {
+                throw IPhoneStoredFilePreviewError.unavailable
+            }
+            guard (attributes[.size] as? NSNumber)?.int64Value == file.size,
+                  attributes[.modificationDate] as? Date == file.modifiedAt,
+                  records.first(where: { $0.storedName == file.name }) == file.receivedRecord else {
+                throw IPhoneStoredFilePreviewError.changed
+            }
+            return target
+        }
     }
 
     func delete(

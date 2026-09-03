@@ -4,6 +4,55 @@ import XCTest
 
 @MainActor
 final class USBReceiverManualDeletionTests: XCTestCase {
+    func testOpeningStoredFilePreservesSelectionAndReceiveAndUSBState() async throws {
+        let fixture = try makeFixture()
+        await fixture.model.refresh()
+        let file = try XCTUnwrap(fixture.model.storedFiles.first)
+        fixture.model.toggleStoredFileSelection(file.id)
+        let status = fixture.model.receiveStatus
+
+        fixture.model.openStoredFile(file)
+
+        XCTAssertEqual(fixture.model.previewFile, file)
+        XCTAssertNil(fixture.model.storedFilePreviewError)
+        XCTAssertEqual(fixture.model.selectedStoredFileIDs, [file.id])
+        XCTAssertTrue(fixture.model.canDeleteStoredFiles)
+        XCTAssertEqual(fixture.model.receiveStatus, status)
+        XCTAssertNil(fixture.model.usbExportProgress)
+        XCTAssertEqual(try fixture.catalog.refresh().count, 2)
+        fixture.model.previewFile = nil
+        XCTAssertEqual(fixture.model.selectedStoredFileIDs, [file.id])
+    }
+
+    func testMissingPreviewRefreshesCatalogAndDoesNotBecomeReceiveFailure() async throws {
+        let fixture = try makeFixture()
+        await fixture.model.refresh()
+        let file = try XCTUnwrap(fixture.model.storedFiles.first)
+        let status = fixture.model.receiveStatus
+        try FileManager.default.removeItem(at: file.url)
+
+        fixture.model.openStoredFile(file)
+
+        XCTAssertNil(fixture.model.previewFile)
+        XCTAssertNotNil(fixture.model.storedFilePreviewError)
+        XCTAssertEqual(fixture.model.storedFiles.count, 1)
+        XCTAssertEqual(fixture.model.receiveStatus, status)
+        XCTAssertNil(fixture.model.lastError)
+    }
+
+    func testUnsupportedPreviewIsReportedAndRetainsOriginalAndSelection() async throws {
+        let fixture = try makeFixture(canPreview: { _ in false })
+        await fixture.model.refresh()
+        let file = try XCTUnwrap(fixture.model.storedFiles.first)
+        fixture.model.toggleStoredFileSelection(file.id)
+        fixture.model.openStoredFile(file)
+
+        XCTAssertNil(fixture.model.previewFile)
+        XCTAssertTrue(fixture.model.storedFilePreviewError?.contains("지원하지") == true)
+        XCTAssertEqual(fixture.model.selectedStoredFileIDs, [file.id])
+        XCTAssertEqual(try fixture.catalog.refresh().count, 2)
+    }
+
     func testSelectionControlsDeletionButtonDuringRepeatedIdlePolls() async throws {
         for destination in IPhoneReceiveDestination.allCases {
             let gate = StoredDeletionGate()
@@ -197,7 +246,8 @@ final class USBReceiverManualDeletionTests: XCTestCase {
     private func makeFixture(
         progress: USBReceiveProgressStore = USBReceiveProgressStore(),
         beforePoll: @escaping @Sendable () async -> Void = {},
-        beforeDelete: @escaping @Sendable () async -> Void = {}
+        beforeDelete: @escaping @Sendable () async -> Void = {},
+        canPreview: @escaping (URL) -> Bool = { _ in true }
     ) throws -> (model: USBReceiverViewModel, catalog: IPhoneReceivedFileCatalog) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
@@ -225,6 +275,8 @@ final class USBReceiverManualDeletionTests: XCTestCase {
             },
             receiveLocalOnce: { await beforePoll() },
             storedFiles: { try catalog.refresh() },
+            previewStoredFile: { try catalog.previewURL(for: $0) },
+            canPreviewFile: canPreview,
             deleteStoredFiles: { files in
                 await beforeDelete()
                 return catalog.delete(files)

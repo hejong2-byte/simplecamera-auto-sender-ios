@@ -22,6 +22,7 @@ final class ForegroundReceiveSimulation {
     let content: ContentViewModel
     let receiver: USBReceiverViewModel
     let incoming: IPhoneIncomingFilesViewModel
+    let filePicker: KakaoFilePickerModel
 
     private init(delay: TimeInterval, outcome: String?, withStoredFiles: Bool) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -71,8 +72,11 @@ final class ForegroundReceiveSimulation {
         default:
             receiveOutcome = nil
         }
+        filePicker = KakaoFilePickerModel(store: KakaoFolderStore(fileURL: root.appendingPathComponent("kakao-folder.json")))
+        let uploadCredential = InMemoryCredentialStore()
+        try uploadCredential.save("simulation-only")
         content = ContentViewModel(
-            credentialStore: InMemoryCredentialStore(),
+            credentialStore: uploadCredential,
             ledger: try UploadLedger(fileURL: root.appendingPathComponent("upload-ledger.json")),
             uploader: SimulationUploader(),
             now: Date.init,
@@ -93,6 +97,7 @@ final class ForegroundReceiveSimulation {
                 try choices.approve(ids, receiverID: receiverID, destination: .iphoneLocal)
             },
             storedFiles: { try catalog.refresh() },
+            previewStoredFile: { try catalog.previewURL(for: $0) },
             deleteStoredFiles: { files in catalog.delete(files) },
             progressUpdates: { AsyncStream { $0.finish() } },
             loadOutcome: { id in

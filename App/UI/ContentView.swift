@@ -5,6 +5,7 @@ struct ContentView: View {
     @StateObject private var model: ContentViewModel
     @StateObject private var receiverModel: USBReceiverViewModel
     @StateObject private var incomingModel: IPhoneIncomingFilesViewModel
+    @StateObject private var filePickerModel: KakaoFilePickerModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var navigationPath: [Destination] = []
     @State private var pickerKind: ManualMediaKind?
@@ -12,10 +13,11 @@ struct ContentView: View {
 
     private enum Destination: Hashable { case receiver, settings }
 
-    init(model: ContentViewModel, receiverModel: USBReceiverViewModel, incomingModel: IPhoneIncomingFilesViewModel) {
+    init(model: ContentViewModel, receiverModel: USBReceiverViewModel, incomingModel: IPhoneIncomingFilesViewModel, filePickerModel: KakaoFilePickerModel) {
         _model = StateObject(wrappedValue: model)
         _receiverModel = StateObject(wrappedValue: receiverModel)
         _incomingModel = StateObject(wrappedValue: incomingModel)
+        _filePickerModel = StateObject(wrappedValue: filePickerModel)
     }
 
     var body: some View {
@@ -48,7 +50,7 @@ struct ContentView: View {
                 case .receiver:
                     USBReceiverView(model: receiverModel, incomingModel: incomingModel)
                 case .settings:
-                    SettingsView(model: model, receiverModel: receiverModel)
+                    SettingsView(model: model, receiverModel: receiverModel, filePickerModel: filePickerModel)
                 }
             }
             .sheet(item: $pickerKind) { kind in
@@ -78,6 +80,27 @@ struct ContentView: View {
             } message: {
                 Text(readinessMessage ?? "")
             }
+            .sheet(item: $filePickerModel.request, onDismiss: filePickerModel.didDismiss) { request in
+                DocumentFilePicker(
+                    request: request,
+                    onSelection: { urls in
+                        let selected = filePickerModel.accept(urls)
+                        if !selected.isEmpty { Task { await model.sendSelectedFiles(selected) } }
+                    },
+                    onCancel: filePickerModel.cancel
+                )
+                .ignoresSafeArea()
+                .interactiveDismissDisabled()
+            }
+            .alert("카카오톡 파일 폴더 확인", isPresented: Binding(
+                get: { filePickerModel.errorMessage != nil && !filePickerModel.isDismissing },
+                set: { if !$0 { filePickerModel.errorMessage = nil } }
+            )) {
+                Button("폴더 다시 선택") { filePickerModel.reselectAfterError() }
+                Button("취소", role: .cancel) { filePickerModel.cancel() }
+            } message: {
+                Text(filePickerModel.errorMessage ?? "")
+            }
         }
         .task { incomingModel.setActive(scenePhase == .active) }
         .onChange(of: scenePhase) { _, phase in
@@ -105,8 +128,10 @@ struct ContentView: View {
         let receiverIsBusy = navigationPath.last == .receiver
             && (receiverModel.isReceivingFile || receiverModel.needsLocalFallbackDecision || receiverModel.needsDeletionDecision)
         return scenePhase == .active && pickerKind == nil && readinessMessage == nil
+            && !filePickerModel.isPresenting
             && !receiverModel.isChoosingUSBFolder && !receiverModel.isShowingSettingsConfirmation
             && !receiverModel.isDeletingStoredFiles && !receiverModel.needsStoredFileDeletionConfirmation
+            && receiverModel.previewFile == nil && receiverModel.storedFilePreviewError == nil
             && !receiverModel.isExportingToUSB && !receiverIsBusy
     }
 
@@ -133,7 +158,7 @@ struct ContentView: View {
                 .accessibilityIdentifier("manual-\(kind.rawValue)")
                 .disabled(model.isManualTransferWorking)
             }
-            Text("여러 개를 한 번에 선택할 수 있습니다. 큰 동영상은 32MB 단위로 나눠 백그라운드에서 전송합니다.")
+            Text("여러 개 선택 가능 · 큰 파일은 32MB씩 나눠 백그라운드 전송합니다. 카카오톡 파일 폴더는 처음 한 번 지정합니다.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -276,6 +301,14 @@ struct ContentView: View {
     }
 
     private func openPicker(_ kind: ManualMediaKind) {
+        if kind == .file {
+            if let message = model.fileTransferReadinessMessage {
+                readinessMessage = message
+            } else {
+                filePickerModel.beginFileSelection()
+            }
+            return
+        }
         if let message = model.manualTransferReadinessMessage {
             readinessMessage = message
             return

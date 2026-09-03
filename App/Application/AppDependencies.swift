@@ -19,6 +19,10 @@ final class AppDependencies: @unchecked Sendable {
         let manualJobStore = ManualTransferJobStore(
             fileURL: manualStateDirectory.appendingPathComponent("queue.json")
         )
+        let kakaoFolderStore = KakaoFolderStore(fileURL: root
+            .appendingPathComponent("SimpleCameraAutoSender", isDirectory: true)
+            .appendingPathComponent("KakaoFiles", isDirectory: true)
+            .appendingPathComponent("folder.json"))
         let backgroundCompletionRegistry = BackgroundSessionCompletionRegistry.shared
         let backgroundManualSession = BackgroundManualUploadSession(
             completionRegistry: backgroundCompletionRegistry
@@ -55,6 +59,7 @@ final class AppDependencies: @unchecked Sendable {
             backgroundCompletionRegistry: backgroundCompletionRegistry,
             backgroundManualSession: backgroundManualSession,
             manualTransferEngine: manualTransferEngine,
+            kakaoFolderStore: kakaoFolderStore,
             automaticProgressStore: automaticProgressStore
         )
     }()
@@ -67,6 +72,7 @@ final class AppDependencies: @unchecked Sendable {
     let backgroundCompletionRegistry: BackgroundSessionCompletionRegistry
     let backgroundManualSession: BackgroundManualUploadSession
     let manualTransferEngine: ManualBackgroundTransferEngine
+    let kakaoFolderStore: KakaoFolderStore
     let automaticProgressStore: AutomaticTransferProgressStore
 
     private init(
@@ -78,6 +84,7 @@ final class AppDependencies: @unchecked Sendable {
         backgroundCompletionRegistry: BackgroundSessionCompletionRegistry,
         backgroundManualSession: BackgroundManualUploadSession,
         manualTransferEngine: ManualBackgroundTransferEngine,
+        kakaoFolderStore: KakaoFolderStore,
         automaticProgressStore: AutomaticTransferProgressStore
     ) {
         self.credentialStore = credentialStore
@@ -88,6 +95,7 @@ final class AppDependencies: @unchecked Sendable {
         self.backgroundCompletionRegistry = backgroundCompletionRegistry
         self.backgroundManualSession = backgroundManualSession
         self.manualTransferEngine = manualTransferEngine
+        self.kakaoFolderStore = kakaoFolderStore
         self.automaticProgressStore = automaticProgressStore
         Task { await manualTransferEngine.restore() }
     }
@@ -104,6 +112,9 @@ final class AppDependencies: @unchecked Sendable {
             },
             manualEnqueue: { [manualTransferService] selection, kind in
                 await manualTransferService.enqueue(selection: selection, kind: kind)
+            },
+            manualFileEnqueue: { [manualTransferService] urls in
+                await manualTransferService.enqueueFiles(urls)
             },
             manualUpdates: { [manualTransferService] in
                 await manualTransferService.updates()

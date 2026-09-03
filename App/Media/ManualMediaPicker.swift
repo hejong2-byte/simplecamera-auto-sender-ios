@@ -5,6 +5,7 @@ enum ManualMediaKind: String, CaseIterable, Identifiable, Codable, Sendable {
     case photo
     case screenshot
     case video
+    case file = "kakao-file"
 
     var id: String { rawValue }
 
@@ -13,6 +14,7 @@ enum ManualMediaKind: String, CaseIterable, Identifiable, Codable, Sendable {
         case .photo: "사진 전송"
         case .screenshot: "스크린샷 전송"
         case .video: "동영상 전송"
+        case .file: "카카오톡 파일전송"
         }
     }
 
@@ -21,14 +23,16 @@ enum ManualMediaKind: String, CaseIterable, Identifiable, Codable, Sendable {
         case .photo: "photo.on.rectangle.angled"
         case .screenshot: "rectangle.inset.filled"
         case .video: "video.fill"
+        case .file: "doc.fill"
         }
     }
 
-    var pickerFilter: PHPickerFilter {
+    var pickerFilter: PHPickerFilter? {
         switch self {
         case .photo: .images
         case .screenshot: .screenshots
         case .video: .videos
+        case .file: nil
         }
     }
 }

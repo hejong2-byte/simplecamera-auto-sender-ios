@@ -1,4 +1,5 @@
 import Foundation
+import QuickLook
 
 enum IPhoneReceiveStatusKind: Sendable, Equatable {
     case waiting
@@ -23,6 +24,7 @@ final class USBReceiverViewModel: ObservableObject {
     typealias PendingDeliveryIDs = @Sendable () async throws -> Set<UUID>
     typealias ApproveLocalFallback = @Sendable (Set<UUID>) throws -> Void
     typealias StoredFilesProvider = @Sendable () throws -> [IPhoneStoredFile]
+    typealias StoredFilePreviewAction = @Sendable (IPhoneStoredFile) throws -> URL
     typealias DeleteStoredFiles = @Sendable ([IPhoneStoredFile]) async throws -> IPhoneStoredFileDeletionSummary
     typealias ExportFiles = @Sendable (
         [IPhoneStoredFile],
@@ -59,6 +61,8 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var isDeletingStoredFiles = false
     @Published private(set) var storedFileDeletionMessage: String?
     @Published private(set) var storedFileDeletionError: String?
+    @Published var previewFile: IPhoneStoredFile?
+    @Published var storedFilePreviewError: String?
     @Published private(set) var needsLocalFallbackDecision = false
     @Published private(set) var needsDeletionDecision = false
     @Published var isChoosingUSBFolder = false
@@ -79,6 +83,8 @@ final class USBReceiverViewModel: ObservableObject {
     private let pendingDeliveryIDs: PendingDeliveryIDs
     private let approveLocalFallback: ApproveLocalFallback
     private let storedFilesProvider: StoredFilesProvider
+    private let previewStoredFile: StoredFilePreviewAction
+    private let canPreviewFile: (URL) -> Bool
     private let deleteStoredFiles: DeleteStoredFiles
     private let exportFiles: ExportFiles
     private let pendingDeletionDecisions: PendingDeletionDecisions
@@ -109,6 +115,10 @@ final class USBReceiverViewModel: ObservableObject {
         pendingDeliveryIDs: @escaping PendingDeliveryIDs = { [] },
         approveLocalFallback: @escaping ApproveLocalFallback = { _ in },
         storedFiles: @escaping StoredFilesProvider = { [] },
+        previewStoredFile: @escaping StoredFilePreviewAction = { _ in
+            throw IPhoneStoredFilePreviewError.unavailable
+        },
+        canPreviewFile: @escaping (URL) -> Bool = { QLPreviewController.canPreview($0 as NSURL) },
         deleteStoredFiles: @escaping DeleteStoredFiles = { _ in
             throw CocoaError(.featureUnsupported)
         },
@@ -140,6 +150,8 @@ final class USBReceiverViewModel: ObservableObject {
         self.pendingDeliveryIDs = pendingDeliveryIDs
         self.approveLocalFallback = approveLocalFallback
         self.storedFilesProvider = storedFiles
+        self.previewStoredFile = previewStoredFile
+        self.canPreviewFile = canPreviewFile
         self.deleteStoredFiles = deleteStoredFiles
         self.exportFiles = exportFiles
         self.pendingDeletionDecisions = pendingDeletionDecisions
@@ -256,6 +268,22 @@ final class USBReceiverViewModel: ObservableObject {
             occurredAt: nil,
             percent: nil
         )
+    }
+
+    func openStoredFile(_ file: IPhoneStoredFile) {
+        do {
+            let url = try previewStoredFile(file)
+            guard canPreviewFile(url) else { throw IPhoneStoredFilePreviewError.unsupported }
+            previewFile = file
+            storedFilePreviewError = nil
+        } catch {
+            previewFile = nil
+            if let files = try? storedFilesProvider() {
+                storedFiles = files
+                selectedStoredFileIDs.formIntersection(Set(files.map(\.id)))
+            }
+            storedFilePreviewError = error.localizedDescription
+        }
     }
 
     func refresh() async {

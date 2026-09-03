@@ -32,11 +32,12 @@ struct RelayRequestFactory: Sendable {
     func makeManualMediaRequest(
         credential: String,
         fingerprint: UploadFileFingerprint,
-        metadata: ManualMediaUploadMetadata
+        metadata: ManualMediaUploadMetadata,
+        fileTransfer: Bool = false
     ) throws -> URLRequest {
         let value = try normalizedCredential(credential)
         var request = URLRequest(
-            url: AppConfiguration.manualMediaEndpoint(id: fingerprint.remoteID)
+            url: AppConfiguration.manualMediaEndpoint(id: fingerprint.remoteID, fileTransfer: fileTransfer)
         )
         request.httpMethod = "PUT"
         request.setValue(value, forHTTPHeaderField: "Authorization")
@@ -59,9 +60,10 @@ struct RelayRequestFactory: Sendable {
     func makeMultipartStartRequest(
         credential: String,
         fingerprint: UploadFileFingerprint,
-        metadata: ManualMediaUploadMetadata
+        metadata: ManualMediaUploadMetadata,
+        fileTransfer: Bool = false
     ) throws -> URLRequest {
-        var request = URLRequest(url: AppConfiguration.manualMultipartEndpoint)
+        var request = URLRequest(url: fileTransfer ? AppConfiguration.manualFileMultipartEndpoint : AppConfiguration.manualMultipartEndpoint)
         request.httpMethod = "POST"
         applyManualHeaders(
             to: &request,
@@ -77,12 +79,14 @@ struct RelayRequestFactory: Sendable {
         remoteID: String,
         uploadID: String,
         partNumber: Int,
-        partSize: Int
+        partSize: Int,
+        fileTransfer: Bool = false
     ) throws -> URLRequest {
         var request = URLRequest(url: AppConfiguration.manualMultipartEndpoint(
             id: remoteID,
             suffix: ["parts", String(partNumber)],
-            uploadID: uploadID
+            uploadID: uploadID,
+            fileTransfer: fileTransfer
         ))
         request.httpMethod = "PUT"
         request.setValue(
@@ -97,12 +101,14 @@ struct RelayRequestFactory: Sendable {
     func makeMultipartCompleteRequest(
         credential: String,
         remoteID: String,
-        uploadID: String
+        uploadID: String,
+        fileTransfer: Bool = false
     ) throws -> URLRequest {
         var request = URLRequest(url: AppConfiguration.manualMultipartEndpoint(
             id: remoteID,
             suffix: ["complete"],
-            uploadID: uploadID
+            uploadID: uploadID,
+            fileTransfer: fileTransfer
         ))
         request.httpMethod = "POST"
         request.setValue(
@@ -116,11 +122,13 @@ struct RelayRequestFactory: Sendable {
     func makeMultipartAbortRequest(
         credential: String,
         remoteID: String,
-        uploadID: String
+        uploadID: String,
+        fileTransfer: Bool = false
     ) throws -> URLRequest {
         var request = URLRequest(url: AppConfiguration.manualMultipartEndpoint(
             id: remoteID,
-            uploadID: uploadID
+            uploadID: uploadID,
+            fileTransfer: fileTransfer
         ))
         request.httpMethod = "DELETE"
         request.setValue(

@@ -4,6 +4,8 @@ enum ManualTransferFailureCategory: String, Hashable, Sendable {
     case unavailable
     case unsupported
     case tooLarge
+    case fileAccess
+    case storage
     case authentication
     case network
     case server
@@ -84,6 +86,30 @@ actor ManualMediaTransferService: ManualMediaTransferring {
         selection: ManualMediaSelection,
         kind: ManualMediaKind
     ) async -> ManualMediaTransferSummary {
+        await enqueue(selection: selection, kind: kind) { [source, exportDirectory] identifier in
+            try await source.exportOriginal(assetIdentifier: identifier, kind: kind, to: exportDirectory)
+        }
+    }
+
+    func enqueueFiles(_ urls: [URL]) async -> ManualMediaTransferSummary {
+        var seen = Set<String>()
+        let selected = urls.filter { seen.insert($0.standardizedFileURL.absoluteString).inserted }
+        let identifiers = selected.map { _ in "document-\(UUID().uuidString)" }
+        let files = Dictionary(uniqueKeysWithValues: zip(identifiers, selected))
+        let source = ManualDocumentSource(maxBytes: maxBytes)
+        return await enqueue(
+            selection: ManualMediaSelection(assetIdentifiers: identifiers, unavailableCount: 0), kind: .file
+        ) { [exportDirectory] identifier in
+            guard let url = files[identifier] else { throw ManualDocumentSourceError.unavailable }
+            return try await source.exportOriginal(fileURL: url, identifier: identifier, to: exportDirectory)
+        }
+    }
+
+    private func enqueue(
+        selection: ManualMediaSelection,
+        kind: ManualMediaKind,
+        export: @Sendable (String) async throws -> ManualMediaExport
+    ) async -> ManualMediaTransferSummary {
         var seen = Set<String>()
         let identifiers = selection.assetIdentifiers.filter { seen.insert($0).inserted }
         let selectedCount = identifiers.count + selection.unavailableCount
@@ -124,11 +150,7 @@ actor ManualMediaTransferService: ManualMediaTransferring {
             var partURLs: [URL] = []
             var preparationRecorded = false
             do {
-                let exported = try await source.exportOriginal(
-                    assetIdentifier: identifier,
-                    kind: kind,
-                    to: exportDirectory
-                )
+                let exported = try await export(identifier)
                 exportedFileURL = exported.fileURL
                 let fingerprint = try UploadFileFingerprinter.fingerprint(
                     fileURL: exported.fileURL
@@ -266,6 +288,13 @@ actor ManualMediaTransferService: ManualMediaTransferring {
     private static func failureCategory(
         for error: Error
     ) -> ManualTransferFailureCategory {
+        if let documentError = error as? ManualDocumentSourceError {
+            switch documentError {
+            case .storage: return .storage
+            case .invalidFile: return .unsupported
+            case .unavailable, .changed: return .fileAccess
+            }
+        }
         if let sourceError = error as? ManualMediaSourceError {
             switch sourceError {
             case .assetNotFound: return .unavailable
@@ -284,6 +313,8 @@ actor ManualMediaTransferService: ManualMediaTransferring {
         switch failureCategory(for: error) {
         case .unsupported, .unavailable: .unsupported
         case .tooLarge: .tooLarge
+        case .fileAccess: .fileAccess
+        case .storage: .storage
         case .authentication: .authentication
         case .network: .network
         case .server: .server(statusCode: 0, code: nil)
