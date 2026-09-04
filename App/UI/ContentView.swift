@@ -176,6 +176,7 @@ struct ContentView: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                 }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("open-receiver")
