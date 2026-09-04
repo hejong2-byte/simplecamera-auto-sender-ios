@@ -62,13 +62,10 @@ actor TextMessageStore {
         self.fileManager = fileManager
 
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
         self.encoder = encoder
 
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        self.decoder = decoder
+        self.decoder = JSONDecoder()
     }
 
     @discardableResult
