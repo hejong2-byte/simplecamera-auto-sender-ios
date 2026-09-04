@@ -126,6 +126,15 @@ final class ForegroundReceiveUITests: XCTestCase {
         keepScreenshot("main-fullscreen-compact", app: app)
     }
 
+    func testMainScreenOmitsFixedMenuDescriptions() {
+        let app = launchSimulation(delay: 3_600)
+
+        XCTAssertFalse(app.staticTexts["여러 개 선택 가능 · 큰 파일은 32MB씩 나눠 백그라운드 전송합니다. 카카오톡 파일 폴더는 처음 한 번 지정합니다."].exists)
+        XCTAssertFalse(app.staticTexts["PC에서 보낸 파일을 iPhone에 저장하거나 USB로 직접 저장"].exists)
+        XCTAssertTrue(app.buttons["manual-photo"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["open-receiver"].exists)
+    }
+
     func testUSBChoiceOpensFolderPickerAndCancellationAllowsLocalFallback() {
         let app = launchSimulation()
         XCTAssertTrue(app.buttons["USB에 저장"].waitForExistence(timeout: 20))
