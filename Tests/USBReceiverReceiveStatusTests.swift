@@ -124,6 +124,29 @@ final class USBReceiverReceiveStatusTests: XCTestCase {
         XCTAssertEqual(context.outcomes.latest?.fileName, "복구.zip")
     }
 
+    func testSuccessfulPollClearsPersistedDiscoveryFailure() async throws {
+        let failedDiscovery = IPhoneReceiveOutcome(
+            receiverID: receiverID,
+            kind: .failed,
+            destination: .iphoneLocal,
+            fileName: nil,
+            totalCount: 0,
+            completedCount: 0,
+            message: "서버에서 파일을 찾을 수 없습니다.",
+            occurredAt: fixedNow.addingTimeInterval(-60)
+        )
+        let context = try makeContext(outcome: failedDiscovery)
+
+        await context.model.refresh()
+        XCTAssertEqual(context.model.receiveStatus.kind, .failed)
+
+        await context.model.pollOnce()
+
+        XCTAssertNil(context.outcomes.latest)
+        XCTAssertNil(context.model.receiveOutcome)
+        XCTAssertEqual(context.model.receiveStatus.kind, .waiting)
+    }
+
     func testRegistrationResetClearsTheMatchingOutcome() async throws {
         let context = try makeContext(outcome: outcome(receiverID: receiverID, kind: .saved))
         await context.model.refresh()
