@@ -158,9 +158,6 @@ struct ContentView: View {
                 .accessibilityIdentifier("manual-\(kind.rawValue)")
                 .disabled(model.isManualTransferWorking)
             }
-            Text("여러 개 선택 가능 · 큰 파일은 32MB씩 나눠 백그라운드 전송합니다. 카카오톡 파일 폴더는 처음 한 번 지정합니다.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
         .cardStyle()
     }
@@ -171,9 +168,6 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("PC 파일 수신", systemImage: "externaldrive.badge.icloud")
                         .font(.headline)
-                    Text("PC에서 보낸 파일을 iPhone에 저장하거나 USB로 직접 저장")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
                     HStack {
                         Text(receiverModel.registrationCode.map { "코드 \($0)" } ?? "기기 등록 필요")
                         Spacer()
