@@ -15,9 +15,6 @@ struct TextTransferView: View {
         }
         .background(Color(.systemGroupedBackground))
         .navigationTitle("텍스트 송수신")
-        .navigationDestination(for: TextMessageKey.self) { key in
-            TextMessageDetailView(model: model, key: key)
-        }
         .task { await model.refresh() }
         .onChange(of: model.recipient) { _, value in
             let digits = String(value.filter { $0 >= "0" && $0 <= "9" }.prefix(6))
@@ -131,7 +128,9 @@ struct TextTransferView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(model.messages) { message in
-                    NavigationLink(value: message.key) {
+                    NavigationLink {
+                        TextMessageDetailView(model: model, key: message.key)
+                    } label: {
                         messageRow(message)
                     }
                     .buttonStyle(.plain)
