@@ -6,6 +6,7 @@ struct ContentView: View {
     @StateObject private var receiverModel: USBReceiverViewModel
     @StateObject private var incomingModel: IPhoneIncomingFilesViewModel
     @StateObject private var filePickerModel: KakaoFilePickerModel
+    @StateObject private var textModel: TextTransferViewModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var navigationPath: [Destination] = []
     @State private var pickerKind: ManualMediaKind?
@@ -13,11 +14,18 @@ struct ContentView: View {
 
     private enum Destination: Hashable { case receiver, settings }
 
-    init(model: ContentViewModel, receiverModel: USBReceiverViewModel, incomingModel: IPhoneIncomingFilesViewModel, filePickerModel: KakaoFilePickerModel) {
+    init(
+        model: ContentViewModel,
+        receiverModel: USBReceiverViewModel,
+        incomingModel: IPhoneIncomingFilesViewModel,
+        filePickerModel: KakaoFilePickerModel,
+        textModel: TextTransferViewModel
+    ) {
         _model = StateObject(wrappedValue: model)
         _receiverModel = StateObject(wrappedValue: receiverModel)
         _incomingModel = StateObject(wrappedValue: incomingModel)
         _filePickerModel = StateObject(wrappedValue: filePickerModel)
+        _textModel = StateObject(wrappedValue: textModel)
     }
 
     var body: some View {
@@ -102,9 +110,15 @@ struct ContentView: View {
                 Text(filePickerModel.errorMessage ?? "")
             }
         }
-        .task { incomingModel.setActive(scenePhase == .active) }
+        .task {
+            let active = scenePhase == .active
+            incomingModel.setActive(active)
+            textModel.setActive(active)
+        }
         .onChange(of: scenePhase) { _, phase in
-            incomingModel.setActive(phase == .active)
+            let active = phase == .active
+            incomingModel.setActive(active)
+            textModel.setActive(active)
         }
         .confirmationDialog(
             incomingModel.prompt?.title ?? "PC 파일 도착",
@@ -121,7 +135,10 @@ struct ContentView: View {
         } message: { batch in
             Text(batch.message)
         }
-        .onDisappear { incomingModel.setActive(false) }
+        .onDisappear {
+            incomingModel.setActive(false)
+            textModel.setActive(false)
+        }
     }
 
     private var canPresentIncomingFiles: Bool {

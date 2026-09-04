@@ -23,6 +23,7 @@ final class ForegroundReceiveSimulation {
     let receiver: USBReceiverViewModel
     let incoming: IPhoneIncomingFilesViewModel
     let filePicker: KakaoFilePickerModel
+    let text: TextTransferViewModel
 
     private init(delay: TimeInterval, outcome: String?, withStoredFiles: Bool) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -73,6 +74,38 @@ final class ForegroundReceiveSimulation {
             receiveOutcome = nil
         }
         filePicker = KakaoFilePickerModel(store: KakaoFolderStore(fileURL: root.appendingPathComponent("kakao-folder.json")))
+        let textStore = TextMessageStore(root: root.appendingPathComponent("TextMessages", isDirectory: true))
+        text = TextTransferViewModel(
+            loadOwnCode: { "123456" },
+            receive: {
+                TextReceiveSummary(received: 0, duplicates: 0, rejected: 0, pendingACK: 0)
+            },
+            loadHistory: { try await textStore.history() },
+            send: { recipient, body in
+                let message = try await textStore.queueOutgoing(
+                    sender: "123456",
+                    recipient: recipient,
+                    text: body
+                )
+                try await textStore.markServerDelivered(id: message.envelope.id)
+                var delivered = message
+                delivered.status = .serverDelivered
+                return delivered
+            },
+            retry: { id in
+                try await textStore.markServerDelivered(id: id)
+                guard let message = try await textStore.history().first(where: {
+                    $0.key.direction == .sent && $0.envelope.id == id
+                }) else {
+                    throw TextTransferServiceError.messageNotFound
+                }
+                return message
+            },
+            markRead: { key in try await textStore.markRead(key) },
+            delete: { key in try await textStore.delete(key) },
+            loadDraft: { try await textStore.loadDraft() },
+            saveDraft: { draft in try await textStore.saveDraft(draft) }
+        )
         let uploadCredential = InMemoryCredentialStore()
         try uploadCredential.save("simulation-only")
         content = ContentViewModel(

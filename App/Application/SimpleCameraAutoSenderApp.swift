@@ -12,7 +12,13 @@ struct SimpleCameraAutoSenderApp: App {
         WindowGroup {
             #if DEBUG && targetEnvironment(simulator)
             if let simulation = ForegroundReceiveSimulation.current {
-                ContentView(model: simulation.content, receiverModel: simulation.receiver, incomingModel: simulation.incoming, filePickerModel: simulation.filePicker)
+                ContentView(
+                    model: simulation.content,
+                    receiverModel: simulation.receiver,
+                    incomingModel: simulation.incoming,
+                    filePickerModel: simulation.filePicker,
+                    textModel: simulation.text
+                )
             } else {
                 liveContent
             }
@@ -27,7 +33,8 @@ struct SimpleCameraAutoSenderApp: App {
             model: AppDependencies.shared.makeContentViewModel(),
             receiverModel: USBReceiverDependencies.shared.makeViewModel(),
             incomingModel: USBReceiverDependencies.shared.makeIncomingFilesViewModel(),
-            filePickerModel: KakaoFilePickerModel(store: AppDependencies.shared.kakaoFolderStore)
+            filePickerModel: KakaoFilePickerModel(store: AppDependencies.shared.kakaoFolderStore),
+            textModel: TextTransferDependencies.shared.makeViewModel()
         )
     }
 }
