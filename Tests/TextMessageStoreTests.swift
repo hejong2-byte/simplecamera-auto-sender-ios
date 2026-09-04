@@ -12,8 +12,10 @@ final class TextMessageStoreTests: XCTestCase {
         )
         let body = try message.encoded()
 
-        XCTAssertEqual(try await store.saveReceived(message, body: body), .inserted)
-        XCTAssertEqual(try await store.saveReceived(message, body: body), .duplicate)
+        let firstSave = try await store.saveReceived(message, body: body)
+        let duplicateSave = try await store.saveReceived(message, body: body)
+        XCTAssertEqual(firstSave, .inserted)
+        XCTAssertEqual(duplicateSave, .duplicate)
 
         let reopened = TextMessageStore(root: root)
         let history = try await reopened.history()
