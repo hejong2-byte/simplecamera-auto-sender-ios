@@ -93,7 +93,8 @@ final class TextTransferServiceTests: XCTestCase {
             sender: "123456",
             recipient: "654321",
             text: "원본",
-            id: UUID(uuidString: "123e4567-e89b-42d3-a456-426614174222")!
+            id: UUID(uuidString: "123e4567-e89b-42d3-a456-426614174222")!,
+            now: Date(timeIntervalSince1970: 1_778_115_723)
         )
         _ = try await fixture.store.saveReceived(original, body: original.encoded())
         let collision = try TextMessageEnvelope.make(
@@ -164,7 +165,8 @@ final class TextTransferServiceTests: XCTestCase {
         let message = try TextMessageEnvelope.make(
             sender: "123456",
             recipient: "654321",
-            text: "읽을 내용"
+            text: "읽을 내용",
+            now: Date(timeIntervalSince1970: 1_778_115_723)
         )
         _ = try await fixture.store.saveReceived(message, body: message.encoded())
         let key = TextMessageKey(direction: .received, id: message.id)
