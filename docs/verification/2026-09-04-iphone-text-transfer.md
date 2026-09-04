@@ -31,4 +31,16 @@
 
 ## 설치물
 
-0.3.11 release workflow와 IPA 및 QR 해시는 릴리스 직후 이 문서에 추가한다.
+- 태그: `v0.3.11` (`201b184439c2f043fe38d1a44d6be4f04a93fe9b`)
+- release workflow: `33846159843` 성공
+- IPA: 2,461,426바이트
+- IPA SHA-256: `05f1c7e5423f040d5af47628b91469d9569d8874166fff0f379d94e2a72005f2`
+- IPA 내부 식별자: `com.hejong2byte.simplecameraautosender`
+- IPA 내부 버전: `0.3.11` (`22`)
+- ZIP 무결성 검사 성공
+- GitHub `releases/latest/download`에서 다시 받은 IPA와 SHA-256 일치
+- QR: 2,903바이트
+- QR SHA-256: `95af9ce2cd019829f803cb8d495923e6f4d9007db990434758d688ab8c55505b`
+- QR 픽셀을 검증된 SideStore URI로 다시 생성한 결과와 대조해 일치 확인
+- QR 내용: `sidestore://install?url=https%3A%2F%2Fgithub.com%2Fhejong2-byte%2Fsimplecamera-auto-sender-ios%2Freleases%2Flatest%2Fdownload%2FSimpleCameraAutoSender.ipa`
+- 바탕화면 전달 폴더: `C:\Users\user\Desktop\SimpleCamera-iPhone-0.3.11`
