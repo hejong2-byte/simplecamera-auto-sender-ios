@@ -431,6 +431,7 @@ final class USBReceiverViewModel: ObservableObject {
             if receiveProgress?.stage != .failed,
                !needsLocalFallbackDecision {
                 lastError = nil
+                clearRecoveredDiscoveryOutcome()
             }
         } catch let error where IPhoneReceiveErrorMessage.isCancellation(error) {
             return
@@ -681,6 +682,9 @@ final class USBReceiverViewModel: ObservableObject {
                 lastError = nil
             }
         }
+        if progress.stage == .idle {
+            clearRecoveredDiscoveryOutcome()
+        }
 
         if progress.stage == .completed || progress.stage == .failed {
             recordTerminalOutcome(progress)
@@ -692,6 +696,18 @@ final class USBReceiverViewModel: ObservableObject {
             } catch {
                 lastError = "받은 파일 목록을 새로 고치지 못했습니다. " + Self.message(for: error)
             }
+        }
+    }
+
+    private func clearRecoveredDiscoveryOutcome() {
+        guard receiveOutcome?.kind == .failed,
+              receiveOutcome?.fileName == nil,
+              let receiverID else { return }
+        do {
+            try clearOutcome(receiverID)
+            receiveOutcome = nil
+        } catch {
+            lastError = "복구된 새 파일 확인 오류 기록을 정리하지 못했습니다."
         }
     }
 
