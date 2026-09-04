@@ -12,7 +12,11 @@ struct ContentView: View {
     @State private var pickerKind: ManualMediaKind?
     @State private var readinessMessage: String?
 
-    private enum Destination: Hashable { case receiver, settings }
+    private enum Destination: Hashable {
+        case receiver
+        case text
+        case settings
+    }
 
     init(
         model: ContentViewModel,
@@ -37,6 +41,7 @@ struct ContentView: View {
                     if model.manualProgress != nil || model.lastManualSummary != nil {
                         manualStatusCard
                     }
+                    textTransferCard
                     receiverCard
                     NavigationLink(value: Destination.settings) {
                         Label("설정", systemImage: "gearshape.fill")
@@ -57,6 +62,8 @@ struct ContentView: View {
                 switch destination {
                 case .receiver:
                     USBReceiverView(model: receiverModel, incomingModel: incomingModel)
+                case .text:
+                    TextTransferView(model: textModel)
                 case .settings:
                     SettingsView(model: model, receiverModel: receiverModel, filePickerModel: filePickerModel)
                 }
@@ -218,6 +225,31 @@ struct ContentView: View {
         }
         .cardStyle()
         .task { await receiverModel.refresh() }
+    }
+
+    private var textTransferCard: some View {
+        NavigationLink(value: Destination.text) {
+            HStack(spacing: 10) {
+                Label("텍스트 송수신", systemImage: "text.bubble.fill")
+                    .font(.headline)
+                Spacer()
+                if textModel.unreadCount > 0 {
+                    Text("\(textModel.unreadCount)")
+                        .font(.caption.monospacedDigit().bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.cyan)
+                        .clipShape(Capsule())
+                }
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("open-text-transfer")
+        .cardStyle()
     }
 
     private var automaticStatusCard: some View {

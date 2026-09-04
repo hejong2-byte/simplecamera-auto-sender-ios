@@ -48,6 +48,15 @@ final class TextTransferViewModel: ObservableObject {
         }.count
     }
 
+    var canSend: Bool {
+        guard activity == .idle, let ownCode else { return false }
+        return (try? TextMessageEnvelope.make(
+            sender: ownCode,
+            recipient: recipient,
+            text: text
+        )) != nil
+    }
+
     private let loadOwnCode: LoadOwnCode
     private let receive: Receive
     private let loadHistory: LoadHistory

@@ -143,7 +143,8 @@ final class ForegroundReceiveUITests: XCTestCase {
         menu.tap()
 
         XCTAssertTrue(app.navigationBars["텍스트 송수신"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["내 수신 코드 123456"].exists)
+        XCTAssertTrue(app.staticTexts["내 수신 코드"].exists)
+        XCTAssertTrue(app.staticTexts["123456"].exists)
         XCTAssertTrue(app.textFields["text-recipient"].exists)
         XCTAssertTrue(app.textViews["text-body"].exists)
         XCTAssertTrue(app.buttons["text-send"].exists)

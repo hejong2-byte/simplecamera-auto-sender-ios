@@ -15,7 +15,8 @@ final class ForegroundReceiveSimulation {
         }
         return try! ForegroundReceiveSimulation(
             delay: delay, outcome: outcome,
-            withStoredFiles: arguments.contains("--ui-test-stored-files")
+            withStoredFiles: arguments.contains("--ui-test-stored-files"),
+            withTextMessage: arguments.contains("--ui-test-text-message")
         )
     }()
 
@@ -25,7 +26,12 @@ final class ForegroundReceiveSimulation {
     let filePicker: KakaoFilePickerModel
     let text: TextTransferViewModel
 
-    private init(delay: TimeInterval, outcome: String?, withStoredFiles: Bool) throws {
+    private init(
+        delay: TimeInterval,
+        outcome: String?,
+        withStoredFiles: Bool,
+        withTextMessage: Bool
+    ) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let catalog = try IPhoneReceivedFileCatalog(
             receivedDirectory: root.appendingPathComponent("Received", isDirectory: true),
@@ -74,7 +80,9 @@ final class ForegroundReceiveSimulation {
             receiveOutcome = nil
         }
         filePicker = KakaoFilePickerModel(store: KakaoFolderStore(fileURL: root.appendingPathComponent("kakao-folder.json")))
-        let textStore = TextMessageStore(root: root.appendingPathComponent("TextMessages", isDirectory: true))
+        let textRoot = root.appendingPathComponent("TextMessages", isDirectory: true)
+        if withTextMessage { try Self.seedTextMessage(at: textRoot) }
+        let textStore = TextMessageStore(root: textRoot)
         text = TextTransferViewModel(
             loadOwnCode: { "123456" },
             receive: {
@@ -149,6 +157,30 @@ final class ForegroundReceiveSimulation {
                 try choices.approve(ids, receiverID: id, destination: destination)
             }
         )
+    }
+
+    private static func seedTextMessage(at root: URL) throws {
+        let envelope = try TextMessageEnvelope.make(
+            sender: "654321",
+            recipient: "123456",
+            text: "  PC에서 받은 텍스트\n둘째 줄  ",
+            id: UUID(uuidString: "123e4567-e89b-42d3-a456-426614174333")!,
+            now: Date(timeIntervalSince1970: 1_778_115_723)
+        )
+        let body = try envelope.encoded()
+        let message = TextStoredMessage(
+            key: TextMessageKey(direction: .received, id: envelope.id),
+            envelope: envelope,
+            bodySHA256: TextDigest.hex(body),
+            status: .received,
+            readAt: nil
+        )
+        let messages = root.appendingPathComponent("messages", isDirectory: true)
+        try FileManager.default.createDirectory(at: messages, withIntermediateDirectories: true)
+        let file = messages.appendingPathComponent(
+            "received-\(envelope.id.uuidString.lowercased()).json"
+        )
+        try JSONEncoder().encode(message).write(to: file, options: .atomic)
     }
 }
 
