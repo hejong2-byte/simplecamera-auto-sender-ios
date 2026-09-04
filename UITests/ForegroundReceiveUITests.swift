@@ -135,6 +135,33 @@ final class ForegroundReceiveUITests: XCTestCase {
         XCTAssertTrue(app.buttons["open-receiver"].exists)
     }
 
+    func testTextTransferShowsComposeHistoryAndRecordActions() {
+        let app = launchSimulation(delay: 3_600, withTextMessage: true)
+        let menu = app.buttons["open-text-transfer"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 20))
+        reveal(menu, in: app)
+        menu.tap()
+
+        XCTAssertTrue(app.navigationBars["텍스트 송수신"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["내 수신 코드 123456"].exists)
+        XCTAssertTrue(app.textFields["text-recipient"].exists)
+        XCTAssertTrue(app.textViews["text-body"].exists)
+        XCTAssertTrue(app.buttons["text-send"].exists)
+        XCTAssertTrue(app.buttons["text-refresh"].exists)
+
+        let message = app.buttons["text-message-received-123e4567-e89b-42d3-a456-426614174333"]
+        reveal(message, in: app)
+        XCTAssertTrue(message.isHittable)
+        message.tap()
+        let body = app.staticTexts["text-detail-body"]
+        XCTAssertTrue(body.waitForExistence(timeout: 10))
+        XCTAssertEqual(body.label, "  PC에서 받은 텍스트\n둘째 줄  ")
+        for identifier in ["text-copy", "text-export", "text-share", "text-delete"] {
+            XCTAssertTrue(app.buttons[identifier].exists, "Missing \(identifier)")
+        }
+        keepScreenshot("text-transfer-detail", app: app)
+    }
+
     func testUSBChoiceOpensFolderPickerAndCancellationAllowsLocalFallback() {
         let app = launchSimulation()
         XCTAssertTrue(app.buttons["USB에 저장"].waitForExistence(timeout: 20))
@@ -205,7 +232,8 @@ final class ForegroundReceiveUITests: XCTestCase {
     private func launchSimulation(
         delay: Int = 0,
         outcome: String? = nil,
-        withStoredFiles: Bool = false
+        withStoredFiles: Bool = false,
+        withTextMessage: Bool = false
     ) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -214,6 +242,7 @@ final class ForegroundReceiveUITests: XCTestCase {
             app.launchArguments += ["--ui-test-receive-outcome", outcome]
         }
         if withStoredFiles { app.launchArguments.append("--ui-test-stored-files") }
+        if withTextMessage { app.launchArguments.append("--ui-test-text-message") }
         app.launch()
         addTeardownBlock { app.terminate() }
         return app
