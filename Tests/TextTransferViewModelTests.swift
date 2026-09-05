@@ -169,6 +169,27 @@ final class TextTransferViewModelTests: XCTestCase {
         XCTAssertEqual(model.statusMessage, "수신코드 선택 완료")
     }
 
+    func testRenamingSavedRecipientDoesNotChangeCurrentDraftRecipient() async {
+        let probe = TextViewModelProbe(
+            draft: TextDraft(recipient: "123456", text: "작성 중"),
+            recipients: TextSavedRecipientState(
+                recipients: [TextSavedRecipient(code: "709592", name: "행정망 PC")],
+                selectedCode: nil
+            )
+        )
+        let model = makeModel(probe: probe)
+        await model.refresh()
+
+        await model.renameRecipient(code: "709592", name: "행정망 업무 PC")
+
+        XCTAssertEqual(model.recipient, "123456")
+        XCTAssertNil(model.selectedRecipientCode)
+        XCTAssertEqual(
+            model.savedRecipients.map(\.displayLabel),
+            ["행정망 업무 PC · 709592"]
+        )
+    }
+
     func testSavedRecipientsRemainVisibleWhenNetworkRefreshFails() async {
         let probe = TextViewModelProbe(
             receiveError: URLError(.notConnectedToInternet),
