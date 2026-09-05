@@ -16,7 +16,8 @@ final class ForegroundReceiveSimulation {
         return try! ForegroundReceiveSimulation(
             delay: delay, outcome: outcome,
             withStoredFiles: arguments.contains("--ui-test-stored-files"),
-            withTextMessage: arguments.contains("--ui-test-text-message")
+            withTextMessage: arguments.contains("--ui-test-text-message"),
+            withSavedTextRecipient: arguments.contains("--ui-test-text-recipient")
         )
     }()
 
@@ -30,7 +31,8 @@ final class ForegroundReceiveSimulation {
         delay: TimeInterval,
         outcome: String?,
         withStoredFiles: Bool,
-        withTextMessage: Bool
+        withTextMessage: Bool,
+        withSavedTextRecipient: Bool
     ) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let catalog = try IPhoneReceivedFileCatalog(
@@ -82,6 +84,7 @@ final class ForegroundReceiveSimulation {
         filePicker = KakaoFilePickerModel(store: KakaoFolderStore(fileURL: root.appendingPathComponent("kakao-folder.json")))
         let textRoot = root.appendingPathComponent("TextMessages", isDirectory: true)
         if withTextMessage { try Self.seedTextMessage(at: textRoot) }
+        if withSavedTextRecipient { try Self.seedTextRecipient(at: textRoot) }
         let textStore = TextMessageStore(root: textRoot)
         let textRecipientStore = TextSavedRecipientStore(
             fileURL: textRoot.appendingPathComponent("saved-recipients.json")
@@ -190,6 +193,18 @@ final class ForegroundReceiveSimulation {
             "received-\(envelope.id.uuidString.lowercased()).json"
         )
         try JSONEncoder().encode(message).write(to: file, options: .atomic)
+    }
+
+    private static func seedTextRecipient(at root: URL) throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let state = TextSavedRecipientState(
+            recipients: [TextSavedRecipient(code: "709592", name: "행정망 PC")],
+            selectedCode: nil
+        )
+        try JSONEncoder().encode(state).write(
+            to: root.appendingPathComponent("saved-recipients.json"),
+            options: .atomic
+        )
     }
 }
 

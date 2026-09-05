@@ -163,6 +163,39 @@ final class ForegroundReceiveUITests: XCTestCase {
         keepScreenshot("text-transfer-detail", app: app)
     }
 
+    func testTextRecipientShortcutAndHistoryLongPressActions() {
+        let app = launchSimulation(
+            delay: 3_600,
+            withTextMessage: true,
+            withSavedTextRecipient: true
+        )
+        let menu = app.buttons["open-text-transfer"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 20))
+        reveal(menu, in: app)
+        menu.tap()
+
+        let shortcut = app.buttons["text-saved-recipient-709592"]
+        XCTAssertTrue(shortcut.waitForExistence(timeout: 10))
+        XCTAssertTrue(shortcut.label.contains("행정망 PC"))
+        XCTAssertTrue(shortcut.label.contains("709592"))
+        shortcut.tap()
+        XCTAssertEqual(app.textFields["text-recipient"].value as? String, "709592")
+
+        let message = app.buttons[
+            "text-message-received-123e4567-e89b-42d3-a456-426614174333"
+        ]
+        reveal(message, in: app)
+        XCTAssertTrue(message.isHittable)
+        message.press(forDuration: 1.2)
+        for title in ["전체 복사", "TXT로 저장", "공유", "삭제"] {
+            XCTAssertTrue(
+                app.buttons[title].waitForExistence(timeout: 3),
+                "Missing long-press action: \(title)"
+            )
+        }
+        keepScreenshot("text-transfer-long-press", app: app)
+    }
+
     func testUSBChoiceOpensFolderPickerAndCancellationAllowsLocalFallback() {
         let app = launchSimulation()
         XCTAssertTrue(app.buttons["USB에 저장"].waitForExistence(timeout: 20))
@@ -234,7 +267,8 @@ final class ForegroundReceiveUITests: XCTestCase {
         delay: Int = 0,
         outcome: String? = nil,
         withStoredFiles: Bool = false,
-        withTextMessage: Bool = false
+        withTextMessage: Bool = false,
+        withSavedTextRecipient: Bool = false
     ) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -244,6 +278,9 @@ final class ForegroundReceiveUITests: XCTestCase {
         }
         if withStoredFiles { app.launchArguments.append("--ui-test-stored-files") }
         if withTextMessage { app.launchArguments.append("--ui-test-text-message") }
+        if withSavedTextRecipient {
+            app.launchArguments.append("--ui-test-text-recipient")
+        }
         app.launch()
         addTeardownBlock { app.terminate() }
         return app
