@@ -461,11 +461,18 @@ CURRENT_PROJECT_VERSION: 24
 MARKETING_VERSION: 0.3.13
 ```
 
-Update smoke assertions to the same values, commit, push, and require green CI.
+Update smoke assertions to the same values and run the focused static checks before committing.
 
-- [ ] **Step 3: Record verification without private receiver values**
+- [ ] **Step 3: Commit the complete release source and require green CI**
 
-The verification record includes test run URL, commit, file counts, version/build, bundle ID, IPA SHA-256, and data-isolation checks. It must not include actual saved codes, names, credentials, device IDs, message bodies, or server tokens.
+```powershell
+git add docs/install.md project.yml Tests/ProjectSmokeTests.swift
+git commit -m "release: prepare SideStore 0.3.13"
+git push origin codex/foreground-receive-alert
+gh run watch --repo hejong2byte/SimpleCameraAutoSender-iOS --exit-status
+```
+
+Expected: the release-source commit passes the complete simulator suite and unsigned IPA build before it is tagged.
 
 - [ ] **Step 4: Tag and build the release**
 
@@ -489,12 +496,15 @@ Get-FileHash -Algorithm SHA256 'C:\Users\user\Desktop\SimpleCamera-iPhone-0.3.13
 
 Also inspect `Info.plist` inside the IPA for bundle ID `com.hejong2byte.simplecameraautosender`, version `0.3.13`, build `24`; decode `install-qr.png` and confirm its payload exactly matches the permanent SideStore install URL; compare the GitHub release asset hash with the downloaded desktop file.
 
-- [ ] **Step 6: Final commit and status check**
+- [ ] **Step 6: Record verified results and check final status**
+
+Create `docs/verification/2026-09-05-text-saved-recipients.md` only after Step 5 supplies the actual run URL, tagged commit, version/build, bundle ID, IPA SHA-256, QR payload check, and data-isolation result. Do not include actual saved codes, names, credentials, device IDs, message bodies, or server tokens.
 
 ```powershell
-git add docs/install.md project.yml Tests/ProjectSmokeTests.swift docs/verification/2026-09-05-text-saved-recipients.md
-git commit -m "release: prepare SideStore 0.3.13"
+git add docs/verification/2026-09-05-text-saved-recipients.md
+git commit -m "docs: record SideStore 0.3.13 verification"
+git push origin codex/foreground-receive-alert
 git status --short --branch
 ```
 
-Expected: branch and tag point to the verified release commit, the worktree is clean, and no operational/private data is tracked.
+Expected: tag `v0.3.13` points to the verified release-source commit, the branch contains one later verification-only commit, the worktree is clean, and no operational/private data is tracked.
