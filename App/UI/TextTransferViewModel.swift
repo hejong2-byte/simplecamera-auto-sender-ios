@@ -246,6 +246,17 @@ final class TextTransferViewModel: ObservableObject {
         }
     }
 
+    func renameRecipient(code: String, name: String) async {
+        clearError()
+        do {
+            let state = try await persistRecipient(code, name)
+            applyRecipientState(state)
+            statusMessage = "수신코드 이름 변경 완료"
+        } catch {
+            record(error)
+        }
+    }
+
     func deleteRecipient(code: String) async {
         clearError()
         do {

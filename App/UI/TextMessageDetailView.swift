@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 import UIKit
 
 struct TextMessageDetailView: View {
@@ -54,7 +53,7 @@ struct TextMessageDetailView: View {
             if message.key.direction == .received && message.readAt == nil {
                 try? await model.markRead(message.key)
             }
-            shareURL = try? Self.makeShareFile(message)
+            shareURL = try? TextMessageExport.makeTemporaryFile(for: message)
         }
         .onDisappear {
             if let shareURL { try? FileManager.default.removeItem(at: shareURL) }
@@ -63,7 +62,8 @@ struct TextMessageDetailView: View {
             isPresented: $isExporting,
             document: TextExportDocument(text: message?.envelope.text ?? ""),
             contentType: .plainText,
-            defaultFilename: exportBaseName
+            defaultFilename: message.map { TextMessageExport.baseName(for: $0) }
+                ?? "SimpleCamera-text"
         ) { result in
             switch result {
             case .success:
@@ -161,7 +161,7 @@ struct TextMessageDetailView: View {
                 .accessibilityIdentifier("text-share")
             } else {
                 Button {
-                    shareURL = try? Self.makeShareFile(message)
+                    shareURL = try? TextMessageExport.makeTemporaryFile(for: message)
                 } label: {
                     Label("공유 준비 중", systemImage: "square.and.arrow.up")
                         .frame(maxWidth: .infinity)
@@ -181,42 +181,4 @@ struct TextMessageDetailView: View {
         .cardStyle()
     }
 
-    private var exportBaseName: String {
-        "SimpleCamera-text-\(key.id.uuidString.lowercased())"
-    }
-
-    private static func makeShareFile(_ message: TextStoredMessage) throws -> URL {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SimpleCameraTextShare", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        let url = directory.appendingPathComponent(
-            "SimpleCamera-text-\(message.envelope.id.uuidString.lowercased()).txt"
-        )
-        try Data(message.envelope.text.utf8).write(to: url, options: .atomic)
-        return url
-    }
-}
-
-struct TextExportDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.plainText] }
-    var text: String
-
-    init(text: String) {
-        self.text = text
-    }
-
-    init(configuration: ReadConfiguration) throws {
-        guard let data = configuration.file.regularFileContents,
-              let text = String(data: data, encoding: .utf8) else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        self.text = text
-    }
-
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        FileWrapper(regularFileWithContents: Data(text.utf8))
-    }
 }
