@@ -83,6 +83,9 @@ final class ForegroundReceiveSimulation {
         let textRoot = root.appendingPathComponent("TextMessages", isDirectory: true)
         if withTextMessage { try Self.seedTextMessage(at: textRoot) }
         let textStore = TextMessageStore(root: textRoot)
+        let textRecipientStore = TextSavedRecipientStore(
+            fileURL: textRoot.appendingPathComponent("saved-recipients.json")
+        )
         text = TextTransferViewModel(
             loadOwnCode: { "123456" },
             receive: {
@@ -112,7 +115,13 @@ final class ForegroundReceiveSimulation {
             markRead: { key in try await textStore.markRead(key) },
             delete: { key in try await textStore.delete(key) },
             loadDraft: { try await textStore.loadDraft() },
-            saveDraft: { draft in try await textStore.saveDraft(draft) }
+            saveDraft: { draft in try await textStore.saveDraft(draft) },
+            loadRecipients: { try await textRecipientStore.load() },
+            saveRecipient: { code, name in
+                try await textRecipientStore.save(code: code, name: name)
+            },
+            selectRecipient: { code in try await textRecipientStore.select(code: code) },
+            deleteRecipient: { code in try await textRecipientStore.delete(code: code) }
         )
         let uploadCredential = InMemoryCredentialStore()
         try uploadCredential.save("simulation-only")

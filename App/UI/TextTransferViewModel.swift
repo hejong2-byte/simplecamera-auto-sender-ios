@@ -29,6 +29,10 @@ final class TextTransferViewModel: ObservableObject {
     typealias Delete = @Sendable (TextMessageKey) async throws -> Void
     typealias LoadDraft = @Sendable () async throws -> TextDraft
     typealias SaveDraft = @Sendable (TextDraft) async throws -> Void
+    typealias LoadRecipients = @Sendable () async throws -> TextSavedRecipientState
+    typealias SaveRecipient = @Sendable (String, String) async throws -> TextSavedRecipientState
+    typealias SelectRecipient = @Sendable (String) async throws -> TextSavedRecipientState
+    typealias DeleteRecipient = @Sendable (String) async throws -> TextSavedRecipientState
     typealias Sleep = @Sendable (Duration) async throws -> Void
 
     @Published var recipient = ""
@@ -41,6 +45,8 @@ final class TextTransferViewModel: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var lastErrorKind: TextTransferFailureKind?
     @Published private(set) var isMonitoring = false
+    @Published private(set) var savedRecipients: [TextSavedRecipient] = []
+    @Published private(set) var selectedRecipientCode: String?
 
     var unreadCount: Int {
         messages.filter {
@@ -66,6 +72,10 @@ final class TextTransferViewModel: ObservableObject {
     private let deleteMessage: Delete
     private let loadDraft: LoadDraft
     private let persistDraft: SaveDraft
+    private let loadRecipients: LoadRecipients
+    private let persistRecipient: SaveRecipient
+    private let persistRecipientSelection: SelectRecipient
+    private let removeRecipient: DeleteRecipient
     private let sleep: Sleep
     private let now: @Sendable () -> Date
     private var monitorTask: Task<Void, Never>?
@@ -83,6 +93,10 @@ final class TextTransferViewModel: ObservableObject {
         delete: @escaping Delete,
         loadDraft: @escaping LoadDraft,
         saveDraft: @escaping SaveDraft,
+        loadRecipients: @escaping LoadRecipients,
+        saveRecipient: @escaping SaveRecipient,
+        selectRecipient: @escaping SelectRecipient,
+        deleteRecipient: @escaping DeleteRecipient,
         sleep: @escaping Sleep = { try await Task.sleep(for: $0) },
         now: @escaping @Sendable () -> Date = Date.init
     ) {
@@ -95,6 +109,10 @@ final class TextTransferViewModel: ObservableObject {
         deleteMessage = delete
         self.loadDraft = loadDraft
         persistDraft = saveDraft
+        self.loadRecipients = loadRecipients
+        persistRecipient = saveRecipient
+        persistRecipientSelection = selectRecipient
+        removeRecipient = deleteRecipient
         self.sleep = sleep
         self.now = now
     }
@@ -195,6 +213,50 @@ final class TextTransferViewModel: ObservableObject {
         }
     }
 
+    func recipientDidChange() {
+        if recipient != selectedRecipientCode {
+            selectedRecipientCode = nil
+        }
+    }
+
+    func saveRecipient(name: String) async {
+        clearError()
+        do {
+            let savedState = try await persistRecipient(recipient, name)
+            applyRecipientState(savedState)
+            let selectedState = try await persistRecipientSelection(recipient)
+            applyRecipientState(selectedState)
+            try await persistDraft(TextDraft(recipient: recipient, text: text))
+            statusMessage = "수신코드 저장 완료"
+        } catch {
+            record(error)
+        }
+    }
+
+    func selectRecipient(code: String) async {
+        clearError()
+        do {
+            let state = try await persistRecipientSelection(code)
+            recipient = code
+            applyRecipientState(state)
+            try await persistDraft(TextDraft(recipient: recipient, text: text))
+            statusMessage = "수신코드 선택 완료"
+        } catch {
+            record(error)
+        }
+    }
+
+    func deleteRecipient(code: String) async {
+        clearError()
+        do {
+            let state = try await removeRecipient(code)
+            applyRecipientState(state)
+            statusMessage = "수신코드 삭제 완료"
+        } catch {
+            record(error)
+        }
+    }
+
     private func refresh(expectedGeneration: UUID?) async {
         guard activity == .idle, requestID == nil,
               isCurrent(expectedGeneration) else { return }
@@ -210,6 +272,7 @@ final class TextTransferViewModel: ObservableObject {
             let code = try loadOwnCode()
             let draft = didLoadDraft ? nil : try await loadDraft()
             let localHistory = try await loadHistory()
+            let recipientState = try await loadRecipients()
             guard isCurrent(expectedGeneration) else { return }
             ownCode = code
             if let draft {
@@ -217,6 +280,10 @@ final class TextTransferViewModel: ObservableObject {
                 text = draft.text
                 didLoadDraft = true
             }
+            if recipient.isEmpty, let selectedCode = recipientState.selectedCode {
+                recipient = selectedCode
+            }
+            applyRecipientState(recipientState)
             messages = localHistory
 
             let summary = try await receive()
@@ -249,6 +316,11 @@ final class TextTransferViewModel: ObservableObject {
     private func clearError() {
         lastError = nil
         lastErrorKind = nil
+    }
+
+    private func applyRecipientState(_ state: TextSavedRecipientState) {
+        savedRecipients = state.recipients
+        selectedRecipientCode = state.selectedCode == recipient ? state.selectedCode : nil
     }
 
     private func record(_ error: Error) {

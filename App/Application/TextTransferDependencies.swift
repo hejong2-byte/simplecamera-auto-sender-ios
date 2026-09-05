@@ -8,10 +8,12 @@ final class TextTransferDependencies: @unchecked Sendable {
             appropriateFor: nil,
             create: true
         )
-        let store = TextMessageStore(
-            root: applicationSupport
-                .appendingPathComponent("SimpleCameraAutoSender", isDirectory: true)
-                .appendingPathComponent("TextMessages", isDirectory: true)
+        let textRoot = applicationSupport
+            .appendingPathComponent("SimpleCameraAutoSender", isDirectory: true)
+            .appendingPathComponent("TextMessages", isDirectory: true)
+        let store = TextMessageStore(root: textRoot)
+        let recipientStore = TextSavedRecipientStore(
+            fileURL: textRoot.appendingPathComponent("saved-recipients.json")
         )
         let registrations = IPhoneReceiverRegistrationStore(
             identityStore: KeychainCredentialStore(
@@ -27,18 +29,25 @@ final class TextTransferDependencies: @unchecked Sendable {
             uploadCredentials: KeychainCredentialStore(),
             registrations: registrations
         )
-        return TextTransferDependencies(service: service, registrations: registrations)
+        return TextTransferDependencies(
+            service: service,
+            registrations: registrations,
+            recipientStore: recipientStore
+        )
     }()
 
     private let service: TextTransferService
     private let registrations: IPhoneReceiverRegistrationStore
+    private let recipientStore: TextSavedRecipientStore
 
     private init(
         service: TextTransferService,
-        registrations: IPhoneReceiverRegistrationStore
+        registrations: IPhoneReceiverRegistrationStore,
+        recipientStore: TextSavedRecipientStore
     ) {
         self.service = service
         self.registrations = registrations
+        self.recipientStore = recipientStore
     }
 
     @MainActor
@@ -56,7 +65,17 @@ final class TextTransferDependencies: @unchecked Sendable {
             markRead: { [service] key in try await service.markRead(key) },
             delete: { [service] key in try await service.delete(key) },
             loadDraft: { [service] in try await service.loadDraft() },
-            saveDraft: { [service] draft in try await service.saveDraft(draft) }
+            saveDraft: { [service] draft in try await service.saveDraft(draft) },
+            loadRecipients: { [recipientStore] in try await recipientStore.load() },
+            saveRecipient: { [recipientStore] code, name in
+                try await recipientStore.save(code: code, name: name)
+            },
+            selectRecipient: { [recipientStore] code in
+                try await recipientStore.select(code: code)
+            },
+            deleteRecipient: { [recipientStore] code in
+                try await recipientStore.delete(code: code)
+            }
         )
     }
 }
