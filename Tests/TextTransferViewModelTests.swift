@@ -120,6 +120,85 @@ final class TextTransferViewModelTests: XCTestCase {
         }
     }
 
+    func testSavedRecipientsLoadSelectRenameDeleteAndClearSelectionOnManualEdit() async {
+        let saved = TextSavedRecipientState(
+            recipients: [TextSavedRecipient(code: "709592", name: "행정망 PC")],
+            selectedCode: "709592"
+        )
+        let probe = TextViewModelProbe(
+            draft: TextDraft(recipient: "709592", text: ""),
+            recipients: saved
+        )
+        let model = makeModel(probe: probe)
+
+        await model.refresh()
+        XCTAssertEqual(model.savedRecipients.map(\.displayLabel), ["행정망 PC · 709592"])
+        XCTAssertEqual(model.selectedRecipientCode, "709592")
+
+        await model.selectRecipient(code: "709592")
+        XCTAssertEqual(model.recipient, "709592")
+        XCTAssertEqual(model.selectedRecipientCode, "709592")
+
+        model.recipient = "123456"
+        model.recipientDidChange()
+        XCTAssertNil(model.selectedRecipientCode)
+
+        model.recipient = "709592"
+        await model.saveRecipient(name: "행정망 업무 PC")
+        XCTAssertEqual(model.savedRecipients.first?.displayLabel, "행정망 업무 PC · 709592")
+        XCTAssertEqual(model.selectedRecipientCode, "709592")
+
+        await model.deleteRecipient(code: "709592")
+        XCTAssertTrue(model.savedRecipients.isEmpty)
+        XCTAssertNil(model.selectedRecipientCode)
+        XCTAssertEqual(model.recipient, "709592", "Deleting a shortcut must keep the draft code")
+    }
+
+    func testSelectingSavedRecipientPersistsTheDraft() async {
+        let probe = TextViewModelProbe(recipients: TextSavedRecipientState(
+            recipients: [TextSavedRecipient(code: "123456", name: "아이폰")],
+            selectedCode: nil
+        ))
+        let model = makeModel(probe: probe)
+        await model.refresh()
+
+        await model.selectRecipient(code: "123456")
+
+        let savedDraft = await probe.savedDraft()
+        XCTAssertEqual(savedDraft.recipient, "123456")
+        XCTAssertEqual(model.statusMessage, "수신코드 선택 완료")
+    }
+
+    func testSavedRecipientsRemainVisibleWhenNetworkRefreshFails() async {
+        let probe = TextViewModelProbe(
+            receiveError: URLError(.notConnectedToInternet),
+            recipients: TextSavedRecipientState(
+                recipients: [TextSavedRecipient(code: "709592", name: "행정망 PC")],
+                selectedCode: nil
+            )
+        )
+        let model = makeModel(probe: probe)
+
+        await model.refresh()
+
+        XCTAssertEqual(model.savedRecipients.map(\.displayLabel), ["행정망 PC · 709592"])
+        XCTAssertEqual(model.lastErrorKind, .network)
+    }
+
+    func testRecipientValidationErrorUsesSpecificMessageWithoutStoppingMonitoring() async {
+        let probe = TextViewModelProbe(recipientMutationError: .limitReached)
+        let model = makeModel(probe: probe)
+        model.recipient = "123456"
+
+        await model.saveRecipient(name: "여섯째")
+
+        XCTAssertEqual(model.lastErrorKind, .validation)
+        XCTAssertEqual(model.lastError, "수신코드는 최대 5개까지 저장할 수 있습니다.")
+        model.setActive(true)
+        XCTAssertTrue(model.isMonitoring)
+        model.setActive(false)
+    }
+
     private func makeModel(
         probe: TextViewModelProbe,
         clock: TextPollClock = TextPollClock()
@@ -134,6 +213,12 @@ final class TextTransferViewModelTests: XCTestCase {
             delete: { key in try await probe.delete(key) },
             loadDraft: { try await probe.loadDraft() },
             saveDraft: { draft in try await probe.saveDraft(draft) },
+            loadRecipients: { try await probe.loadRecipients() },
+            saveRecipient: { code, name in
+                try await probe.saveRecipient(code: code, name: name)
+            },
+            selectRecipient: { code in try await probe.selectRecipient(code: code) },
+            deleteRecipient: { code in try await probe.deleteRecipient(code: code) },
             sleep: { duration in try await clock.sleep(for: duration) },
             now: { Date(timeIntervalSince1970: 1_778_115_723) }
         )
@@ -193,6 +278,8 @@ private actor TextViewModelProbe {
     private let blocksReceive: Bool
     private let sendGate: TextOperationGate?
     private let retryGate: TextOperationGate?
+    private var recipientState: TextSavedRecipientState
+    private let recipientMutationError: TextSavedRecipientStoreError?
     private var receiveCalls = 0
     private var activeReceives = 0
     private var maximumReceives = 0
@@ -205,7 +292,9 @@ private actor TextViewModelProbe {
         receiveError: Error? = nil,
         blocksReceive: Bool = false,
         sendGate: TextOperationGate? = nil,
-        retryGate: TextOperationGate? = nil
+        retryGate: TextOperationGate? = nil,
+        recipients: TextSavedRecipientState = .empty,
+        recipientMutationError: TextSavedRecipientStoreError? = nil
     ) {
         storedHistory = history
         storedDraft = draft
@@ -213,6 +302,8 @@ private actor TextViewModelProbe {
         self.blocksReceive = blocksReceive
         self.sendGate = sendGate
         self.retryGate = retryGate
+        recipientState = recipients
+        self.recipientMutationError = recipientMutationError
     }
 
     func receive() async throws -> TextReceiveSummary {
@@ -235,6 +326,31 @@ private actor TextViewModelProbe {
     func loadDraft() throws -> TextDraft { storedDraft }
     func savedDraft() -> TextDraft { storedDraft }
     func saveDraft(_ draft: TextDraft) throws { storedDraft = draft }
+
+    func loadRecipients() throws -> TextSavedRecipientState { recipientState }
+
+    func saveRecipient(code: String, name: String) throws -> TextSavedRecipientState {
+        if let recipientMutationError { throw recipientMutationError }
+        if let index = recipientState.recipients.firstIndex(where: { $0.code == code }) {
+            recipientState.recipients[index].name = name
+        } else {
+            recipientState.recipients.append(TextSavedRecipient(code: code, name: name))
+        }
+        return recipientState
+    }
+
+    func selectRecipient(code: String) throws -> TextSavedRecipientState {
+        if let recipientMutationError { throw recipientMutationError }
+        recipientState.selectedCode = code
+        return recipientState
+    }
+
+    func deleteRecipient(code: String) throws -> TextSavedRecipientState {
+        if let recipientMutationError { throw recipientMutationError }
+        recipientState.recipients.removeAll { $0.code == code }
+        if recipientState.selectedCode == code { recipientState.selectedCode = nil }
+        return recipientState
+    }
 
     func send(recipient: String, text: String) async throws -> TextStoredMessage {
         if let sendGate { await sendGate.enter() }
