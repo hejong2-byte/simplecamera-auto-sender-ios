@@ -4,20 +4,19 @@ import XCTest
 
 @MainActor
 final class KakaoFilePickerModelTests: XCTestCase {
-    func testFirstSelectionWaitsForFolderDismissalBeforeOpeningFiles() throws {
+    func testFirstKakaoActionImmediatelySelectsFilesWithoutFolderSetup() throws {
         let (root, store) = try fixture()
+        let selected = root.appendingPathComponent("카카오톡 문서.hwpx")
+        try Data("document".utf8).write(to: selected)
         let model = KakaoFilePickerModel(store: store)
+
         model.beginFileSelection()
-        XCTAssertEqual(model.request, .folder(nil))
-        XCTAssertTrue(model.accept([root]).isEmpty, "Choosing a folder must not enqueue a file")
-        XCTAssertNil(model.request)
-        XCTAssertTrue(model.isPresenting)
-        model.didDismiss()
-        XCTAssertEqual(model.request, .files(root))
-        let selected = root.appendingPathComponent("selected.pdf")
+
+        XCTAssertEqual(model.request?.id, "files")
+        XCTAssertNil(model.request?.directoryURL)
         XCTAssertEqual(model.accept([selected]), [selected])
-        model.didDismiss()
-        XCTAssertFalse(model.isPresenting)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertNil(try store.resolve(), "File selection must not silently save a folder")
     }
 
     func testSavedFolderIsUsedOnNextLaunchAndSettingsReselectDoesNotSend() throws {
