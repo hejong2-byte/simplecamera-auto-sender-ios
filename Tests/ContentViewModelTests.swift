@@ -83,7 +83,8 @@ final class ContentViewModelTests: XCTestCase {
             await Task.yield()
         }
 
-        XCTAssertTrue(await gate.hasStarted)
+        let didStart = await gate.hasStarted
+        XCTAssertTrue(didStart)
         XCTAssertTrue(model.isManualTransferWorking)
         XCTAssertTrue(model.shouldShowManualStatus)
         XCTAssertEqual(model.manualTransferMessage, "1개 파일 준비 중…")
