@@ -3,7 +3,7 @@ import Foundation
 enum KakaoFolderError: LocalizedError {
     case unavailable
     var errorDescription: String? {
-        "폴더에 접근할 수 없습니다. 파일 앱에서 카카오톡 파일을 저장한 폴더를 다시 선택해 주세요."
+        "폴더에 접근할 수 없습니다. 파일 앱에서 사용할 폴더를 다시 선택해 주세요."
     }
 }
 

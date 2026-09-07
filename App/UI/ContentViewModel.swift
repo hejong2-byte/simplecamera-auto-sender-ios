@@ -107,6 +107,11 @@ final class ContentViewModel: ObservableObject {
         return nil
     }
 
+    var shouldShowManualStatus: Bool {
+        isManualTransferWorking || manualProgress != nil
+            || lastManualSummary != nil || manualTransferMessage != nil
+    }
+
     func refresh() async {
         photoAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         hasCredential = (try? credentialStore.load()) != nil

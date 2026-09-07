@@ -1,10 +1,57 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+@MainActor
+struct DocumentSelectionAccess {
+    let startAccessing: (URL) -> Bool
+    let stopAccessing: (URL) -> Void
+
+    static let system = DocumentSelectionAccess(
+        startAccessing: { $0.startAccessingSecurityScopedResource() },
+        stopAccessing: { $0.stopAccessingSecurityScopedResource() }
+    )
+
+    func acquire(_ urls: [URL]) -> DocumentSelectionLease {
+        DocumentSelectionLease(
+            accessedURLs: urls.filter(startAccessing),
+            stopAccessing: stopAccessing
+        )
+    }
+}
+
+@MainActor
+final class DocumentSelectionLease {
+    private var accessedURLs: [URL]
+    private let stopAccessing: (URL) -> Void
+
+    init(accessedURLs: [URL], stopAccessing: @escaping (URL) -> Void) {
+        self.accessedURLs = accessedURLs
+        self.stopAccessing = stopAccessing
+    }
+
+    func release() {
+        accessedURLs.forEach(stopAccessing)
+        accessedURLs.removeAll()
+    }
+}
+
 struct DocumentFilePicker: UIViewControllerRepresentable {
     let request: DocumentPickerRequest
-    let onSelection: ([URL]) -> Void
+    let selectionAccess: DocumentSelectionAccess
+    let onSelection: ([URL]) async -> Void
     let onCancel: () -> Void
+
+    init(
+        request: DocumentPickerRequest,
+        selectionAccess: DocumentSelectionAccess = .system,
+        onSelection: @escaping ([URL]) async -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.request = request
+        self.selectionAccess = selectionAccess
+        self.onSelection = onSelection
+        self.onCancel = onCancel
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -46,7 +93,11 @@ struct DocumentFilePicker: UIViewControllerRepresentable {
             scopedDirectory = nil
         }
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            parent.onSelection(urls)
+            let lease = parent.selectionAccess.acquire(urls)
+            Task { @MainActor [parent] in
+                defer { lease.release() }
+                await parent.onSelection(urls)
+            }
         }
         func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { parent.onCancel() }
     }

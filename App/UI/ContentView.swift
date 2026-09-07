@@ -38,7 +38,7 @@ struct ContentView: View {
                 VStack(spacing: 12) {
                     automaticStatusCard
                     manualTransferCard
-                    if model.manualProgress != nil || model.lastManualSummary != nil {
+                    if model.shouldShowManualStatus {
                         manualStatusCard
                     }
                     textTransferCard
@@ -100,14 +100,14 @@ struct ContentView: View {
                     request: request,
                     onSelection: { urls in
                         let selected = filePickerModel.accept(urls)
-                        if !selected.isEmpty { Task { await model.sendSelectedFiles(selected) } }
+                        if !selected.isEmpty { await model.sendSelectedFiles(selected) }
                     },
                     onCancel: filePickerModel.cancel
                 )
                 .ignoresSafeArea()
                 .interactiveDismissDisabled()
             }
-            .alert("카카오톡 파일 폴더 확인", isPresented: Binding(
+            .alert("파일 폴더 확인", isPresented: Binding(
                 get: { filePickerModel.errorMessage != nil && !filePickerModel.isDismissing },
                 set: { if !$0 { filePickerModel.errorMessage = nil } }
             )) {

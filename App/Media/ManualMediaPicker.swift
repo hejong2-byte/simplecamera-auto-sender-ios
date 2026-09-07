@@ -14,7 +14,7 @@ enum ManualMediaKind: String, CaseIterable, Identifiable, Codable, Sendable {
         case .photo: "사진 전송"
         case .screenshot: "스크린샷 전송"
         case .video: "동영상 전송"
-        case .file: "카카오톡 파일전송"
+        case .file: "파일 전송"
         }
     }
 
