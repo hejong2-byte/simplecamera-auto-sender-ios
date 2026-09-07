@@ -25,7 +25,8 @@ final class KakaoFilePickerModelTests: XCTestCase {
         let model = KakaoFilePickerModel(store: store)
         model.beginFileSelection()
         guard case .files(let url) = model.request else { return XCTFail("Expected file picker") }
-        XCTAssertEqual(url.resolvingSymlinksInPath(), root.resolvingSymlinksInPath())
+        let savedFolder = try XCTUnwrap(url)
+        XCTAssertEqual(savedFolder.resolvingSymlinksInPath(), root.resolvingSymlinksInPath())
         model.cancel()
         model.didDismiss()
         model.changeFolder()
