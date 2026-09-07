@@ -53,6 +53,49 @@ final class ContentViewModelTests: XCTestCase {
         XCTAssertFalse(model.isManualTransferWorking)
     }
 
+    func testFileSelectionShowsStatusWhilePreparationIsAwaiting() async throws {
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("Bearer test")
+        let gate = ManualFileEnqueueGate()
+        let model = ContentViewModel(
+            credentialStore: credentials,
+            ledger: try UploadLedger(fileURL: temporaryLedgerURL()),
+            uploader: NoOpUploader(),
+            now: Date.init,
+            send: { _ in .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
+            manualFileEnqueue: { urls in
+                await gate.beginAndWait()
+                return .init(
+                    selected: urls.count,
+                    uploaded: 0,
+                    failed: 0,
+                    failureCategories: []
+                )
+            },
+            photoAuthorizationStatus: .denied
+        )
+        let send = Task {
+            await model.sendSelectedFiles([URL(fileURLWithPath: "/external/document.hwpx")])
+        }
+
+        for _ in 0..<200 {
+            if await gate.hasStarted { break }
+            await Task.yield()
+        }
+
+        XCTAssertTrue(await gate.hasStarted)
+        XCTAssertTrue(model.isManualTransferWorking)
+        XCTAssertTrue(model.shouldShowManualStatus)
+        XCTAssertEqual(model.manualTransferMessage, "1개 파일 준비 중…")
+
+        await gate.open()
+        await send.value
+    }
+
+    func testGenericFileTransferTitleDoesNotLimitThePickerToKakaoTalk() {
+        XCTAssertEqual(ManualMediaKind.file.title, "파일 전송")
+    }
+
     func testEnableAutomaticSendingRecordsCurrentBaseline() async throws {
         let ledger = try UploadLedger(fileURL: temporaryLedgerURL())
         let expected = Date(timeIntervalSince1970: 1_234)
@@ -428,6 +471,26 @@ private final class ManualProgressFeed: @unchecked Sendable {
 
     func yield(_ progress: ManualTransferProgress) {
         continuation.yield(progress)
+    }
+}
+
+private actor ManualFileEnqueueGate {
+    private var started = false
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    var hasStarted: Bool { started }
+
+    func beginAndWait() async {
+        started = true
+        if opened { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        opened = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
     }
 }
 
