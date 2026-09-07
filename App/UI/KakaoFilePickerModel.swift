@@ -2,7 +2,7 @@ import Foundation
 
 enum DocumentPickerRequest: Identifiable, Equatable {
     case folder(URL?)
-    case files(URL)
+    case files(URL?)
 
     var id: String {
         switch self { case .folder: "folder"; case .files: "files" }
@@ -39,7 +39,7 @@ final class KakaoFilePickerModel: ObservableObject {
                 folderName = folder.lastPathComponent
                 request = .files(folder)
             } else {
-                request = .folder(nil)
+                request = .files(nil)
             }
         } catch { errorMessage = error.localizedDescription }
     }
