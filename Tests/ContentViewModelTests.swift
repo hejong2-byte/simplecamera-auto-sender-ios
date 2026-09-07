@@ -74,6 +74,7 @@ final class ContentViewModelTests: XCTestCase {
             },
             photoAuthorizationStatus: .denied
         )
+        await model.refresh()
         let send = Task {
             await model.sendSelectedFiles([URL(fileURLWithPath: "/external/document.hwpx")])
         }
