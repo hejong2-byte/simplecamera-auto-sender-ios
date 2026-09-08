@@ -33,6 +33,58 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
         XCTAssertTrue(try context.store.destinations(receiverID: context.server.receiverID).isEmpty)
     }
 
+    func testPostponedBatchIsOfferedAgainAfterReactivationWithoutError() async throws {
+        let context = try makeContext(count: 1)
+        await activate(context)
+
+        context.model.postponePrompt()
+        XCTAssertNil(context.model.lastError)
+        context.model.setActive(false)
+        await activate(context)
+
+        XCTAssertEqual(context.model.prompt?.files.count, 1)
+        XCTAssertNil(context.model.lastError)
+    }
+
+    func testApprovedButUnacknowledgedDeliveryIsOfferedOnNextActivation() async throws {
+        let context = try makeContext(count: 1)
+        await activate(context)
+        let prompt = try XCTUnwrap(context.model.prompt)
+
+        XCTAssertTrue(context.model.accept(
+            prompt,
+            decision: IPhoneReceiveDecision(destination: .usb, archiveMode: .keepArchive)
+        ))
+        context.model.setActive(false)
+        await activate(context)
+
+        XCTAssertEqual(context.model.prompt?.files.count, 1)
+    }
+
+    func testZIPBatchAsksArchiveChoiceBeforeDestination() async throws {
+        let context = try makeContext(count: 1)
+        await activate(context)
+
+        XCTAssertEqual(context.model.prompt?.stage, .archiveChoice)
+        context.model.chooseArchiveMode(try XCTUnwrap(context.model.prompt), mode: .keepArchive)
+
+        XCTAssertEqual(context.model.prompt?.stage, .destinationChoice(.keepArchive))
+        XCTAssertTrue(try context.store.decisions(receiverID: context.server.receiverID).isEmpty)
+    }
+
+    func testExtractChoicePersistsUSBExtractionDecision() async throws {
+        let context = try makeContext(count: 1)
+        await activate(context)
+        let prompt = try XCTUnwrap(context.model.prompt)
+
+        XCTAssertTrue(context.model.chooseArchiveMode(prompt, mode: .extract))
+
+        XCTAssertEqual(
+            try context.store.decisions(receiverID: context.server.receiverID)[prompt.files[0].deliveryID],
+            IPhoneReceiveDecision(destination: .usb, archiveMode: .extract)
+        )
+    }
+
     func testUSBChoiceApprovesAllTenFilesAndNoMore() async throws {
         let context = try makeContext(count: 10)
         await activate(context)
