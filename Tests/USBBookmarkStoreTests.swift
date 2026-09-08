@@ -74,11 +74,43 @@ final class USBBookmarkStoreTests: XCTestCase {
         )
 
         let destination = try XCTUnwrap(
-            USBBookmarkStore(fileURL: fileURL, codec: codec).resolve()
+            USBBookmarkStore(
+                fileURL: fileURL,
+                codec: codec,
+                volumeFormatProvider: { _ in nil }
+            ).resolve()
         )
 
         XCTAssertNil(destination.formatDescription)
         XCTAssertEqual(destination.displayName, "LEGACY")
+    }
+
+    func testLegacyBookmarkUsesCurrentFileSystemAsReferenceWhenAvailable() throws {
+        let stateDirectory = temporaryDirectory()
+        let fileURL = stateDirectory.appendingPathComponent("usb-destination.json")
+        let bookmark = Data("bookmark".utf8)
+        try JSONSerialization.data(withJSONObject: [
+            "bookmark": bookmark.base64EncodedString(),
+            "volumeID": "legacy-volume",
+            "displayName": "LEGACY"
+        ]).write(to: fileURL)
+        let codec = FakeUSBBookmarkCodec(
+            bookmark: bookmark,
+            resolution: USBBookmarkResolution(
+                url: URL(fileURLWithPath: "/Volumes/LEGACY", isDirectory: true),
+                isStale: false
+            )
+        )
+
+        let destination = try XCTUnwrap(
+            USBBookmarkStore(
+                fileURL: fileURL,
+                codec: codec,
+                volumeFormatProvider: { _ in "MS-DOS (FAT32)" }
+            ).resolve()
+        )
+
+        XCTAssertEqual(destination.formatDescription, "MS-DOS (FAT32)")
     }
 
     private func temporaryDirectory() -> URL {

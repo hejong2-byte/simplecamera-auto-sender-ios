@@ -54,6 +54,8 @@ struct USBBookmarkDestination: Equatable, Sendable {
 }
 
 final class USBBookmarkStore: @unchecked Sendable {
+    typealias VolumeFormatProvider = @Sendable (URL) -> String?
+
     private struct Record: Codable {
         let bookmark: Data
         let volumeID: String
@@ -63,19 +65,22 @@ final class USBBookmarkStore: @unchecked Sendable {
 
     private let fileURL: URL
     private let codec: any USBBookmarkCoding
+    private let volumeFormatProvider: VolumeFormatProvider
     private let lock = NSLock()
 
-    init(fileURL: URL, codec: any USBBookmarkCoding = SystemUSBBookmarkCodec()) {
+    init(
+        fileURL: URL,
+        codec: any USBBookmarkCoding = SystemUSBBookmarkCodec(),
+        volumeFormatProvider: @escaping VolumeFormatProvider = USBBookmarkStore.systemVolumeFormat
+    ) {
         self.fileURL = fileURL
         self.codec = codec
+        self.volumeFormatProvider = volumeFormatProvider
     }
 
     func save(folderURL: URL) throws {
         let values = try folderURL.resourceValues(
             forKeys: [.volumeIdentifierKey, .nameKey]
-        )
-        let formatValues = try? folderURL.resourceValues(
-            forKeys: [.volumeLocalizedFormatDescriptionKey]
         )
         let volumeID = values.volumeIdentifier.map { String(describing: $0) }
             ?? folderURL.path
@@ -83,7 +88,7 @@ final class USBBookmarkStore: @unchecked Sendable {
             folderURL: folderURL,
             volumeID: volumeID,
             displayName: values.name ?? folderURL.lastPathComponent,
-            formatDescription: formatValues?.volumeLocalizedFormatDescription
+            formatDescription: volumeFormatProvider(folderURL)
         )
     }
 
@@ -118,18 +123,21 @@ final class USBBookmarkStore: @unchecked Sendable {
                 from: Data(contentsOf: fileURL)
             )
             let resolution = try codec.resolve(record.bookmark)
-            let formatValues = try? resolution.url.resourceValues(
-                forKeys: [.volumeLocalizedFormatDescriptionKey]
-            )
             return USBBookmarkDestination(
                 url: resolution.url,
                 volumeID: record.volumeID,
                 displayName: record.displayName,
                 isStale: resolution.isStale,
                 formatDescription: record.formatDescription
-                    ?? formatValues?.volumeLocalizedFormatDescription
+                    ?? volumeFormatProvider(resolution.url)
             )
         }
+    }
+
+    private static func systemVolumeFormat(_ url: URL) -> String? {
+        try? url.resourceValues(
+            forKeys: [.volumeLocalizedFormatDescriptionKey]
+        ).volumeLocalizedFormatDescription
     }
 
     func clear() throws {
