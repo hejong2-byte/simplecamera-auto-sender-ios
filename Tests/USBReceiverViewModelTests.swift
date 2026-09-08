@@ -407,6 +407,49 @@ final class USBReceiverViewModelTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
     }
 
+    func testStoredZIPWaitsForAnExplicitExportChoiceAndKeepsSelection() async throws {
+        let file = try storedFile(name: "stored.zip")
+        let modes = ArchiveModeLog()
+        let model = try exportModel(files: [file]) { _, _, archiveMode in
+            await modes.record(archiveMode)
+            return IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        await model.refresh()
+        model.toggleStoredFileSelection(file.id)
+
+        await model.requestStoredFilesUSBExport()
+
+        XCTAssertTrue(model.needsStoredZIPExportChoice)
+        XCTAssertEqual(model.storedZIPExportFilesPendingChoice.map(\.id), [file.id])
+        XCTAssertEqual(model.selectedStoredFileIDs, [file.id])
+        let beforeChoice = await modes.values()
+        XCTAssertEqual(beforeChoice, [])
+
+        await model.confirmStoredZIPExport(.keepArchive)
+
+        XCTAssertFalse(model.needsStoredZIPExportChoice)
+        let afterChoice = await modes.values()
+        XCTAssertEqual(afterChoice, [.keepArchive])
+        XCTAssertEqual(model.selectedStoredFileIDs, [file.id])
+    }
+
+    func testStoredNonZIPStartsImmediatelyWithoutAnArchivePrompt() async throws {
+        let file = try storedFile(name: "stored.txt")
+        let modes = ArchiveModeLog()
+        let model = try exportModel(files: [file]) { _, _, archiveMode in
+            await modes.record(archiveMode)
+            return IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        await model.refresh()
+        model.toggleStoredFileSelection(file.id)
+
+        await model.requestStoredFilesUSBExport()
+
+        XCTAssertFalse(model.needsStoredZIPExportChoice)
+        let recordedModes = await modes.values()
+        XCTAssertEqual(recordedModes, [.keepArchive])
+    }
+
     func testSecondCopyPressCannotQueueADuplicateExport() async throws {
         let file = try storedFile()
         let calls = ReceiveCounter()
@@ -659,8 +702,8 @@ final class USBReceiverViewModelTests: XCTestCase {
         )
     }
 
-    private func storedFile() throws -> IPhoneStoredFile {
-        let url = temporaryDirectory().appendingPathComponent("local.bin")
+    private func storedFile(name: String = "local.bin") throws -> IPhoneStoredFile {
+        let url = temporaryDirectory().appendingPathComponent(name)
         let data = Data("unchanged-original".utf8)
         try data.write(to: url)
         return IPhoneStoredFile(
@@ -825,6 +868,18 @@ private actor USBExportGate {
         isOpen = true
         waiters.forEach { $0.resume() }
         waiters.removeAll()
+    }
+}
+
+private actor ArchiveModeLog {
+    private var recorded: [IPhoneReceiveArchiveMode] = []
+
+    func record(_ mode: IPhoneReceiveArchiveMode) {
+        recorded.append(mode)
+    }
+
+    func values() -> [IPhoneReceiveArchiveMode] {
+        recorded
     }
 }
 

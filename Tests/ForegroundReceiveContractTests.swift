@@ -53,6 +53,13 @@ final class ForegroundReceiveContractTests: XCTestCase {
         XCTAssertTrue(selection.contains("selectedPendingFileIDs"))
     }
 
+    func testStoredZIPExportRequiresAnExplicitModeChoice() throws {
+        let receiver = try source("App/UI/USBReceiverView.swift")
+        XCTAssertTrue(receiver.contains("압축 해제해서 복사"))
+        XCTAssertTrue(receiver.contains("ZIP 그대로 복사"))
+        XCTAssertTrue(receiver.contains("confirmStoredZIPExport"))
+    }
+
     private func source(_ path: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()

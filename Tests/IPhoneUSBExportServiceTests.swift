@@ -97,6 +97,35 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         )
     }
 
+    func testZIPExportCanKeepTheArchiveWithoutExtractingIt() async throws {
+        let context = try makeContext()
+        let archiveData = Data("stored-zip-byte-for-byte".utf8)
+        let file = try makeStoredFile(
+            name: "업무자료.zip",
+            data: archiveData,
+            in: context.sourceDirectory
+        )
+
+        let summary = await context.service.export(
+            [file],
+            to: context.destination,
+            archiveMode: .keepArchive
+        )
+
+        XCTAssertEqual(summary.failed, [])
+        let decision = try XCTUnwrap(summary.verified.first)
+        XCTAssertEqual(decision.usbStoredName, "업무자료.zip")
+        XCTAssertEqual(
+            try Data(contentsOf: context.usbDirectory.appendingPathComponent("업무자료.zip")),
+            archiveData
+        )
+        XCTAssertEqual(try Data(contentsOf: file.url), archiveData)
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: context.zipWorkingDirectory.path),
+            []
+        )
+    }
+
     func testUnsafeZIPPathFailsWithoutLeavingUSBOrWorkingFiles() async throws {
         let context = try makeContext()
         let archiveData = try XCTUnwrap(Data(base64Encoded:
