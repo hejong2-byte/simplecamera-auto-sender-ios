@@ -2,6 +2,50 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneReceiveApprovalStoreTests: XCTestCase {
+    func testDecisionPersistsDestinationAndZIPMode() throws {
+        let url = location()
+        let receiver = UUID()
+        let delivery = UUID()
+        let store = IPhoneReceiveApprovalStore(fileURL: url)
+        try store.approve(
+            [delivery],
+            receiverID: receiver,
+            decision: IPhoneReceiveDecision(
+                destination: .usb,
+                archiveMode: .extract
+            )
+        )
+
+        let reopened = IPhoneReceiveApprovalStore(fileURL: url)
+        XCTAssertEqual(
+            try reopened.decisions(receiverID: receiver)[delivery],
+            IPhoneReceiveDecision(destination: .usb, archiveMode: .extract)
+        )
+        XCTAssertEqual(
+            try reopened.destinations(receiverID: receiver)[delivery],
+            .usb
+        )
+    }
+
+    func testLegacyDestinationOnlyApprovalRequiresNewChoice() throws {
+        let url = location()
+        let receiver = UUID()
+        let delivery = UUID()
+        let payload: [String: Any] = [
+            "version": 1,
+            "approvals": [[
+                "receiverID": receiver.uuidString,
+                "deliveryID": delivery.uuidString,
+                "destination": IPhoneReceiveDestination.usb.rawValue
+            ]]
+        ]
+        try JSONSerialization.data(withJSONObject: payload).write(to: url)
+
+        let store = IPhoneReceiveApprovalStore(fileURL: url)
+        XCTAssertTrue(try store.decisions(receiverID: receiver).isEmpty)
+        XCTAssertTrue(try store.destinations(receiverID: receiver).isEmpty)
+    }
+
     func testUnseenFilesAreNotApproved() throws {
         let store = IPhoneReceiveApprovalStore(fileURL: location())
         XCTAssertTrue(try store.destinations(receiverID: UUID()).isEmpty)
