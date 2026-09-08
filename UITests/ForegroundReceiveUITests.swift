@@ -230,6 +230,25 @@ final class ForegroundReceiveUITests: XCTestCase {
         keepScreenshot("iphone-receive-screen", app: app)
     }
 
+    func testZIPChoicePrecedesDestinationAndPostponementReturnsAfterActivation() {
+        let app = launchSimulation(withZIP: true)
+        XCTAssertTrue(app.buttons["압축 해제"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["ZIP 그대로 저장"].exists)
+        XCTAssertFalse(app.buttons["iPhone에 저장"].exists)
+        XCTAssertFalse(app.buttons["USB에 저장"].exists)
+        keepScreenshot("incoming-zip-choice", app: app)
+
+        app.buttons["나중에 받기"].tap()
+        XCTAssertTrue(app.staticTexts["수신 보류 · 앱을 다시 열면 다시 안내합니다."].waitForExistence(timeout: 5))
+        XCUIDevice.shared.press(.home)
+        app.activate()
+
+        XCTAssertTrue(app.buttons["압축 해제"].waitForExistence(timeout: 15))
+        app.buttons["ZIP 그대로 저장"].tap()
+        XCTAssertTrue(app.buttons["iPhone에 저장"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["USB에 저장"].exists)
+    }
+
     func testArrivalWhileSettingsIsVisiblePresentsAChoiceAndRoutesToReceiver() {
         let app = launchSimulation(delay: 15)
         let settings = app.buttons["open-settings"]
@@ -268,7 +287,8 @@ final class ForegroundReceiveUITests: XCTestCase {
         outcome: String? = nil,
         withStoredFiles: Bool = false,
         withTextMessage: Bool = false,
-        withSavedTextRecipient: Bool = false
+        withSavedTextRecipient: Bool = false,
+        withZIP: Bool = false
     ) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -281,6 +301,7 @@ final class ForegroundReceiveUITests: XCTestCase {
         if withSavedTextRecipient {
             app.launchArguments.append("--ui-test-text-recipient")
         }
+        if withZIP { app.launchArguments.append("--ui-test-incoming-zip") }
         app.launch()
         addTeardownBlock { app.terminate() }
         return app

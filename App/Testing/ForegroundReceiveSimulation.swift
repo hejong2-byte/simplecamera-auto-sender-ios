@@ -17,7 +17,8 @@ final class ForegroundReceiveSimulation {
             delay: delay, outcome: outcome,
             withStoredFiles: arguments.contains("--ui-test-stored-files"),
             withTextMessage: arguments.contains("--ui-test-text-message"),
-            withSavedTextRecipient: arguments.contains("--ui-test-text-recipient")
+            withSavedTextRecipient: arguments.contains("--ui-test-text-recipient"),
+            withZIP: arguments.contains("--ui-test-incoming-zip")
         )
     }()
 
@@ -32,7 +33,8 @@ final class ForegroundReceiveSimulation {
         outcome: String?,
         withStoredFiles: Bool,
         withTextMessage: Bool,
-        withSavedTextRecipient: Bool
+        withSavedTextRecipient: Bool,
+        withZIP: Bool
     ) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let catalog = try IPhoneReceivedFileCatalog(
@@ -51,7 +53,7 @@ final class ForegroundReceiveSimulation {
         let registration = IPhoneReceiverRegistrationStore(identityStore: InMemoryCredentialStore(), secretStore: InMemoryCredentialStore())
         try registration.save(IPhoneReceiverRegistration(receiverID: receiverID, code: "123456", receiveSecret: "simulation-only", deviceName: "수신 테스트 iPhone"))
         let choices = IPhoneReceiveApprovalStore(fileURL: root.appendingPathComponent("approvals.json"))
-        let file = IPhoneDelivery(deliveryID: UUID(), fileName: "수신-시뮬레이션.txt", contentType: "text/plain", size: 16, sha256: String(repeating: "a", count: 64), state: .available, createdAt: Date(), expiresAt: Date().addingTimeInterval(3_600), deliveredAt: nil)
+        let file = IPhoneDelivery(deliveryID: UUID(), fileName: withZIP ? "수신-시뮬레이션.zip" : "수신-시뮬레이션.txt", contentType: withZIP ? "application/zip" : "text/plain", size: 16, sha256: String(repeating: "a", count: 64), state: .available, createdAt: Date(), expiresAt: Date().addingTimeInterval(3_600), deliveredAt: nil)
         let arrivalDate = Date().addingTimeInterval(delay)
         let preferences = USBReceiverPreferences(defaults: UserDefaults(suiteName: "ReceiveUITest.\(UUID().uuidString)")!)
         let receiveOutcome: IPhoneReceiveOutcome?

@@ -32,6 +32,14 @@ final class ForegroundReceiveContractTests: XCTestCase {
         XCTAssertFalse(settings.contains("setSelectedDestination"))
     }
 
+    func testZIPChoicePrecedesDestinationAndCanBePostponed() throws {
+        let root = try source("App/UI/ContentView.swift")
+        XCTAssertTrue(root.contains("압축을 해제하시겠습니까?"))
+        XCTAssertTrue(root.contains("압축 해제"))
+        XCTAssertTrue(root.contains("ZIP 그대로 저장"))
+        XCTAssertTrue(root.contains("수신 보류 · 앱을 다시 열면 다시 안내합니다."))
+    }
+
     private func source(_ path: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
