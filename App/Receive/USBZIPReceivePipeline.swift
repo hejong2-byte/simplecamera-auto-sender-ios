@@ -68,7 +68,9 @@ struct USBZIPReceivePipeline {
             throw error
         } catch {
             if error is CancellationError { throw error }
-            throw Self.isOutOfSpace(error) ? .insufficientSpace : .copyFailed
+            throw Self.isOutOfSpace(error)
+                ? USBZIPReceivePipelineError.insufficientSpace
+                : USBZIPReceivePipelineError.copyFailed
         }
     }
 
@@ -89,7 +91,9 @@ struct USBZIPReceivePipeline {
         } catch let error as USBZIPReceivePipelineError {
             throw error
         } catch {
-            throw Self.isOutOfSpace(error) ? .insufficientSpace : .copyFailed
+            throw Self.isOutOfSpace(error)
+                ? USBZIPReceivePipelineError.insufficientSpace
+                : USBZIPReceivePipelineError.copyFailed
         }
     }
 
