@@ -6,6 +6,7 @@ enum USBReceiveStage: String, Codable, Sendable, Equatable {
     case waitingForDestination
     case downloading
     case downloaded
+    case extracting
     case verifying
     case finalizing
     case copyingToUSB
@@ -65,7 +66,7 @@ struct USBReceiveProgress: Codable, Sendable, Equatable {
     var percent: Int {
         guard totalBytes > 0 else {
             return [
-                .verifying, .finalizing, .copyingToUSB,
+                .extracting, .verifying, .finalizing, .copyingToUSB,
                 .acknowledging, .completed
             ].contains(stage) ? 100 : 0
         }

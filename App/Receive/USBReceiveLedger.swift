@@ -18,6 +18,57 @@ struct USBReceiveCheckpoint: Codable, Equatable, Sendable {
     let destinationVolumeID: String
     var finalFileName: String
     var state: USBReceiveState
+    var archiveMode: IPhoneReceiveArchiveMode
+
+    init(
+        deliveryID: UUID,
+        fileName: String,
+        sha256: String,
+        totalBytes: Int64,
+        confirmedOffset: Int64,
+        destinationVolumeID: String,
+        finalFileName: String,
+        state: USBReceiveState,
+        archiveMode: IPhoneReceiveArchiveMode = .keepArchive
+    ) {
+        self.deliveryID = deliveryID
+        self.fileName = fileName
+        self.sha256 = sha256
+        self.totalBytes = totalBytes
+        self.confirmedOffset = confirmedOffset
+        self.destinationVolumeID = destinationVolumeID
+        self.finalFileName = finalFileName
+        self.state = state
+        self.archiveMode = archiveMode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case deliveryID
+        case fileName
+        case sha256
+        case totalBytes
+        case confirmedOffset
+        case destinationVolumeID
+        case finalFileName
+        case state
+        case archiveMode
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        deliveryID = try container.decode(UUID.self, forKey: .deliveryID)
+        fileName = try container.decode(String.self, forKey: .fileName)
+        sha256 = try container.decode(String.self, forKey: .sha256)
+        totalBytes = try container.decode(Int64.self, forKey: .totalBytes)
+        confirmedOffset = try container.decode(Int64.self, forKey: .confirmedOffset)
+        destinationVolumeID = try container.decode(String.self, forKey: .destinationVolumeID)
+        finalFileName = try container.decode(String.self, forKey: .finalFileName)
+        state = try container.decode(USBReceiveState.self, forKey: .state)
+        archiveMode = try container.decodeIfPresent(
+            IPhoneReceiveArchiveMode.self,
+            forKey: .archiveMode
+        ) ?? .keepArchive
+    }
 
     static func safeResumeOffset(
         actualLength: Int64,

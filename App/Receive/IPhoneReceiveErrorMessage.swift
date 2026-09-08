@@ -43,7 +43,8 @@ enum IPhoneReceiveErrorMessage {
              IPhoneUSBExportError.destinationNotWritable:
             return "USB에 쓸 수 없습니다. 연결과 폴더 권한을 확인해 주세요."
         case USBReceiveServiceError.insufficientSpace,
-             IPhoneUSBExportError.insufficientSpace:
+             IPhoneUSBExportError.insufficientSpace,
+             USBZIPReceivePipelineError.insufficientSpace:
             return "저장 공간이 부족합니다."
         case let cleanupError as USBFolderCleanupError:
             return cleanupError.localizedDescription
@@ -54,17 +55,24 @@ enum IPhoneReceiveErrorMessage {
              IPhoneLocalReceiveError.shaMismatch,
              IPhoneLocalReceiveError.sizeMismatch,
              IPhoneUSBExportError.shaMismatch,
-             IPhoneUSBExportError.sizeMismatch:
+             IPhoneUSBExportError.sizeMismatch,
+             USBZIPReceivePipelineError.shaMismatch,
+             USBZIPReceivePipelineError.sizeMismatch:
             return "파일 무결성 검증에 실패했습니다. 원본은 삭제하지 않았습니다."
         case IPhoneLocalReceiveError.finalFileChanged,
              IPhoneUSBExportError.sourceChanged:
             return "원본 파일이 변경되었습니다. 삭제하거나 완료 처리하지 않았습니다."
-        case IPhoneUSBExportError.copyFailed:
+        case IPhoneUSBExportError.copyFailed,
+             USBZIPReceivePipelineError.copyFailed:
             return "USB 복사에 실패했습니다. 원본 파일과 USB 연결·폴더 권한을 확인해 주세요."
-        case IPhoneUSBExportError.unsafeZIPArchive:
+        case IPhoneUSBExportError.unsafeZIPArchive,
+             USBZIPReceivePipelineError.unsafeArchive:
             return "안전하지 않은 ZIP입니다. 압축을 풀거나 USB에 복사하지 않았습니다."
-        case IPhoneUSBExportError.zipExtractionFailed:
+        case IPhoneUSBExportError.zipExtractionFailed,
+             USBZIPReceivePipelineError.extractionFailed:
             return "ZIP 압축 해제에 실패했습니다. 손상 또는 암호화 여부를 확인해 주세요. 원본은 유지했습니다."
+        case USBZIPReceivePipelineError.destinationNotWritable:
+            return "USB에 압축 해제 파일을 쓸 수 없습니다. 연결과 폴더 권한을 확인해 주세요."
         case let IPhoneReceiverClientError.server(statusCode, code):
             if statusCode == 401 || statusCode == 403 {
                 return "인증 오류 (HTTP \(statusCode)) · 수신 기기 등록과 인증값을 확인해 주세요."

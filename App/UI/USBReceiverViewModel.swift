@@ -235,7 +235,7 @@ final class USBReceiverViewModel: ObservableObject {
         return (isPerformingReceive || receiveProgress?.destination == .iphoneLocal)
             && [
                 .discovering, .waitingForDestination, .downloading, .downloaded,
-                .verifying, .finalizing, .copyingToUSB, .acknowledging
+                .extracting, .verifying, .finalizing, .copyingToUSB, .acknowledging
             ].contains(stage)
     }
 
@@ -753,6 +753,7 @@ final class USBReceiverViewModel: ObservableObject {
         case .waitingForDestination: return "저장 위치 선택 대기"
         case .downloading: return "\(destination) 저장 중\(position)"
         case .downloaded: return "다운로드 완료\(position)"
+        case .extracting: return "ZIP 압축 해제 중\(position)"
         case .verifying: return "파일·SHA 검증 중\(position)"
         case .finalizing: return "\(destination) 파일 확정 중\(position)"
         case .copyingToUSB: return "USB로 복사 중\(position)"

@@ -27,6 +27,7 @@ actor USBReceiveService {
     typealias VolumeFormatProvider = @Sendable (URL) throws -> String?
     typealias SecurityScopeStart = @Sendable (URL) -> Bool
     typealias SecurityScopeStop = @Sendable (URL) -> Void
+    typealias ReceiveDecisionProvider = @Sendable (UUID, UUID) throws -> IPhoneReceiveDecision?
 
     static let defaultChunkSize: Int64 = 8 * 1_024 * 1_024
     static let partialDirectoryName = ".SimpleCameraReceiver"
@@ -43,6 +44,9 @@ actor USBReceiveService {
     private let now: @Sendable () -> Date
     private let fileManager: FileManager
     private let progressStore: USBReceiveProgressStore
+    private let receiveDecision: ReceiveDecisionProvider
+    private let zipStagingDirectory: URL
+    private let zipPipeline: USBZIPReceivePipeline
     private var isRunning = false
 
     init(
@@ -57,7 +61,10 @@ actor USBReceiveService {
         stopAccessing: @escaping SecurityScopeStop = { $0.stopAccessingSecurityScopedResource() },
         now: @escaping @Sendable () -> Date = Date.init,
         fileManager: FileManager = .default,
-        progressStore: USBReceiveProgressStore = USBReceiveProgressStore()
+        progressStore: USBReceiveProgressStore = USBReceiveProgressStore(),
+        receiveDecision: @escaping ReceiveDecisionProvider = { _, _ in nil },
+        zipStagingDirectory: URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SimpleCamera-Direct-ZIP", isDirectory: true)
     ) {
         precondition(chunkSize > 0)
         self.client = client
@@ -72,6 +79,15 @@ actor USBReceiveService {
         self.now = now
         self.fileManager = fileManager
         self.progressStore = progressStore
+        self.receiveDecision = receiveDecision
+        self.zipStagingDirectory = zipStagingDirectory
+        self.zipPipeline = USBZIPReceivePipeline(
+            fileManager: fileManager,
+            workingDirectory: zipStagingDirectory.appendingPathComponent(
+                "Extracted",
+                isDirectory: true
+            )
+        )
     }
 
     func runOnce() async throws -> USBReceiveSummary {
@@ -196,13 +212,31 @@ actor USBReceiveService {
         let pending = ledger.allCheckpoints().filter { $0.state == .ackPending }
         for (offset, checkpoint) in pending.enumerated() {
             let finalURL = destination.url.appendingPathComponent(checkpoint.finalFileName)
-            guard try fileMatches(
-                finalURL,
-                size: checkpoint.totalBytes,
-                sha256: checkpoint.sha256
-            ) else {
+            let sourceZIP = stagedZIPURL(for: checkpoint.deliveryID)
+            let sourceMatches = checkpoint.archiveMode == .extract
+                ? try fileMatches(
+                    sourceZIP,
+                    size: checkpoint.totalBytes,
+                    sha256: checkpoint.sha256
+                )
+                : true
+            let finalMatches: Bool
+            if checkpoint.archiveMode == .extract {
+                finalMatches = sourceMatches
+                    && ((try? zipPipeline.verify(
+                        zip: sourceZIP,
+                        committedFolder: finalURL
+                    )) == true)
+            } else {
+                finalMatches = try fileMatches(
+                    finalURL,
+                    size: checkpoint.totalBytes,
+                    sha256: checkpoint.sha256
+                )
+            }
+            guard finalMatches else {
                 var reset = checkpoint
-                reset.confirmedOffset = 0
+                reset.confirmedOffset = sourceMatches ? checkpoint.totalBytes : 0
                 reset.state = .downloading
                 try ledger.save(reset)
                 continue
@@ -229,6 +263,9 @@ actor USBReceiveService {
                 storedName: checkpoint.finalFileName
             )
             try ledger.remove(deliveryID: checkpoint.deliveryID)
+            if checkpoint.archiveMode == .extract {
+                try? fileManager.removeItem(at: sourceZIP)
+            }
             acknowledged.insert(checkpoint.deliveryID)
         }
         return acknowledged
@@ -244,6 +281,14 @@ actor USBReceiveService {
     ) async throws {
         let startedAt = now()
         let safeName = try validatedFileName(delivery)
+        let storedDecision = try receiveDecision(
+            credentials.identity.receiverID,
+            delivery.deliveryID
+        )
+        let archiveMode: IPhoneReceiveArchiveMode = (safeName as NSString)
+            .pathExtension.lowercased() == "zip"
+            ? (storedDecision?.archiveMode ?? .keepArchive)
+            : .keepArchive
         try USBVolumePolicy.validate(
             fileSize: delivery.size,
             formatDescription: try volumeFormat(destination.url)
@@ -251,8 +296,22 @@ actor USBReceiveService {
         var checkpoint = try checkpoint(
             for: delivery,
             safeName: safeName,
-            destination: destination
+            destination: destination,
+            archiveMode: archiveMode
         )
+        if checkpoint.archiveMode == .extract {
+            try await receiveExtractedZIP(
+                delivery,
+                credentials: credentials,
+                destination: destination,
+                checkpoint: &checkpoint,
+                currentIndex: currentIndex,
+                totalCount: totalCount,
+                completedCount: completedCount,
+                startedAt: startedAt
+            )
+            return
+        }
         var finalURL = destination.url.appendingPathComponent(checkpoint.finalFileName)
 
         if try fileMatches(finalURL, size: delivery.size, sha256: delivery.sha256) {
@@ -451,20 +510,239 @@ actor USBReceiveService {
         try ledger.remove(deliveryID: delivery.deliveryID)
     }
 
+    private func receiveExtractedZIP(
+        _ delivery: IPhoneDelivery,
+        credentials: IPhoneReceiverCredentials,
+        destination: USBBookmarkDestination,
+        checkpoint: inout USBReceiveCheckpoint,
+        currentIndex: Int,
+        totalCount: Int,
+        completedCount: Int,
+        startedAt: Date
+    ) async throws {
+        try fileManager.createDirectory(
+            at: zipStagingDirectory,
+            withIntermediateDirectories: true
+        )
+        let sourceZIP = stagedZIPURL(for: delivery.deliveryID)
+        if !fileManager.fileExists(atPath: sourceZIP.path) {
+            guard fileManager.createFile(atPath: sourceZIP.path, contents: nil) else {
+                throw USBReceiveServiceError.destinationNotWritable
+            }
+        }
+        let actualLength = try fileSize(sourceZIP)
+        let resumeOffset = USBReceiveCheckpoint.safeResumeOffset(
+            actualLength: actualLength,
+            confirmedOffset: checkpoint.confirmedOffset,
+            chunkSize: chunkSize
+        )
+        try truncateAndSynchronize(sourceZIP, to: resumeOffset)
+        checkpoint.confirmedOffset = resumeOffset
+        checkpoint.state = .downloading
+        try ledger.save(checkpoint)
+        publish(
+            .downloading,
+            delivery: delivery,
+            currentIndex: currentIndex,
+            totalCount: totalCount,
+            completedCount: completedCount,
+            bytesReceived: resumeOffset,
+            startedAt: startedAt
+        )
+        try validateCapacity(
+            at: zipStagingDirectory,
+            requiredBytes: delivery.size - resumeOffset
+        )
+
+        var hasher = SHA256()
+        try hashPrefix(of: sourceZIP, length: resumeOffset, into: &hasher)
+        let handle = try FileHandle(forWritingTo: sourceZIP)
+        do {
+            try handle.seek(toOffset: UInt64(resumeOffset))
+            var offset = resumeOffset
+            var lastLease = now()
+            while offset < delivery.size {
+                try Task.checkCancellation()
+                if now().timeIntervalSince(lastLease) >= 120 {
+                    _ = try await client.lease(
+                        receiverID: credentials.identity.receiverID,
+                        deliveryID: delivery.deliveryID,
+                        receiveSecret: credentials.secret,
+                        mode: .foreground
+                    )
+                    lastLease = now()
+                }
+                let end = min(offset + chunkSize - 1, delivery.size - 1)
+                let chunk = try await client.range(
+                    receiverID: credentials.identity.receiverID,
+                    deliveryID: delivery.deliveryID,
+                    receiveSecret: credentials.secret,
+                    start: offset,
+                    end: end
+                )
+                guard chunk.statusCode == 206 else {
+                    try handle.truncate(atOffset: 0)
+                    try handle.synchronize()
+                    checkpoint.confirmedOffset = 0
+                    try ledger.save(checkpoint)
+                    throw USBReceiveServiceError.unexpectedRangeStatus(chunk.statusCode)
+                }
+                try USBReceiveIntegrity.validateRange(
+                    statusCode: chunk.statusCode,
+                    contentRange: chunk.contentRange,
+                    contentLength: chunk.contentLength,
+                    expectedStart: offset,
+                    expectedEnd: end,
+                    totalBytes: delivery.size
+                )
+                guard Int64(chunk.data.count) == end - offset + 1 else {
+                    throw USBReceiveServiceError.sizeMismatch
+                }
+                try handle.write(contentsOf: chunk.data)
+                try handle.synchronize()
+                hasher.update(data: chunk.data)
+                offset += Int64(chunk.data.count)
+                checkpoint.confirmedOffset = offset
+                try ledger.save(checkpoint)
+                publish(
+                    .downloading,
+                    delivery: delivery,
+                    currentIndex: currentIndex,
+                    totalCount: totalCount,
+                    completedCount: completedCount,
+                    bytesReceived: offset,
+                    startedAt: startedAt
+                )
+            }
+            try handle.close()
+        } catch {
+            try? handle.close()
+            throw error
+        }
+
+        checkpoint.state = .verifying
+        try ledger.save(checkpoint)
+        publish(
+            .verifying,
+            delivery: delivery,
+            currentIndex: currentIndex,
+            totalCount: totalCount,
+            completedCount: completedCount,
+            bytesReceived: delivery.size,
+            startedAt: startedAt
+        )
+        guard try fileSize(sourceZIP) == delivery.size else {
+            checkpoint.state = .failed
+            try ledger.save(checkpoint)
+            throw USBReceiveServiceError.sizeMismatch
+        }
+        guard Self.hex(hasher.finalize()) == delivery.sha256.lowercased() else {
+            checkpoint.state = .failed
+            try ledger.save(checkpoint)
+            throw USBReceiveServiceError.shaMismatch
+        }
+
+        checkpoint.state = .finalizing
+        try ledger.save(checkpoint)
+        let commit: USBZIPCommit
+        do {
+            commit = try zipPipeline.commit(
+                zip: sourceZIP,
+                delivery: delivery,
+                destination: destination.url
+            ) { update in
+                let stage: USBReceiveStage
+                let bytes: Int64
+                let total: Int64
+                switch update.phase {
+                case .extracting:
+                    stage = .extracting
+                    bytes = delivery.size
+                    total = delivery.size
+                case .copying:
+                    stage = .copyingToUSB
+                    bytes = update.completedBytes
+                    total = update.totalBytes
+                case .verifying:
+                    stage = .verifying
+                    bytes = update.completedBytes
+                    total = update.totalBytes
+                }
+                publish(
+                    stage,
+                    delivery: delivery,
+                    currentIndex: currentIndex,
+                    totalCount: totalCount,
+                    completedCount: completedCount,
+                    bytesReceived: bytes,
+                    totalBytes: total,
+                    startedAt: startedAt
+                )
+            }
+        } catch {
+            checkpoint.state = .failed
+            try? ledger.save(checkpoint)
+            throw error
+        }
+
+        checkpoint.finalFileName = commit.finalFolderName
+        checkpoint.confirmedOffset = delivery.size
+        checkpoint.state = .ackPending
+        try ledger.save(checkpoint)
+        publish(
+            .acknowledging,
+            delivery: delivery,
+            currentIndex: currentIndex,
+            totalCount: totalCount,
+            completedCount: completedCount,
+            bytesReceived: commit.extractedBytes,
+            totalBytes: commit.extractedBytes,
+            startedAt: startedAt
+        )
+        try await acknowledge(
+            delivery,
+            credentials: credentials,
+            storedName: commit.finalFolderName
+        )
+        try ledger.remove(deliveryID: delivery.deliveryID)
+        try? fileManager.removeItem(at: sourceZIP)
+    }
+
     private func checkpoint(
         for delivery: IPhoneDelivery,
         safeName: String,
-        destination: USBBookmarkDestination
+        destination: USBBookmarkDestination,
+        archiveMode: IPhoneReceiveArchiveMode
     ) throws -> USBReceiveCheckpoint {
         if let stored = ledger.checkpoint(for: delivery.deliveryID),
            stored.fileName == delivery.fileName,
            stored.sha256 == delivery.sha256,
            stored.totalBytes == delivery.size,
-           stored.destinationVolumeID == destination.volumeID {
+           stored.destinationVolumeID == destination.volumeID,
+           stored.archiveMode == archiveMode {
             return stored
         }
         let partial = partialURL(for: delivery.deliveryID, in: destination.url)
         try? fileManager.removeItem(at: partial)
+        try? fileManager.removeItem(at: stagedZIPURL(for: delivery.deliveryID))
+        if archiveMode == .extract {
+            let requestedName = (safeName as NSString)
+                .deletingPathExtension
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let checkpoint = USBReceiveCheckpoint(
+                deliveryID: delivery.deliveryID,
+                fileName: delivery.fileName,
+                sha256: delivery.sha256,
+                totalBytes: delivery.size,
+                confirmedOffset: 0,
+                destinationVolumeID: destination.volumeID,
+                finalFileName: requestedName.isEmpty ? "압축해제" : requestedName,
+                state: .downloading,
+                archiveMode: archiveMode
+            )
+            try ledger.save(checkpoint)
+            return checkpoint
+        }
         let selected = try availableFinalName(
             requestedName: safeName,
             delivery: delivery,
@@ -478,7 +756,8 @@ actor USBReceiveService {
             confirmedOffset: 0,
             destinationVolumeID: destination.volumeID,
             finalFileName: selected.name,
-            state: selected.reusesExistingFile ? .ackPending : .downloading
+            state: selected.reusesExistingFile ? .ackPending : .downloading,
+            archiveMode: archiveMode
         )
         try ledger.save(checkpoint)
         return checkpoint
@@ -629,6 +908,12 @@ actor USBReceiveService {
         )
     }
 
+    private func stagedZIPURL(for deliveryID: UUID) -> URL {
+        zipStagingDirectory.appendingPathComponent(
+            deliveryID.uuidString.lowercased() + ".zip.partial"
+        )
+    }
+
     private func publish(
         _ stage: USBReceiveStage,
         delivery: IPhoneDelivery,
@@ -636,6 +921,7 @@ actor USBReceiveService {
         totalCount: Int,
         completedCount: Int,
         bytesReceived: Int64,
+        totalBytes: Int64? = nil,
         startedAt: Date
     ) {
         progressStore.publish(USBReceiveProgress(
@@ -646,7 +932,7 @@ actor USBReceiveService {
             totalCount: totalCount,
             completedCount: completedCount,
             bytesReceived: bytesReceived,
-            totalBytes: delivery.size,
+            totalBytes: totalBytes ?? delivery.size,
             startedAt: startedAt,
             expiresAt: delivery.expiresAt,
             errorMessage: nil

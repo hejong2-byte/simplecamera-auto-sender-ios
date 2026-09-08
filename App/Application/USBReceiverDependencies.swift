@@ -87,7 +87,14 @@ final class USBReceiverDependencies: @unchecked Sendable {
             ledger: ledger,
             credentials: { try registrationStore.load() },
             destination: { try bookmarkStore.resolve() },
-            progressStore: progressStore
+            progressStore: progressStore,
+            receiveDecision: { receiverID, deliveryID in
+                try approvalStore.decisions(receiverID: receiverID)[deliveryID]
+            },
+            zipStagingDirectory: stateDirectory.appendingPathComponent(
+                "DirectZIPStaging",
+                isDirectory: true
+            )
         )
         let backgroundSession = BackgroundIPhoneReceiveSession.shared
         let localEngine = IPhoneLocalReceiveEngine(
