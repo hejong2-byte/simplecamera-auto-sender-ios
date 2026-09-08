@@ -18,7 +18,8 @@ final class USBBookmarkStoreTests: XCTestCase {
         try store.save(
             folderURL: folderURL,
             volumeID: "volume-123",
-            displayName: "WORK USB"
+            displayName: "WORK USB",
+            formatDescription: "ExFAT"
         )
         let reopened = USBBookmarkStore(
             fileURL: stateDirectory.appendingPathComponent("usb-destination.json"),
@@ -29,6 +30,7 @@ final class USBBookmarkStoreTests: XCTestCase {
         XCTAssertEqual(destination.url, folderURL)
         XCTAssertEqual(destination.volumeID, "volume-123")
         XCTAssertEqual(destination.displayName, "WORK USB")
+        XCTAssertEqual(destination.formatDescription, "ExFAT")
         XCTAssertTrue(destination.isStale)
     }
 
@@ -51,6 +53,32 @@ final class USBBookmarkStoreTests: XCTestCase {
         XCTAssertEqual(refreshed.url, newURL)
         XCTAssertEqual(refreshed.volumeID, "new-volume")
         XCTAssertEqual(refreshed.displayName, "NEW")
+    }
+
+    func testLegacyBookmarkWithoutFileSystemDescriptionStillDecodes() throws {
+        let stateDirectory = temporaryDirectory()
+        let fileURL = stateDirectory.appendingPathComponent("usb-destination.json")
+        let bookmark = Data("bookmark".utf8)
+        let legacyRecord: [String: Any] = [
+            "bookmark": bookmark.base64EncodedString(),
+            "volumeID": "legacy-volume",
+            "displayName": "LEGACY"
+        ]
+        try JSONSerialization.data(withJSONObject: legacyRecord).write(to: fileURL)
+        let codec = FakeUSBBookmarkCodec(
+            bookmark: bookmark,
+            resolution: USBBookmarkResolution(
+                url: URL(fileURLWithPath: "/Volumes/LEGACY", isDirectory: true),
+                isStale: false
+            )
+        )
+
+        let destination = try XCTUnwrap(
+            USBBookmarkStore(fileURL: fileURL, codec: codec).resolve()
+        )
+
+        XCTAssertNil(destination.formatDescription)
+        XCTAssertEqual(destination.displayName, "LEGACY")
     }
 
     private func temporaryDirectory() -> URL {

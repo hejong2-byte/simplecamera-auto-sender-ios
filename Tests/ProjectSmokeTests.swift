@@ -21,6 +21,7 @@ final class ProjectSmokeTests: XCTestCase {
 
         XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 26"))
         XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.15"))
+        XCTAssertTrue(project.contains("exactVersion: 0.9.20"))
         XCTAssertTrue(project.contains("UIFileSharingEnabled: true"))
         XCTAssertTrue(
             project.contains("INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES")
@@ -136,6 +137,21 @@ final class ProjectSmokeTests: XCTestCase {
         )
         XCTAssertFalse(source.contains("안전한 저장 방식"))
         XCTAssertFalse(source.contains("operationNotice"))
+    }
+
+    func testSettingsExposeReferenceFileSystemAndConfirmedFolderCleanup() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/SettingsView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("파일시스템(참고)"))
+        XCTAssertTrue(source.contains("SD/USB 전체 파일 삭제"))
+        XCTAssertTrue(source.contains("선택한 폴더 자체는 유지"))
+        XCTAssertFalse(source.contains("FAT32 포맷"))
     }
 
     func testReceiverReplacesIdentityCardWithSeparateLocalPreviewAction() throws {
