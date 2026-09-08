@@ -45,6 +45,21 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
         ])
     }
 
+    func testUnchangedPollingKeepsPresentedSelectionBatchStable() async throws {
+        let context = try makeContext(count: 2)
+        await activate(context)
+        let batch = try XCTUnwrap(context.model.selectionBatch)
+        let selectedID = try XCTUnwrap(batch.files.first?.deliveryID)
+        context.model.togglePendingFileSelection(selectedID)
+
+        for _ in 0..<3 {
+            await context.model.refresh()
+        }
+
+        XCTAssertEqual(context.model.selectionBatch?.id, batch.id)
+        XCTAssertEqual(context.model.selectedPendingFileIDs, [selectedID])
+    }
+
     func testNewArrivalDoesNotJoinFrozenSelectionAndDisappearedSelectionIsRemoved() async throws {
         let context = try makeContext(count: 2)
         await activate(context)
