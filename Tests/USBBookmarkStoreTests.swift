@@ -116,6 +116,10 @@ final class USBBookmarkStoreTests: XCTestCase {
     private func temporaryDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         return directory
     }

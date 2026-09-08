@@ -66,7 +66,11 @@ actor USBFolderCleanupService {
 
     init(
         fileManager: FileManager = .default,
-        volumeIdentity: @escaping VolumeIdentityProvider = USBFolderCleanupService.systemVolumeIdentity,
+        volumeIdentity: @escaping VolumeIdentityProvider = { url in
+            try url.resourceValues(forKeys: [.volumeIdentifierKey])
+                .volumeIdentifier
+                .map { String(describing: $0) }
+        },
         startAccessing: @escaping SecurityScopeStart = { $0.startAccessingSecurityScopedResource() },
         stopAccessing: @escaping SecurityScopeStop = { $0.stopAccessingSecurityScopedResource() }
     ) {
@@ -251,11 +255,5 @@ actor USBFolderCleanupService {
         guard item.standardizedFileURL.deletingLastPathComponent().path == root.path else {
             throw USBFolderCleanupError.destinationChanged
         }
-    }
-
-    private static func systemVolumeIdentity(_ url: URL) throws -> String? {
-        try url.resourceValues(forKeys: [.volumeIdentifierKey])
-            .volumeIdentifier
-            .map { String(describing: $0) }
     }
 }

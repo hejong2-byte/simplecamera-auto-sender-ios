@@ -71,7 +71,11 @@ final class USBBookmarkStore: @unchecked Sendable {
     init(
         fileURL: URL,
         codec: any USBBookmarkCoding = SystemUSBBookmarkCodec(),
-        volumeFormatProvider: @escaping VolumeFormatProvider = USBBookmarkStore.systemVolumeFormat
+        volumeFormatProvider: @escaping VolumeFormatProvider = { url in
+            try? url.resourceValues(
+                forKeys: [.volumeLocalizedFormatDescriptionKey]
+            ).volumeLocalizedFormatDescription
+        }
     ) {
         self.fileURL = fileURL
         self.codec = codec
@@ -133,13 +137,6 @@ final class USBBookmarkStore: @unchecked Sendable {
             )
         }
     }
-
-    private static func systemVolumeFormat(_ url: URL) -> String? {
-        try? url.resourceValues(
-            forKeys: [.volumeLocalizedFormatDescriptionKey]
-        ).volumeLocalizedFormatDescription
-    }
-
     func clear() throws {
         try lock.withLock {
             guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
