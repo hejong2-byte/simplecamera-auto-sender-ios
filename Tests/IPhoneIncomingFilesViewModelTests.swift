@@ -63,16 +63,18 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
         XCTAssertTrue(try context.store.destinations(receiverID: context.server.receiverID).isEmpty)
     }
 
-    func testPostponedBatchDoesNotReopenEveryPollAndCanBeReopenedManually() async throws {
+    func testCancelledSelectionDoesNotReopenEveryPollAndCanBeReopenedManually() async throws {
         let context = try makeContext(count: 2)
         await activate(context)
-        context.model.postponePrompt()
+        context.model.cancelPendingFileSelection()
         for _ in 0..<10 { await context.model.refresh() }
         XCTAssertNil(context.model.prompt)
+        XCTAssertNil(context.model.selectionBatch)
         XCTAssertEqual(context.model.pendingFiles.count, 2)
 
         context.model.showPendingFiles()
-        XCTAssertEqual(context.model.prompt?.files.count, 2)
+        XCTAssertEqual(context.model.selectionBatch?.files.count, 2)
+        XCTAssertTrue(context.model.selectedPendingFileIDs.isEmpty)
         XCTAssertTrue(try context.store.destinations(receiverID: context.server.receiverID).isEmpty)
     }
 
@@ -131,6 +133,8 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
     func testUSBChoiceApprovesAllTenFilesAndNoMore() async throws {
         let context = try makeContext(count: 10)
         await activate(context)
+        context.model.selectAllPendingFiles()
+        XCTAssertTrue(context.model.confirmPendingFileSelection())
         let batch = try XCTUnwrap(context.model.prompt)
 
         XCTAssertTrue(context.model.accept(batch, destination: .usb))
@@ -198,7 +202,7 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
     func testOfflinePollRetainsPendingFilesAndRecoveryClearsError() async throws {
         let context = try makeContext(count: 2)
         await activate(context)
-        context.model.postponePrompt()
+        context.model.cancelPendingFileSelection()
         context.server.error = URLError(.notConnectedToInternet)
         await context.model.refresh()
         XCTAssertEqual(context.model.pendingFiles.count, 2)

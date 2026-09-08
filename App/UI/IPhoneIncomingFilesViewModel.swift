@@ -50,6 +50,8 @@ final class IPhoneIncomingFilesViewModel: ObservableObject {
 
     @Published private(set) var pendingFiles: [IPhoneDelivery] = []
     @Published private(set) var prompt: IPhoneIncomingPrompt?
+    @Published private(set) var selectionBatch: IPhoneIncomingBatch? = nil
+    @Published private(set) var selectedPendingFileIDs: Set<UUID> = []
     @Published private(set) var lastError: String?
     @Published private(set) var isMonitoring = false
 
@@ -84,6 +86,7 @@ final class IPhoneIncomingFilesViewModel: ObservableObject {
         requestID = nil
         if !active {
             prompt = nil
+            cancelPendingFileSelection()
             return
         }
         offeredIDs = []
@@ -112,6 +115,7 @@ final class IPhoneIncomingFilesViewModel: ObservableObject {
                 offeredIDs = []
                 acceptedIDs = []
                 prompt = nil
+                cancelPendingFileSelection()
             }
             var unique: Set<UUID> = []
             pendingFiles = snapshot.receiverID == nil ? [] : snapshot.files.filter {
@@ -134,6 +138,13 @@ final class IPhoneIncomingFilesViewModel: ObservableObject {
                     )
                 }
             }
+            if let existing = selectionBatch {
+                let remaining = existing.files.filter { pendingIDs.contains($0.deliveryID) }
+                selectedPendingFileIDs.formIntersection(remaining.map(\.deliveryID))
+                selectionBatch = remaining.isEmpty
+                    ? nil
+                    : IPhoneIncomingBatch(receiverID: existing.receiverID, files: remaining)
+            }
             lastError = nil
             offerUnseenFiles()
         } catch let error where IPhoneReceiveErrorMessage.isCancellation(error) {
@@ -150,6 +161,57 @@ final class IPhoneIncomingFilesViewModel: ObservableObject {
     }
 
     func postponePrompt() { prompt = nil }
+
+    var needsPendingSelection: Bool { selectionBatch != nil }
+
+    var pendingSelectionBytes: Int64 {
+        selectionBatch?.files
+            .filter { selectedPendingFileIDs.contains($0.deliveryID) }
+            .reduce(0) { total, file in
+                let result = total.addingReportingOverflow(max(0, file.size))
+                return result.overflow ? Int64.max : result.partialValue
+            } ?? 0
+    }
+
+    func togglePendingFileSelection(_ deliveryID: UUID) {
+        guard selectionBatch?.files.contains(where: { $0.deliveryID == deliveryID }) == true else {
+            return
+        }
+        if selectedPendingFileIDs.contains(deliveryID) {
+            selectedPendingFileIDs.remove(deliveryID)
+        } else {
+            selectedPendingFileIDs.insert(deliveryID)
+        }
+    }
+
+    func selectAllPendingFiles() {
+        selectedPendingFileIDs = Set(selectionBatch?.files.map(\.deliveryID) ?? [])
+    }
+
+    func clearPendingFileSelection() {
+        selectedPendingFileIDs = []
+    }
+
+    func cancelPendingFileSelection() {
+        selectionBatch = nil
+        selectedPendingFileIDs = []
+    }
+
+    @discardableResult
+    func confirmPendingFileSelection() -> Bool {
+        guard isMonitoring, let batch = selectionBatch, receiverID == batch.receiverID else {
+            return false
+        }
+        let pendingIDs = Set(pendingFiles.map(\.deliveryID))
+        let files = batch.files.filter {
+            selectedPendingFileIDs.contains($0.deliveryID)
+                && pendingIDs.contains($0.deliveryID)
+        }
+        guard !files.isEmpty else { return false }
+        cancelPendingFileSelection()
+        presentPrompt(files, receiverID: batch.receiverID)
+        return true
+    }
 
     @discardableResult
     func chooseArchiveMode(_ prompt: IPhoneIncomingPrompt, mode: IPhoneReceiveArchiveMode) -> Bool {
@@ -204,7 +266,7 @@ final class IPhoneIncomingFilesViewModel: ObservableObject {
     }
 
     private func offerUnseenFiles() {
-        guard prompt == nil, let receiverID else { return }
+        guard prompt == nil, selectionBatch == nil, let receiverID else { return }
         let files = pendingFiles.filter { !offeredIDs.contains($0.deliveryID) }
         guard !files.isEmpty else { return }
         present(files, receiverID: receiverID)
@@ -212,6 +274,16 @@ final class IPhoneIncomingFilesViewModel: ObservableObject {
 
     private func present(_ files: [IPhoneDelivery], receiverID: UUID) {
         offeredIDs.formUnion(files.map(\.deliveryID))
+        guard files.count == 1 else {
+            prompt = nil
+            selectedPendingFileIDs = []
+            selectionBatch = IPhoneIncomingBatch(receiverID: receiverID, files: files)
+            return
+        }
+        presentPrompt(files, receiverID: receiverID)
+    }
+
+    private func presentPrompt(_ files: [IPhoneDelivery], receiverID: UUID) {
         let batch = IPhoneIncomingBatch(receiverID: receiverID, files: files)
         let stage: IPhoneIncomingPromptStage = files.contains(where: Self.isZIP)
             ? .archiveChoice
