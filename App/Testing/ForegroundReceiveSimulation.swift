@@ -18,7 +18,8 @@ final class ForegroundReceiveSimulation {
             withStoredFiles: arguments.contains("--ui-test-stored-files"),
             withTextMessage: arguments.contains("--ui-test-text-message"),
             withSavedTextRecipient: arguments.contains("--ui-test-text-recipient"),
-            withZIP: arguments.contains("--ui-test-incoming-zip")
+            withZIP: arguments.contains("--ui-test-incoming-zip"),
+            withMultipleIncoming: arguments.contains("--ui-test-multiple-incoming")
         )
     }()
 
@@ -34,7 +35,8 @@ final class ForegroundReceiveSimulation {
         withStoredFiles: Bool,
         withTextMessage: Bool,
         withSavedTextRecipient: Bool,
-        withZIP: Bool
+        withZIP: Bool,
+        withMultipleIncoming: Bool
     ) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let catalog = try IPhoneReceivedFileCatalog(
@@ -53,7 +55,36 @@ final class ForegroundReceiveSimulation {
         let registration = IPhoneReceiverRegistrationStore(identityStore: InMemoryCredentialStore(), secretStore: InMemoryCredentialStore())
         try registration.save(IPhoneReceiverRegistration(receiverID: receiverID, code: "123456", receiveSecret: "simulation-only", deviceName: "수신 테스트 iPhone"))
         let choices = IPhoneReceiveApprovalStore(fileURL: root.appendingPathComponent("approvals.json"))
-        let file = IPhoneDelivery(deliveryID: UUID(), fileName: withZIP ? "수신-시뮬레이션.zip" : "수신-시뮬레이션.txt", contentType: withZIP ? "application/zip" : "text/plain", size: 16, sha256: String(repeating: "a", count: 64), state: .available, createdAt: Date(), expiresAt: Date().addingTimeInterval(3_600), deliveredAt: nil)
+        let files: [IPhoneDelivery]
+        if withMultipleIncoming {
+            let firstID = UUID(uuidString: "10000000-0000-0000-0000-000000000001")!
+            let secondID = UUID(uuidString: "10000000-0000-0000-0000-000000000002")!
+            files = [
+                IPhoneDelivery(
+                    deliveryID: firstID, fileName: "first.txt",
+                    contentType: "text/plain", size: 16,
+                    sha256: String(repeating: "a", count: 64), state: .available,
+                    createdAt: Date().addingTimeInterval(-10),
+                    expiresAt: Date().addingTimeInterval(3_590), deliveredAt: nil
+                ),
+                IPhoneDelivery(
+                    deliveryID: secondID, fileName: "second.txt",
+                    contentType: "text/plain", size: 32,
+                    sha256: String(repeating: "b", count: 64), state: .available,
+                    createdAt: Date(), expiresAt: Date().addingTimeInterval(3_600),
+                    deliveredAt: nil
+                )
+            ]
+        } else {
+            files = [IPhoneDelivery(
+                deliveryID: UUID(),
+                fileName: withZIP ? "수신-시뮬레이션.zip" : "수신-시뮬레이션.txt",
+                contentType: withZIP ? "application/zip" : "text/plain",
+                size: 16, sha256: String(repeating: "a", count: 64),
+                state: .available, createdAt: Date(),
+                expiresAt: Date().addingTimeInterval(3_600), deliveredAt: nil
+            )]
+        }
         let arrivalDate = Date().addingTimeInterval(delay)
         let preferences = USBReceiverPreferences(defaults: UserDefaults(suiteName: "ReceiveUITest.\(UUID().uuidString)")!)
         let receiveOutcome: IPhoneReceiveOutcome?
@@ -164,7 +195,7 @@ final class ForegroundReceiveSimulation {
         incoming = IPhoneIncomingFilesViewModel(
             loadPendingFiles: {
                 let visible = Date() >= arrivalDate
-                return IPhoneIncomingSnapshot(receiverID: receiverID, files: visible ? [file] : [])
+                return IPhoneIncomingSnapshot(receiverID: receiverID, files: visible ? files : [])
             },
             approveFiles: { id, ids, decision in
                 try choices.approve(ids, receiverID: id, decision: decision)

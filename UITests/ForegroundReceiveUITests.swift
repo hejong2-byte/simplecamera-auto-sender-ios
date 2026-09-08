@@ -247,8 +247,12 @@ final class ForegroundReceiveUITests: XCTestCase {
         app.buttons["pending-confirm-selection"].tap()
 
         XCTAssertTrue(app.buttons["iPhone에 저장"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["second.txt"].exists)
-        XCTAssertFalse(app.staticTexts["first.txt"].exists)
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "second.txt")
+        ).firstMatch.exists)
+        XCTAssertFalse(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "first.txt")
+        ).firstMatch.exists)
     }
 
     func testZIPChoicePrecedesDestinationAndPostponementReturnsAfterActivation() {
