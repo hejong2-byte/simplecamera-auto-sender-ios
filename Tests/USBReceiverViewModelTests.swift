@@ -30,7 +30,7 @@ final class USBReceiverViewModelTests: XCTestCase {
                     failures: []
                 )
             }
-        ) { _, _ in
+        ) { _, _, _ in
             IPhoneUSBExportSummary(verified: [], failed: [])
         }
         await model.refresh()
@@ -65,7 +65,7 @@ final class USBReceiverViewModelTests: XCTestCase {
 
     func testOldUSBProgressDoesNotReportAnActiveReceiveAfterLeavingTheScreen() async throws {
         let progress = USBReceiveProgressStore()
-        let model = try exportModel(files: [], receiveProgressStore: progress) { _, _ in
+        let model = try exportModel(files: [], receiveProgressStore: progress) { _, _, _ in
             IPhoneUSBExportSummary(verified: [], failed: [])
         }
         progress.publish(testProgress(stage: .downloading, name: "paused.zip", bytes: 50))
@@ -110,7 +110,7 @@ final class USBReceiverViewModelTests: XCTestCase {
     func testCompletedLocalReceiveImmediatelyRefreshesSavedFiles() async throws {
         let file = try storedFile()
         let progress = USBReceiveProgressStore()
-        let model = try exportModel(files: [file], receiveProgressStore: progress) { _, _ in
+        let model = try exportModel(files: [file], receiveProgressStore: progress) { _, _, _ in
             IPhoneUSBExportSummary(verified: [], failed: [])
         }
         XCTAssertTrue(model.storedFiles.isEmpty)
@@ -223,7 +223,7 @@ final class USBReceiverViewModelTests: XCTestCase {
 
     func testRecoveryToIdleClearsThePreviousPCError() async throws {
         let progress = USBReceiveProgressStore()
-        let model = try exportModel(files: [], receiveProgressStore: progress) { _, _ in
+        let model = try exportModel(files: [], receiveProgressStore: progress) { _, _, _ in
             IPhoneUSBExportSummary(verified: [], failed: [])
         }
         progress.publishFailure("previous network error")
@@ -238,7 +238,7 @@ final class USBReceiverViewModelTests: XCTestCase {
 
     func testNewReceiveProgressClearsThePreviousPCError() async throws {
         let progress = USBReceiveProgressStore()
-        let model = try exportModel(files: [], receiveProgressStore: progress) { _, _ in
+        let model = try exportModel(files: [], receiveProgressStore: progress) { _, _, _ in
             IPhoneUSBExportSummary(verified: [], failed: [])
         }
         progress.publishFailure("previous network error")
@@ -253,7 +253,7 @@ final class USBReceiverViewModelTests: XCTestCase {
 
     func testDiscoveryErrorDoesNotShowZeroByteProgressOrCalculating() async throws {
         let progress = USBReceiveProgressStore()
-        let model = try exportModel(files: [], receiveProgressStore: progress) { _, _ in
+        let model = try exportModel(files: [], receiveProgressStore: progress) { _, _, _ in
             IPhoneUSBExportSummary(verified: [], failed: [])
         }
         progress.publishFailure("current server error")
@@ -269,7 +269,7 @@ final class USBReceiverViewModelTests: XCTestCase {
 
     func testCompletedReceiveDoesNotKeepShowingRunningProgress() async throws {
         let progress = USBReceiveProgressStore()
-        let model = try exportModel(files: [], receiveProgressStore: progress) { _, _ in
+        let model = try exportModel(files: [], receiveProgressStore: progress) { _, _, _ in
             IPhoneUSBExportSummary(verified: [], failed: [])
         }
         progress.publish(testProgress(stage: .completed, name: "done.txt", bytes: 100))
@@ -340,7 +340,7 @@ final class USBReceiverViewModelTests: XCTestCase {
             files: [file],
             receiveProgressStore: pcProgress,
             exportProgressStore: exportProgress
-        ) { _, _ in
+        ) { _, _, _ in
             exportProgress.publishFailure("USB에 쓸 수 없습니다. 폴더 권한을 확인해 주세요.")
             return IPhoneUSBExportSummary(
                 verified: [],
@@ -373,7 +373,7 @@ final class USBReceiverViewModelTests: XCTestCase {
             files: [],
             receiveProgressStore: pcProgress,
             exportProgressStore: exportProgress
-        ) { _, _ in IPhoneUSBExportSummary(verified: [], failed: []) }
+        ) { _, _, _ in IPhoneUSBExportSummary(verified: [], failed: []) }
 
         exportProgress.publish(testProgress(stage: .copyingToUSB, name: "local.zip", bytes: 50))
         pcProgress.publish(testProgress(stage: .downloading, name: "from-pc.txt", bytes: 25))
@@ -388,7 +388,7 @@ final class USBReceiverViewModelTests: XCTestCase {
 
     func testFailedUSBCopyKeepsTheFailedFileSelectedForRetry() async throws {
         let file = try storedFile()
-        let model = try exportModel(files: [file]) { _, _ in
+        let model = try exportModel(files: [file]) { _, _, _ in
             IPhoneUSBExportSummary(
                 verified: [],
                 failed: [IPhoneUSBExportFailure(
@@ -455,7 +455,7 @@ final class USBReceiverViewModelTests: XCTestCase {
         let calls = ReceiveCounter()
         let secondPress = ReceiveCounter()
         let gate = USBExportGate()
-        let model = try exportModel(files: [file]) { _, _ in
+        let model = try exportModel(files: [file]) { _, _, _ in
             calls.increment()
             await gate.wait()
             return IPhoneUSBExportSummary(verified: [], failed: [])
@@ -791,8 +791,8 @@ final class USBReceiverViewModelTests: XCTestCase {
             pendingDeletionDecisions: { decisions.pending() },
             keepOriginals: { try await exporter.keep(decisionIDs: $0) },
             deleteOriginals: { await exporter.delete(decisionIDs: $0) }
-        ) { files, destination in
-            await exporter.export(files, to: destination)
+        ) { files, destination, archiveMode in
+            await exporter.export(files, to: destination, archiveMode: archiveMode)
         }
         await model.refresh()
         model.toggleStoredFileSelection(file.id)

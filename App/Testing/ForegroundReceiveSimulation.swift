@@ -45,7 +45,7 @@ final class ForegroundReceiveSimulation {
             recordsFileURL: root.appendingPathComponent("records.json")
         )
         if withStoredFiles {
-            for name in ["delete-me.txt", "keep-me.txt"] {
+            for name in ["delete-me.txt", "keep-me.txt", "stored.zip"] {
                 try Data("simulated local file".utf8).write(
                     to: catalog.receivedDirectory.appendingPathComponent(name)
                 )

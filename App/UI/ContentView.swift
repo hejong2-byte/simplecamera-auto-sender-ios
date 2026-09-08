@@ -134,7 +134,11 @@ struct ContentView: View {
                 get: {
                     incomingModel.needsPendingSelection && canPresentIncomingFiles
                 },
-                set: { _ in }
+                set: { presented in
+                    if !presented, incomingModel.needsPendingSelection {
+                        incomingModel.cancelPendingFileSelection()
+                    }
+                }
             ),
             onDismiss: incomingModel.cancelPendingFileSelection
         ) {
@@ -186,6 +190,7 @@ struct ContentView: View {
             && !filePickerModel.isPresenting
             && !receiverModel.isChoosingUSBFolder && !receiverModel.isShowingSettingsConfirmation
             && !receiverModel.isDeletingStoredFiles && !receiverModel.needsStoredFileDeletionConfirmation
+            && !receiverModel.needsStoredZIPExportChoice
             && !receiverModel.isCleaningUSBFolder
             && receiverModel.previewFile == nil && receiverModel.storedFilePreviewError == nil
             && !receiverModel.isExportingToUSB && !receiverIsBusy

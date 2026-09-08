@@ -101,6 +101,24 @@ struct USBReceiverView: View {
             Text(names + (remaining > 0 ? "\n외 \(remaining)개" : "")
                 + "\n\niPhone에 저장된 선택 파일만 삭제하며 되돌릴 수 없습니다. USB와 PC의 파일은 삭제하지 않습니다.")
         }
+        .confirmationDialog(
+            "ZIP 파일을 USB로 어떻게 복사할까요?",
+            isPresented: Binding(
+                get: { model.needsStoredZIPExportChoice },
+                set: { _ in }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("압축 해제해서 복사") {
+                Task { await model.confirmStoredZIPExport(.extract) }
+            }
+            Button("ZIP 그대로 복사") {
+                Task { await model.confirmStoredZIPExport(.keepArchive) }
+            }
+            Button("취소", role: .cancel) { model.cancelStoredZIPExportChoice() }
+        } message: {
+            Text("선택한 \(model.storedZIPExportFilesPendingChoice.count)개 파일에 적용합니다. 복사가 끝난 뒤에도 iPhone 원본은 별도 확인 전까지 유지됩니다.")
+        }
     }
 
     private var destinationCard: some View {
@@ -248,10 +266,12 @@ struct USBReceiverView: View {
                 }
             }
             Button("선택 파일 USB로 복사") {
-                Task { await model.exportSelectedFilesToUSB() }
+                Task { await model.requestStoredFilesUSBExport() }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!model.hasStoredFileSelection || model.isExportingToUSB || model.isReceivingFile || model.isDeletingStoredFiles)
+            .disabled(!model.hasStoredFileSelection || model.isExportingToUSB || model.isReceivingFile
+                || model.isDeletingStoredFiles || model.needsStoredZIPExportChoice)
+            .accessibilityIdentifier("stored-files-export")
 
             Button("선택 파일 삭제", role: .destructive) {
                 model.requestStoredFileDeletion()

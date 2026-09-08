@@ -28,7 +28,8 @@ final class USBReceiverViewModel: ObservableObject {
     typealias DeleteStoredFiles = @Sendable ([IPhoneStoredFile]) async throws -> IPhoneStoredFileDeletionSummary
     typealias ExportFiles = @Sendable (
         [IPhoneStoredFile],
-        USBBookmarkDestination
+        USBBookmarkDestination,
+        IPhoneReceiveArchiveMode
     ) async -> IPhoneUSBExportSummary
     typealias PendingDeletionDecisions = @Sendable () -> [IPhoneUSBDeletionDecision]
     typealias KeepOriginals = @Sendable (Set<UUID>) async throws -> Void
@@ -66,6 +67,7 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var storedFiles: [IPhoneStoredFile] = []
     @Published private(set) var selectedStoredFileIDs: Set<String> = []
     @Published private(set) var storedFilesPendingDeletion: [IPhoneStoredFile] = []
+    @Published private(set) var storedZIPExportFilesPendingChoice: [IPhoneStoredFile] = []
     @Published private(set) var isDeletingStoredFiles = false
     @Published private(set) var storedFileDeletionMessage: String?
     @Published private(set) var storedFileDeletionError: String?
@@ -138,7 +140,7 @@ final class USBReceiverViewModel: ObservableObject {
         deleteStoredFiles: @escaping DeleteStoredFiles = { _ in
             throw CocoaError(.featureUnsupported)
         },
-        exportFiles: @escaping ExportFiles = { _, _ in
+        exportFiles: @escaping ExportFiles = { _, _, _ in
             IPhoneUSBExportSummary(verified: [], failed: [])
         },
         pendingDeletionDecisions: @escaping PendingDeletionDecisions = { [] },
@@ -218,6 +220,7 @@ final class USBReceiverViewModel: ObservableObject {
     var hasUSBDestination: Bool { usbDisplayName != nil }
     var hasStoredFileSelection: Bool { !selectedStoredFileIDs.isEmpty }
     var needsStoredFileDeletionConfirmation: Bool { !storedFilesPendingDeletion.isEmpty }
+    var needsStoredZIPExportChoice: Bool { !storedZIPExportFilesPendingChoice.isEmpty }
     var needsUSBFolderDeletionConfirmation: Bool {
         usbFolderContentsPendingDeletion != nil
     }
@@ -507,7 +510,8 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     func toggleStoredFileSelection(_ id: String) {
-        guard !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation else { return }
+        guard !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation,
+              !needsStoredZIPExportChoice else { return }
         if selectedStoredFileIDs.contains(id) {
             selectedStoredFileIDs.remove(id)
         } else {
@@ -518,7 +522,8 @@ final class USBReceiverViewModel: ObservableObject {
     func requestStoredFileDeletion() {
         guard canDeleteStoredFiles, !needsStoredFileDeletionConfirmation,
               !isChoosingUSBFolder, !needsDeletionDecision,
-              !needsLocalFallbackDecision, !isCleaningUSBFolder else { return }
+              !needsLocalFallbackDecision, !isCleaningUSBFolder,
+              !needsStoredZIPExportChoice else { return }
         guard !isReceivingFile, !isExportingToUSB else {
             storedFileDeletionError = "전송 중에는 삭제할 수 없습니다. 전송이 끝난 뒤 다시 눌러 주세요."
             return
@@ -569,11 +574,40 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     func exportSelectedFilesToUSB() async {
+        await requestStoredFilesUSBExport()
+    }
+
+    func requestStoredFilesUSBExport() async {
+        guard !isExportingToUSB, !isReceivingFile,
+              !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation,
+              !isCleaningUSBFolder, !needsStoredZIPExportChoice else { return }
+        let selected = storedFiles.filter { selectedStoredFileIDs.contains($0.id) }
+        guard !selected.isEmpty else { return }
+        if selected.contains(where: Self.isZIP) {
+            storedZIPExportFilesPendingChoice = selected
+            return
+        }
+        await exportStoredFiles(selected, archiveMode: .keepArchive)
+    }
+
+    func cancelStoredZIPExportChoice() {
+        storedZIPExportFilesPendingChoice = []
+    }
+
+    func confirmStoredZIPExport(_ archiveMode: IPhoneReceiveArchiveMode) async {
+        let selected = storedZIPExportFilesPendingChoice
+        guard !selected.isEmpty else { return }
+        storedZIPExportFilesPendingChoice = []
+        await exportStoredFiles(selected, archiveMode: archiveMode)
+    }
+
+    private func exportStoredFiles(
+        _ selected: [IPhoneStoredFile],
+        archiveMode: IPhoneReceiveArchiveMode
+    ) async {
         guard !isExportingToUSB, !isReceivingFile,
               !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation,
               !isCleaningUSBFolder else { return }
-        let selected = storedFiles.filter { selectedStoredFileIDs.contains($0.id) }
-        guard !selected.isEmpty else { return }
         isExportingToUSB = true
         usbExportProgress = nil
         lastUSBExportError = nil
@@ -587,7 +621,7 @@ final class USBReceiverViewModel: ObservableObject {
             guard !destination.isStale else {
                 throw USBReceiveServiceError.staleDestination
             }
-            let summary = await exportFiles(selected, destination)
+            let summary = await exportFiles(selected, destination, archiveMode)
             selectedStoredFileIDs.subtract(summary.verified.map(\.sourceID))
             storedFiles = try storedFilesProvider()
             needsDeletionDecision = !pendingDeletionDecisions().isEmpty
@@ -595,6 +629,10 @@ final class USBReceiverViewModel: ObservableObject {
         } catch {
             lastUSBExportError = Self.message(for: error)
         }
+    }
+
+    private static func isZIP(_ file: IPhoneStoredFile) -> Bool {
+        file.url.pathExtension.caseInsensitiveCompare("zip") == .orderedSame
     }
 
     func keepOriginals() async {

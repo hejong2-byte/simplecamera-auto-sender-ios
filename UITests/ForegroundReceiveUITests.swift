@@ -110,6 +110,31 @@ final class ForegroundReceiveUITests: XCTestCase {
         keepScreenshot("local-file-delete-completed", app: app)
     }
 
+    func testStoredZIPAsksWhetherToExtractBeforeUSBExport() {
+        let app = launchSimulation(delay: 3_600, withStoredFiles: true)
+        let receiver = app.buttons["open-receiver"]
+        XCTAssertTrue(receiver.waitForExistence(timeout: 20))
+        receiver.tap()
+
+        let storedZIP = app.buttons["stored-file-stored.zip"]
+        reveal(storedZIP, in: app)
+        XCTAssertTrue(storedZIP.isHittable)
+        storedZIP.tap()
+
+        let export = app.buttons["stored-files-export"]
+        reveal(export, in: app)
+        XCTAssertTrue(export.isHittable)
+        export.tap()
+
+        XCTAssertTrue(app.buttons["압축 해제해서 복사"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["ZIP 그대로 복사"].exists)
+        keepScreenshot("stored-zip-export-choice", app: app)
+        app.buttons["취소"].tap()
+
+        XCTAssertTrue(storedZIP.waitForExistence(timeout: 5))
+        XCTAssertTrue(export.isEnabled, "Cancelling the ZIP choice must keep the file selected")
+    }
+
     func testMainScreenCriticalActionsAreHittableWithoutInitialScroll() {
         let app = launchSimulation(delay: 60)
 

@@ -232,8 +232,8 @@ final class USBReceiverDependencies: @unchecked Sendable {
                     .compactMap(\.finalFileName))
                 return catalog.delete(files, protectedFileNames: protectedNames)
             },
-            exportFiles: { [exporter] files, destination in
-                await exporter.export(files, to: destination)
+            exportFiles: { [exporter] files, destination, archiveMode in
+                await exporter.export(files, to: destination, archiveMode: archiveMode)
             },
             pendingDeletionDecisions: { [deletionStore] in deletionStore.pending() },
             keepOriginals: { [exporter] ids in try await exporter.keep(decisionIDs: ids) },

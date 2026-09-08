@@ -155,7 +155,8 @@ actor IPhoneUSBExportService {
 
     func export(
         _ files: [IPhoneStoredFile],
-        to destination: USBBookmarkDestination
+        to destination: USBBookmarkDestination,
+        archiveMode: IPhoneReceiveArchiveMode = .extract
     ) -> IPhoneUSBExportSummary {
         guard !files.isEmpty else {
             return IPhoneUSBExportSummary(verified: [], failed: [])
@@ -169,7 +170,8 @@ actor IPhoneUSBExportService {
                     to: destination,
                     currentIndex: index + 1,
                     totalCount: files.count,
-                    completedCount: verified.count
+                    completedCount: verified.count,
+                    archiveMode: archiveMode
                 )
                 verified.append(decision)
             } catch {
@@ -250,7 +252,8 @@ actor IPhoneUSBExportService {
         to destination: USBBookmarkDestination,
         currentIndex: Int,
         totalCount: Int,
-        completedCount: Int
+        completedCount: Int,
+        archiveMode: IPhoneReceiveArchiveMode
     ) throws -> IPhoneUSBDeletionDecision {
         let startedAt = now()
         publish(
@@ -274,7 +277,8 @@ actor IPhoneUSBExportService {
         if let record = file.receivedRecord, record.size != sourceSize {
             throw IPhoneUSBExportError.sourceChanged
         }
-        if file.url.pathExtension.caseInsensitiveCompare("zip") == .orderedSame {
+        if file.url.pathExtension.caseInsensitiveCompare("zip") == .orderedSame,
+           archiveMode == .extract {
             return try exportZIP(
                 file,
                 to: destination,
