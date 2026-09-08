@@ -15,8 +15,51 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
         await activate(context)
 
         XCTAssertEqual(context.model.pendingFiles.count, 10)
-        XCTAssertEqual(context.model.prompt?.files.count, 10)
-        XCTAssertEqual(context.model.prompt?.totalBytes, 55_000)
+        XCTAssertNil(context.model.prompt)
+        XCTAssertEqual(context.model.selectionBatch?.files.count, 10)
+        XCTAssertTrue(context.model.selectedPendingFileIDs.isEmpty)
+        XCTAssertTrue(try context.store.destinations(receiverID: context.server.receiverID).isEmpty)
+    }
+
+    func testTwoArrivalsRequireSelectionAndApproveOnlyChosenFile() async throws {
+        let context = try makeContext(count: 2)
+        await activate(context)
+
+        XCTAssertNil(context.model.prompt)
+        XCTAssertEqual(context.model.selectionBatch?.files.count, 2)
+        XCTAssertTrue(context.model.selectedPendingFileIDs.isEmpty)
+
+        let chosen = try XCTUnwrap(context.model.selectionBatch?.files.last)
+        context.model.togglePendingFileSelection(chosen.deliveryID)
+        XCTAssertTrue(context.model.confirmPendingFileSelection())
+
+        let prompt = try XCTUnwrap(context.model.prompt)
+        XCTAssertEqual(prompt.files.map(\.deliveryID), [chosen.deliveryID])
+        XCTAssertTrue(context.model.accept(prompt, destination: .iphoneLocal))
+        XCTAssertEqual(
+            Set(try context.store.destinations(receiverID: prompt.receiverID).keys),
+            [chosen.deliveryID]
+        )
+        XCTAssertEqual(context.model.pendingFiles.map(\.deliveryID), [
+            try XCTUnwrap(context.server.files.first?.deliveryID)
+        ])
+    }
+
+    func testNewArrivalDoesNotJoinFrozenSelectionAndDisappearedSelectionIsRemoved() async throws {
+        let context = try makeContext(count: 2)
+        await activate(context)
+        let frozenIDs = try XCTUnwrap(context.model.selectionBatch).files.map(\.deliveryID)
+        let chosen = try XCTUnwrap(frozenIDs.first)
+        context.model.togglePendingFileSelection(chosen)
+
+        context.server.append(file(index: 3))
+        await context.model.refresh()
+        XCTAssertEqual(context.model.selectionBatch?.files.map(\.deliveryID), frozenIDs)
+
+        context.server.replace(context.server.files.filter { $0.deliveryID != chosen })
+        await context.model.refresh()
+        XCTAssertFalse(context.model.selectedPendingFileIDs.contains(chosen))
+        XCTAssertFalse(context.model.confirmPendingFileSelection())
         XCTAssertTrue(try context.store.destinations(receiverID: context.server.receiverID).isEmpty)
     }
 
@@ -225,7 +268,13 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
 
     private func activate(_ context: Context) async {
         context.model.setActive(true)
-        await waitUntil { context.server.completedCalls > 0 && (context.model.prompt != nil || context.server.files.isEmpty || context.server.files.allSatisfy { ![.available, .leased].contains($0.state) }) }
+        await waitUntil {
+            context.server.completedCalls > 0
+                && (context.model.prompt != nil
+                    || context.model.selectionBatch != nil
+                    || context.server.files.isEmpty
+                    || context.server.files.allSatisfy { ![.available, .leased].contains($0.state) })
+        }
     }
 
     private func makeContext(count: Int, failApprovals: Bool = false, fileExtension: String = "txt") throws -> Context {
