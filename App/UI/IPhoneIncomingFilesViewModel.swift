@@ -26,13 +26,30 @@ struct IPhoneIncomingBatch: Identifiable, Equatable {
     }
 }
 
+enum IPhoneIncomingPromptStage: Equatable {
+    case archiveChoice
+    case destinationChoice(IPhoneReceiveArchiveMode)
+}
+
+struct IPhoneIncomingPrompt: Identifiable, Equatable {
+    let batch: IPhoneIncomingBatch
+    let stage: IPhoneIncomingPromptStage
+
+    var id: UUID { batch.id }
+    var receiverID: UUID { batch.receiverID }
+    var files: [IPhoneDelivery] { batch.files }
+    var totalBytes: Int64 { batch.totalBytes }
+    var title: String { batch.title }
+    var message: String { batch.message }
+}
+
 @MainActor
 final class IPhoneIncomingFilesViewModel: ObservableObject {
     typealias LoadPendingFiles = @Sendable () async throws -> IPhoneIncomingSnapshot
-    typealias ApproveFiles = @Sendable (UUID, Set<UUID>, IPhoneReceiveDestination) throws -> Void
+    typealias ApproveFiles = @Sendable (UUID, Set<UUID>, IPhoneReceiveDecision) throws -> Void
 
     @Published private(set) var pendingFiles: [IPhoneDelivery] = []
-    @Published private(set) var prompt: IPhoneIncomingBatch?
+    @Published private(set) var prompt: IPhoneIncomingPrompt?
     @Published private(set) var lastError: String?
     @Published private(set) var isMonitoring = false
 
@@ -66,10 +83,11 @@ final class IPhoneIncomingFilesViewModel: ObservableObject {
         monitorTask = nil
         requestID = nil
         if !active {
-            if let prompt { offeredIDs.subtract(prompt.files.map(\.deliveryID)) }
             prompt = nil
             return
         }
+        offeredIDs = []
+        acceptedIDs = []
         let current = generation
         monitorTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -110,7 +128,10 @@ final class IPhoneIncomingFilesViewModel: ObservableObject {
                 let remaining = existing.files.filter { pendingIDs.contains($0.deliveryID) }
                 if remaining.isEmpty { prompt = nil }
                 else if remaining != existing.files {
-                    prompt = IPhoneIncomingBatch(receiverID: existing.receiverID, files: remaining)
+                    prompt = IPhoneIncomingPrompt(
+                        batch: IPhoneIncomingBatch(receiverID: existing.receiverID, files: remaining),
+                        stage: existing.stage
+                    )
                 }
             }
             lastError = nil
@@ -130,22 +151,56 @@ final class IPhoneIncomingFilesViewModel: ObservableObject {
 
     func postponePrompt() { prompt = nil }
 
-    func accept(_ batch: IPhoneIncomingBatch, destination: IPhoneReceiveDestination) -> Bool {
-        guard isMonitoring, receiverID == batch.receiverID else { return false }
+    @discardableResult
+    func chooseArchiveMode(_ prompt: IPhoneIncomingPrompt, mode: IPhoneReceiveArchiveMode) -> Bool {
+        guard self.prompt?.id == prompt.id, prompt.stage == .archiveChoice else { return false }
+        switch mode {
+        case .keepArchive:
+            self.prompt = IPhoneIncomingPrompt(
+                batch: prompt.batch,
+                stage: .destinationChoice(.keepArchive)
+            )
+            return true
+        case .extract:
+            return accept(
+                prompt,
+                decision: IPhoneReceiveDecision(destination: .usb, archiveMode: .extract)
+            )
+        }
+    }
+
+    func accept(_ prompt: IPhoneIncomingPrompt, decision: IPhoneReceiveDecision) -> Bool {
+        guard isMonitoring, receiverID == prompt.receiverID else { return false }
+        switch prompt.stage {
+        case .archiveChoice:
+            guard decision == IPhoneReceiveDecision(destination: .usb, archiveMode: .extract) else {
+                return false
+            }
+        case let .destinationChoice(archiveMode):
+            guard decision.archiveMode == archiveMode else { return false }
+        }
         let pendingIDs = Set(pendingFiles.map(\.deliveryID))
-        let ids = Set(batch.files.map(\.deliveryID)).intersection(pendingIDs)
+        let ids = Set(prompt.files.map(\.deliveryID)).intersection(pendingIDs)
         guard !ids.isEmpty else { return false }
         do {
-            try approveFiles(batch.receiverID, ids, destination)
+            try approveFiles(prompt.receiverID, ids, decision)
             acceptedIDs.formUnion(ids)
             pendingFiles.removeAll { ids.contains($0.deliveryID) }
-            if prompt?.id == batch.id { prompt = nil }
+            if self.prompt?.id == prompt.id { self.prompt = nil }
             lastError = nil
             return true
         } catch {
             lastError = "저장 위치 선택을 저장하지 못했습니다. " + IPhoneReceiveErrorMessage.message(error)
             return false
         }
+    }
+
+    func accept(_ prompt: IPhoneIncomingPrompt, destination: IPhoneReceiveDestination) -> Bool {
+        guard case let .destinationChoice(archiveMode) = prompt.stage else { return false }
+        return accept(
+            prompt,
+            decision: IPhoneReceiveDecision(destination: destination, archiveMode: archiveMode)
+        )
     }
 
     private func offerUnseenFiles() {
@@ -157,6 +212,14 @@ final class IPhoneIncomingFilesViewModel: ObservableObject {
 
     private func present(_ files: [IPhoneDelivery], receiverID: UUID) {
         offeredIDs.formUnion(files.map(\.deliveryID))
-        prompt = IPhoneIncomingBatch(receiverID: receiverID, files: files)
+        let batch = IPhoneIncomingBatch(receiverID: receiverID, files: files)
+        let stage: IPhoneIncomingPromptStage = files.contains(where: Self.isZIP)
+            ? .archiveChoice
+            : .destinationChoice(.keepArchive)
+        prompt = IPhoneIncomingPrompt(batch: batch, stage: stage)
+    }
+
+    private static func isZIP(_ delivery: IPhoneDelivery) -> Bool {
+        URL(fileURLWithPath: delivery.fileName).pathExtension.caseInsensitiveCompare("zip") == .orderedSame
     }
 }

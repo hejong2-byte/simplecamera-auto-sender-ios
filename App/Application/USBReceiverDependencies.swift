@@ -269,7 +269,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
     @MainActor
     func makeIncomingFilesViewModel() -> IPhoneIncomingFilesViewModel {
         IPhoneIncomingFilesViewModel(
-            loadPendingFiles: { [client, registrationStore, approvalStore, ledger, jobStore] in
+            loadPendingFiles: { [client, registrationStore] in
                 guard let credentials = try registrationStore.load() else {
                     return IPhoneIncomingSnapshot(receiverID: nil, files: [])
                 }
@@ -279,18 +279,13 @@ final class USBReceiverDependencies: @unchecked Sendable {
                 guard current == receiverID else {
                     return IPhoneIncomingSnapshot(receiverID: current, files: [])
                 }
-                let approved = try approvalStore.destinations(receiverID: receiverID)
-                let existing = Set(ledger.allCheckpoints().map(\.deliveryID))
-                    .union(try jobStore.load().jobs.map { $0.delivery.deliveryID })
-                return IPhoneIncomingSnapshot(receiverID: receiverID, files: files.filter {
-                    approved[$0.deliveryID] == nil && !existing.contains($0.deliveryID)
-                })
+                return IPhoneIncomingSnapshot(receiverID: receiverID, files: files)
             },
-            approveFiles: { [approvalStore, registrationStore] receiverID, ids, destination in
+            approveFiles: { [approvalStore, registrationStore] receiverID, ids, decision in
                 guard try registrationStore.load()?.identity.receiverID == receiverID else {
                     throw USBReceiveServiceError.missingRegistration
                 }
-                try approvalStore.approve(ids, receiverID: receiverID, destination: destination)
+                try approvalStore.approve(ids, receiverID: receiverID, decision: decision)
             }
         )
     }

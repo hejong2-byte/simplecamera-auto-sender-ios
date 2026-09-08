@@ -161,12 +161,11 @@ final class ForegroundReceiveSimulation {
         )
         incoming = IPhoneIncomingFilesViewModel(
             loadPendingFiles: {
-                let approved = try choices.destinations(receiverID: receiverID)
-                let visible = Date() >= arrivalDate && approved[file.deliveryID] == nil
+                let visible = Date() >= arrivalDate
                 return IPhoneIncomingSnapshot(receiverID: receiverID, files: visible ? [file] : [])
             },
-            approveFiles: { id, ids, destination in
-                try choices.approve(ids, receiverID: id, destination: destination)
+            approveFiles: { id, ids, decision in
+                try choices.approve(ids, receiverID: id, decision: decision)
             }
         )
     }

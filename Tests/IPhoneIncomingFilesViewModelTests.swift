@@ -62,7 +62,7 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
     }
 
     func testZIPBatchAsksArchiveChoiceBeforeDestination() async throws {
-        let context = try makeContext(count: 1)
+        let context = try makeContext(count: 1, fileExtension: "zip")
         await activate(context)
 
         XCTAssertEqual(context.model.prompt?.stage, .archiveChoice)
@@ -73,7 +73,7 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
     }
 
     func testExtractChoicePersistsUSBExtractionDecision() async throws {
-        let context = try makeContext(count: 1)
+        let context = try makeContext(count: 1, fileExtension: "zip")
         await activate(context)
         let prompt = try XCTUnwrap(context.model.prompt)
 
@@ -228,16 +228,16 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
         await waitUntil { context.server.completedCalls > 0 && (context.model.prompt != nil || context.server.files.isEmpty || context.server.files.allSatisfy { ![.available, .leased].contains($0.state) }) }
     }
 
-    private func makeContext(count: Int, failApprovals: Bool = false) throws -> Context {
+    private func makeContext(count: Int, failApprovals: Bool = false, fileExtension: String = "txt") throws -> Context {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let store = IPhoneReceiveApprovalStore(fileURL: directory.appendingPathComponent("approvals.json"))
-        let server = ArrivalTestServer(files: (1..<(count + 1)).map { file(index: $0) }, store: store)
+        let server = ArrivalTestServer(files: (1..<(count + 1)).map { file(index: $0, fileExtension: fileExtension) })
         let model = IPhoneIncomingFilesViewModel(
             loadPendingFiles: { try await server.snapshot() },
-            approveFiles: { receiver, ids, destination in
+            approveFiles: { receiver, ids, decision in
                 if failApprovals { throw CocoaError(.fileWriteNoPermission) }
                 guard receiver == server.receiverID else { throw URLError(.userAuthenticationRequired) }
-                try store.approve(ids, receiverID: receiver, destination: destination)
+                try store.approve(ids, receiverID: receiver, decision: decision)
             },
             sleep: { try await Task.sleep(for: .seconds(60)) }
         )
@@ -246,8 +246,8 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
         return Context(model: model, server: server, store: store)
     }
 
-    private func file(index: Int, state: IPhoneDeliveryState = .available) -> IPhoneDelivery {
-        IPhoneDelivery(deliveryID: UUID(), fileName: "시험-\(index).zip", contentType: "application/zip", size: Int64(index * 1_000), sha256: String(repeating: "a", count: 64), state: state, createdAt: Date(timeIntervalSince1970: Double(index)), expiresAt: Date.distantFuture, deliveredAt: nil)
+    private func file(index: Int, state: IPhoneDeliveryState = .available, fileExtension: String = "txt") -> IPhoneDelivery {
+        IPhoneDelivery(deliveryID: UUID(), fileName: "시험-\(index).\(fileExtension)", contentType: fileExtension == "zip" ? "application/zip" : "text/plain", size: Int64(index * 1_000), sha256: String(repeating: "a", count: 64), state: state, createdAt: Date(timeIntervalSince1970: Double(index)), expiresAt: Date.distantFuture, deliveredAt: nil)
     }
 
     private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async {
@@ -273,9 +273,7 @@ private final class ArrivalTestServer: @unchecked Sendable {
     private var completed = 0
     private var failure: Error?
     private var queryGate: ArrivalQueryGate?
-    private let store: IPhoneReceiveApprovalStore
-
-    init(files: [IPhoneDelivery], store: IPhoneReceiveApprovalStore) { values = files; self.store = store }
+    init(files: [IPhoneDelivery]) { values = files }
     var receiverID: UUID { get { lock.withLock { identity } } set { lock.withLock { identity = newValue } } }
     var files: [IPhoneDelivery] { lock.withLock { values } }
     var callCount: Int { lock.withLock { calls } }
@@ -293,8 +291,7 @@ private final class ArrivalTestServer: @unchecked Sendable {
         if let gate = captured.3 { await gate.wait() }
         defer { lock.withLock { completed += 1 } }
         if let error = captured.2 { throw error }
-        let approved = try store.destinations(receiverID: captured.0)
-        return IPhoneIncomingSnapshot(receiverID: captured.0, files: captured.1.filter { approved[$0.deliveryID] == nil })
+        return IPhoneIncomingSnapshot(receiverID: captured.0, files: captured.1)
     }
 }
 

@@ -160,8 +160,8 @@ struct ContentView: View {
             && !receiverModel.isExportingToUSB && !receiverIsBusy
     }
 
-    private func acceptIncoming(_ batch: IPhoneIncomingBatch, destination: IPhoneReceiveDestination) {
-        guard incomingModel.accept(batch, destination: destination) else { return }
+    private func acceptIncoming(_ prompt: IPhoneIncomingPrompt, destination: IPhoneReceiveDestination) {
+        guard incomingModel.accept(prompt, destination: destination) else { return }
         receiverModel.setSelectedDestination(destination)
         navigationPath = [.receiver]
         if destination == .usb, !receiverModel.hasUSBDestination {
