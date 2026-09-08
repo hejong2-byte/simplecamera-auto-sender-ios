@@ -87,6 +87,7 @@ actor USBFolderCleanupService {
         matching expected: USBFolderContentsSummary
     ) throws -> USBFolderDeletionSummary {
         try withValidatedAccess(to: destination) { root in
+            let children = try topLevelChildren(in: root)
             let current = try makeSummary(root: root, destination: destination)
             guard current.volumeID == expected.volumeID,
                   current.folderPath == expected.folderPath,
@@ -94,7 +95,6 @@ actor USBFolderCleanupService {
                 throw USBFolderCleanupError.contentsChanged
             }
 
-            let children = try topLevelChildren(in: root)
             var failures: [USBFolderDeletionFailure] = []
             for child in children {
                 var coordinationError: NSError?
@@ -140,9 +140,11 @@ actor USBFolderCleanupService {
         }
         defer { stopAccessing(root) }
 
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory),
-              isDirectory.boolValue else {
+        let rootValues = try? root.resourceValues(
+            forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+        )
+        guard rootValues?.isDirectory == true,
+              rootValues?.isSymbolicLink != true else {
             throw USBFolderCleanupError.destinationUnavailable
         }
         if let currentVolumeID = try volumeIdentity(root) {

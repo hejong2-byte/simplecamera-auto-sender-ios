@@ -92,6 +92,26 @@ final class USBFolderCleanupServiceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
     }
 
+    func testSymlinkSelectedAsRootIsRejectedWithoutDeletingTargetContents() async throws {
+        let parent = temporaryDirectory()
+        let target = parent.appendingPathComponent("actual", isDirectory: true)
+        let link = parent.appendingPathComponent("selected-link", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let protectedFile = target.appendingPathComponent("keep.txt")
+        try Data("keep".utf8).write(to: protectedFile)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let service = makeService(volumeID: "volume-1")
+
+        do {
+            _ = try await service.inspect(destination(link, volumeID: "volume-1"))
+            XCTFail("A symbolic-link root must never be used for destructive work")
+        } catch let error as USBFolderCleanupError {
+            XCTAssertEqual(error, .destinationUnavailable)
+        }
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: protectedFile.path))
+    }
+
     private func makeService(volumeID: String) -> USBFolderCleanupService {
         USBFolderCleanupService(
             volumeIdentity: { _ in volumeID },
