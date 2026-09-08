@@ -11,6 +11,8 @@ struct ContentView: View {
     @State private var navigationPath: [Destination] = []
     @State private var pickerKind: ManualMediaKind?
     @State private var readinessMessage: String?
+    @State private var receiveNotice: String?
+    @State private var isAdvancingIncomingPrompt = false
 
     private enum Destination: Hashable {
         case receiver
@@ -128,19 +130,35 @@ struct ContentView: View {
             textModel.setActive(active)
         }
         .confirmationDialog(
-            incomingModel.prompt?.title ?? "PC 파일 도착",
+            incomingDialogTitle,
             isPresented: Binding(
                 get: { incomingModel.prompt != nil && canPresentIncomingFiles },
-                set: { if !$0, canPresentIncomingFiles { incomingModel.postponePrompt() } }
+                set: { presented in
+                    if !presented,
+                       incomingModel.prompt != nil,
+                       canPresentIncomingFiles,
+                       !isAdvancingIncomingPrompt {
+                        postponeIncoming()
+                    }
+                }
             ),
             titleVisibility: .visible,
             presenting: incomingModel.prompt
-        ) { batch in
-            Button("iPhone에 저장") { acceptIncoming(batch, destination: .iphoneLocal) }
-            Button("USB에 저장") { acceptIncoming(batch, destination: .usb) }
-            Button("나중에 받기", role: .cancel) { incomingModel.postponePrompt() }
-        } message: { batch in
-            Text(batch.message)
+        ) { prompt in
+            switch prompt.stage {
+            case .archiveChoice:
+                Button("압축 해제") { acceptExtractedZIP(prompt) }
+                    .accessibilityIdentifier("incoming-zip-extract")
+                Button("ZIP 그대로 저장") { keepIncomingZIP(prompt) }
+                    .accessibilityIdentifier("incoming-zip-keep")
+                Button("나중에 받기", role: .cancel) { postponeIncoming() }
+            case .destinationChoice:
+                Button("iPhone에 저장") { acceptIncoming(prompt, destination: .iphoneLocal) }
+                Button("USB에 저장") { acceptIncoming(prompt, destination: .usb) }
+                Button("나중에 받기", role: .cancel) { postponeIncoming() }
+            }
+        } message: { prompt in
+            Text(incomingDialogMessage(prompt))
         }
         .onDisappear {
             incomingModel.setActive(false)
@@ -160,13 +178,58 @@ struct ContentView: View {
             && !receiverModel.isExportingToUSB && !receiverIsBusy
     }
 
+    private var incomingDialogTitle: String {
+        guard let prompt = incomingModel.prompt else { return "PC 파일 도착" }
+        switch prompt.stage {
+        case .archiveChoice:
+            return "압축을 해제하시겠습니까?"
+        case .destinationChoice:
+            return prompt.title
+        }
+    }
+
+    private func incomingDialogMessage(_ prompt: IPhoneIncomingPrompt) -> String {
+        switch prompt.stage {
+        case .archiveChoice:
+            let names = prompt.files.prefix(3).map(\.fileName).joined(separator: "\n")
+            let remaining = prompt.files.count > 3 ? "\n외 \(prompt.files.count - 3)개" : ""
+            let size = ByteCountFormatter.string(fromByteCount: prompt.totalBytes, countStyle: .file)
+            return "\(names)\(remaining)\n총 \(size)\n압축 해제 시 iPhone 임시 공간을 거쳐 USB/SD에 저장합니다."
+        case .destinationChoice:
+            return prompt.message
+        }
+    }
+
+    private func keepIncomingZIP(_ prompt: IPhoneIncomingPrompt) {
+        receiveNotice = nil
+        isAdvancingIncomingPrompt = true
+        _ = incomingModel.chooseArchiveMode(prompt, mode: .keepArchive)
+        DispatchQueue.main.async { isAdvancingIncomingPrompt = false }
+    }
+
+    private func acceptExtractedZIP(_ prompt: IPhoneIncomingPrompt) {
+        receiveNotice = nil
+        guard incomingModel.chooseArchiveMode(prompt, mode: .extract) else { return }
+        routeIncoming(to: .usb)
+    }
+
     private func acceptIncoming(_ prompt: IPhoneIncomingPrompt, destination: IPhoneReceiveDestination) {
         guard incomingModel.accept(prompt, destination: destination) else { return }
+        receiveNotice = nil
+        routeIncoming(to: destination)
+    }
+
+    private func routeIncoming(to destination: IPhoneReceiveDestination) {
         receiverModel.setSelectedDestination(destination)
         navigationPath = [.receiver]
         if destination == .usb, !receiverModel.hasUSBDestination {
             receiverModel.isChoosingUSBFolder = true
         }
+    }
+
+    private func postponeIncoming() {
+        incomingModel.postponePrompt()
+        receiveNotice = "수신 보류 · 앱을 다시 열면 다시 안내합니다."
     }
 
     private var manualTransferCard: some View {
@@ -222,6 +285,11 @@ struct ContentView: View {
             if let error = incomingModel.lastError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(.red)
+            }
+            if let receiveNotice {
+                Text(receiveNotice)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .cardStyle()
