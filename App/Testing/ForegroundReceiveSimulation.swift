@@ -19,7 +19,8 @@ final class ForegroundReceiveSimulation {
             withTextMessage: arguments.contains("--ui-test-text-message"),
             withSavedTextRecipient: arguments.contains("--ui-test-text-recipient"),
             withZIP: arguments.contains("--ui-test-incoming-zip"),
-            withMultipleIncoming: arguments.contains("--ui-test-multiple-incoming")
+            withMultipleIncoming: arguments.contains("--ui-test-multiple-incoming"),
+            withStorageManagement: arguments.contains("--ui-test-storage-management")
         )
     }()
 
@@ -36,7 +37,8 @@ final class ForegroundReceiveSimulation {
         withTextMessage: Bool,
         withSavedTextRecipient: Bool,
         withZIP: Bool,
-        withMultipleIncoming: Bool
+        withMultipleIncoming: Bool,
+        withStorageManagement: Bool
     ) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let catalog = try IPhoneReceivedFileCatalog(
@@ -168,10 +170,32 @@ final class ForegroundReceiveSimulation {
             now: Date.init,
             send: { _ in SyncTransferSummary(discovered: 0, matched: 0, uploaded: 0, failed: 0) }
         )
+        let bookmarkStore = USBBookmarkStore(
+            fileURL: root.appendingPathComponent("destination.json"),
+            codec: SimulationUSBBookmarkCodec()
+        )
+        if withStorageManagement {
+            let usbRoot = root.appendingPathComponent("SD CARD", isDirectory: true)
+            let nested = usbRoot.appendingPathComponent("nested", isDirectory: true)
+            try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+            try Data("visible".utf8).write(to: usbRoot.appendingPathComponent("visible.bin"))
+            try Data("inside".utf8).write(to: nested.appendingPathComponent("inside.bin"))
+            try bookmarkStore.save(
+                folderURL: usbRoot,
+                volumeID: "simulation-volume",
+                displayName: "SD CARD",
+                formatDescription: "ExFAT"
+            )
+        }
+        let cleanup = USBFolderCleanupService(
+            volumeIdentity: { _ in "simulation-volume" },
+            startAccessing: { _ in true },
+            stopAccessing: { _ in }
+        )
         receiver = USBReceiverViewModel(
             uploadCredentialStore: InMemoryCredentialStore(),
             registrationStore: registration,
-            bookmarkStore: USBBookmarkStore(fileURL: root.appendingPathComponent("destination.json")),
+            bookmarkStore: bookmarkStore,
             registrar: SimulationRegistrar(),
             receiveOnce: {
                 let approved = try choices.allowedDeliveryIDs(receiverID: receiverID, destination: .usb)
@@ -185,6 +209,12 @@ final class ForegroundReceiveSimulation {
             storedFiles: { try catalog.refresh() },
             previewStoredFile: { try catalog.previewURL(for: $0) },
             deleteStoredFiles: { files in catalog.delete(files) },
+            inspectUSBFolder: { destination in
+                try await cleanup.inspect(destination)
+            },
+            deleteUSBFolderContents: { destination, summary in
+                try await cleanup.deleteAllContents(of: destination, matching: summary)
+            },
             progressUpdates: { AsyncStream { $0.finish() } },
             loadOutcome: { id in
                 receiveOutcome?.receiverID == id ? receiveOutcome : nil
@@ -249,6 +279,22 @@ private struct SimulationUploader: UploadCoordinating {
 private struct SimulationRegistrar: IPhoneReceiverRegistering {
     func register(uploadCredential: String, deviceName: String) async throws -> IPhoneReceiverRegistration {
         throw URLError(.unsupportedURL)
+    }
+}
+
+private struct SimulationUSBBookmarkCodec: USBBookmarkCoding {
+    func makeBookmark(for url: URL) throws -> Data {
+        Data(url.path.utf8)
+    }
+
+    func resolve(_ data: Data) throws -> USBBookmarkResolution {
+        guard let path = String(data: data, encoding: .utf8), !path.isEmpty else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return USBBookmarkResolution(
+            url: URL(fileURLWithPath: path, isDirectory: true),
+            isStale: false
+        )
     }
 }
 #endif

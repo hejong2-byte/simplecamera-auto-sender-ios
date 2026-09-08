@@ -169,15 +169,20 @@ final class ProjectSmokeTests: XCTestCase {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        let source = try String(
+        let settings = try String(
             contentsOf: repository.appendingPathComponent("App/UI/SettingsView.swift"),
             encoding: .utf8
         )
+        let storage = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/USBStorageManagementView.swift"),
+            encoding: .utf8
+        )
 
-        XCTAssertTrue(source.contains("파일시스템(참고)"))
-        XCTAssertTrue(source.contains("SD/USB 전체 파일 삭제"))
-        XCTAssertTrue(source.contains("선택한 폴더 자체는 유지"))
-        XCTAssertFalse(source.contains("FAT32 포맷"))
+        XCTAssertTrue(settings.contains("SD/USB 저장장치 관리"))
+        XCTAssertTrue(storage.contains("파일시스템(참고)"))
+        XCTAssertTrue(storage.contains("선택한 저장장치 내용 전체 삭제"))
+        XCTAssertTrue(storage.contains("선택한 폴더 자체와 iPhone 원본은 유지"))
+        XCTAssertFalse(storage.contains("FAT32 포맷"))
     }
 
     func testReceiverReplacesIdentityCardWithSeparateLocalPreviewAction() throws {

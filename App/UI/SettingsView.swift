@@ -1,6 +1,5 @@
 import Photos
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @ObservedObject var model: ContentViewModel
@@ -18,6 +17,7 @@ struct SettingsView: View {
                 monitoringCard
                 automationCard
                 receiverSettingsCard
+                storageManagementCard
                 statusCard
                 recoveryCard
             }
@@ -37,41 +37,10 @@ struct SettingsView: View {
         } message: {
             Text("초기화한 시점 이전 사진은 다시 전송되지 않습니다.")
         }
-        .confirmationDialog(
-            receiverModel.usbFolderDeletionConfirmationTitle,
-            isPresented: Binding(
-                get: { receiverModel.needsUSBFolderDeletionConfirmation },
-                set: { _ in }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("취소", role: .cancel) {
-                receiverModel.cancelUSBFolderDeletion()
-            }
-            Button("모든 파일 삭제", role: .destructive) {
-                Task { await receiverModel.deleteConfirmedUSBFolderContents() }
-            }
-        } message: {
-            Text(receiverModel.usbFolderDeletionConfirmationMessage)
-        }
-        .fileImporter(
-            isPresented: $receiverModel.isChoosingUSBFolder,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
-            guard case let .success(urls) = result, let url = urls.first else { return }
-            Task { await receiverModel.selectDestination(url) }
-        }
         .onChange(of: showingResetConfirmation) { _, showing in
             receiverModel.isShowingSettingsConfirmation = showing
-                || receiverModel.needsUSBFolderDeletionConfirmation
-        }
-        .onChange(of: receiverModel.needsUSBFolderDeletionConfirmation) { _, showing in
-            receiverModel.isShowingSettingsConfirmation = showing
-                || showingResetConfirmation
         }
         .onDisappear {
-            receiverModel.cancelUSBFolderDeletion()
             receiverModel.isShowingSettingsConfirmation = false
         }
     }
@@ -113,57 +82,6 @@ struct SettingsView: View {
 
             Text("새 파일이 도착하면 iPhone 또는 USB 저장을 선택합니다.")
                 .font(.subheadline)
-            Label(
-                receiverModel.usbDisplayName ?? "USB 폴더 미선택",
-                systemImage: "externaldrive"
-            )
-            Label(
-                "파일시스템(참고): \(receiverModel.usbFileSystemDescription ?? "확인 불가")",
-                systemImage: "info.circle"
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            HStack {
-                Button("USB 폴더 선택") { receiverModel.isChoosingUSBFolder = true }
-                    .buttonStyle(.borderedProminent)
-                if receiverModel.hasUSBDestination {
-                    Button("선택 해제", role: .destructive) {
-                        Task { await receiverModel.clearDestination() }
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
-            .disabled(receiverModel.isExportingToUSB
-                || receiverModel.isReceivingFile
-                || receiverModel.isCleaningUSBFolder)
-
-            Button("SD/USB 전체 파일 삭제", role: .destructive) {
-                Task { await receiverModel.prepareUSBFolderDeletion() }
-            }
-            .buttonStyle(.bordered)
-            .disabled(!receiverModel.hasUSBDestination
-                || receiverModel.isExportingToUSB
-                || receiverModel.isReceivingFile
-                || receiverModel.isDeletingStoredFiles
-                || receiverModel.isCleaningUSBFolder)
-            if receiverModel.isInspectingUSBFolderContents {
-                ProgressView("삭제할 파일 확인 중")
-            } else if receiverModel.isDeletingUSBFolderContents {
-                ProgressView("SD/USB 파일 삭제 중")
-            }
-            if let message = receiverModel.usbFolderDeletionMessage {
-                Label(message, systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-            }
-            if let error = receiverModel.usbFolderDeletionError {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-            Text("SD 카드 전체를 비우려면 최상위 폴더를 선택하세요. 선택한 폴더 자체는 유지됩니다.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
 
             Toggle(
                 "셀룰러에서도 파일 수신",
@@ -181,6 +99,29 @@ struct SettingsView: View {
         }
         .cardStyle()
         .task { await receiverModel.refresh() }
+    }
+
+    private var storageManagementCard: some View {
+        NavigationLink {
+            USBStorageManagementView(model: receiverModel)
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("SD/USB 저장장치 관리", systemImage: "externaldrive.fill")
+                        .font(.headline)
+                    Text(receiverModel.usbDisplayName ?? "저장장치 폴더 미선택")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("storage-management")
+        .cardStyle()
     }
 
     private var photoAccessCard: some View {
