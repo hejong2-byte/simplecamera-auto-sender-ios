@@ -19,13 +19,39 @@ final class ProjectSmokeTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 26"))
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.15"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 27"))
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.16"))
         XCTAssertTrue(project.contains("exactVersion: 0.9.20"))
         XCTAssertTrue(project.contains("UIFileSharingEnabled: true"))
         XCTAssertTrue(
             project.contains("INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES")
         )
+    }
+
+    func testReleaseDocumentsRepeatPromptAndDirectZIPExtraction() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let main = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/ContentView.swift"),
+            encoding: .utf8
+        )
+        let install = try String(
+            contentsOf: repository.appendingPathComponent("docs/install.md"),
+            encoding: .utf8
+        )
+        let readme = try String(
+            contentsOf: repository.appendingPathComponent("README.md"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(main.contains("압축을 해제하시겠습니까?"))
+        XCTAssertTrue(main.contains("압축 해제"))
+        XCTAssertTrue(main.contains("ZIP 그대로 저장"))
+        XCTAssertTrue(install.contains("앱이 다시 활성화될 때마다"))
+        XCTAssertTrue(install.contains("iPhone 내부 임시공간"))
+        XCTAssertTrue(install.contains("검증된 압축 해제 폴더"))
+        XCTAssertTrue(readme.contains("현재 버전은 0.3.16(빌드 27)"))
     }
 
     func testReleaseDeclaresModernLaunchScreen() throws {
