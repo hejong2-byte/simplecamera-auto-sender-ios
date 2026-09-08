@@ -610,7 +610,7 @@ final class USBReceiverViewModelTests: XCTestCase {
     }
 
     private func storedFile() throws -> IPhoneStoredFile {
-        let url = temporaryDirectory().appendingPathComponent("local.zip")
+        let url = temporaryDirectory().appendingPathComponent("local.bin")
         let data = Data("unchanged-original".utf8)
         try data.write(to: url)
         return IPhoneStoredFile(
