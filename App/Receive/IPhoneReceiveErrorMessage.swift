@@ -59,6 +59,10 @@ enum IPhoneReceiveErrorMessage {
             return "원본 파일이 변경되었습니다. 삭제하거나 완료 처리하지 않았습니다."
         case IPhoneUSBExportError.copyFailed:
             return "USB 복사에 실패했습니다. 원본 파일과 USB 연결·폴더 권한을 확인해 주세요."
+        case IPhoneUSBExportError.unsafeZIPArchive:
+            return "안전하지 않은 ZIP입니다. 압축을 풀거나 USB에 복사하지 않았습니다."
+        case IPhoneUSBExportError.zipExtractionFailed:
+            return "ZIP 압축 해제에 실패했습니다. 손상 또는 암호화 여부를 확인해 주세요. 원본은 유지했습니다."
         case let IPhoneReceiverClientError.server(statusCode, code):
             if statusCode == 401 || statusCode == 403 {
                 return "인증 오류 (HTTP \(statusCode)) · 수신 기기 등록과 인증값을 확인해 주세요."

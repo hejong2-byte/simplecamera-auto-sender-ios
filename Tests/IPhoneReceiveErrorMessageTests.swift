@@ -17,6 +17,20 @@ final class IPhoneReceiveErrorMessageTests: XCTestCase {
         XCTAssertFalse(message.contains("네트워크"))
     }
 
+    func testZIPExportErrorsExplainSafetyAndPreserveTheOriginal() {
+        let unsafe = IPhoneReceiveErrorMessage.message(
+            IPhoneUSBExportError.unsafeZIPArchive
+        )
+        let damaged = IPhoneReceiveErrorMessage.message(
+            IPhoneUSBExportError.zipExtractionFailed
+        )
+
+        XCTAssertTrue(unsafe.contains("안전하지 않은 ZIP"))
+        XCTAssertTrue(unsafe.contains("복사하지 않았습니다"))
+        XCTAssertTrue(damaged.contains("압축 해제에 실패"))
+        XCTAssertTrue(damaged.contains("원본은 유지"))
+    }
+
     func testServerAuthenticationAndExpiryAreDistinct() {
         XCTAssertTrue(IPhoneReceiveErrorMessage.message(
             IPhoneReceiverClientError.server(statusCode: 503, code: "unavailable")

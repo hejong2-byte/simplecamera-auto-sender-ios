@@ -10,6 +10,8 @@ enum IPhoneUSBExportError: String, Error, Codable, Equatable, Sendable {
     case sourceChanged
     case sizeMismatch
     case shaMismatch
+    case unsafeZIPArchive
+    case zipExtractionFailed
     case copyFailed
 }
 
@@ -123,6 +125,7 @@ actor IPhoneUSBExportService {
     private let stopAccessing: SecurityScopeStop
     private let volumeIdentity: VolumeIdentity
     private let progressStore: USBReceiveProgressStore
+    private let zipWorkingDirectory: URL
     private let now: @Sendable () -> Date
 
     init(
@@ -136,6 +139,8 @@ actor IPhoneUSBExportService {
         },
         volumeIdentity: @escaping VolumeIdentity = IPhoneUSBExportService.systemVolumeIdentity,
         progressStore: USBReceiveProgressStore = USBReceiveProgressStore(),
+        zipWorkingDirectory: URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SimpleCamera-ZIP-Export", isDirectory: true),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.deletionStore = deletionStore
@@ -144,6 +149,7 @@ actor IPhoneUSBExportService {
         self.stopAccessing = stopAccessing
         self.volumeIdentity = volumeIdentity
         self.progressStore = progressStore
+        self.zipWorkingDirectory = zipWorkingDirectory
         self.now = now
     }
 
@@ -268,6 +274,17 @@ actor IPhoneUSBExportService {
         if let record = file.receivedRecord, record.size != sourceSize {
             throw IPhoneUSBExportError.sourceChanged
         }
+        if file.url.pathExtension.caseInsensitiveCompare("zip") == .orderedSame {
+            return try exportZIP(
+                file,
+                to: destination,
+                sourceSize: sourceSize,
+                currentIndex: currentIndex,
+                totalCount: totalCount,
+                completedCount: completedCount,
+                startedAt: startedAt
+            )
+        }
         // Do not reject USB exports based on a capacity estimate. Actual write errors
         // stop the copy, and size/hash verification below gates completion.
 
@@ -330,6 +347,152 @@ actor IPhoneUSBExportService {
             }
             guard try hashFile(finalURL) == sourceSHA else {
                 throw IPhoneUSBExportError.shaMismatch
+            }
+        } catch {
+            try? fileManager.removeItem(at: finalURL)
+            throw error
+        }
+
+        let decision = IPhoneUSBDeletionDecision(
+            id: UUID(),
+            sourceID: file.id,
+            sourceURL: file.url,
+            sourceSize: sourceSize,
+            sourceSHA256: sourceSHA,
+            usbStoredName: storedName,
+            verifiedAt: now()
+        )
+        try deletionStore.save(decision)
+        return decision
+    }
+
+    private func exportZIP(
+        _ file: IPhoneStoredFile,
+        to destination: USBBookmarkDestination,
+        sourceSize: Int64,
+        currentIndex: Int,
+        totalCount: Int,
+        completedCount: Int,
+        startedAt: Date
+    ) throws -> IPhoneUSBDeletionDecision {
+        let sourceSHA = try hashFile(file.url)
+        if let expected = file.receivedRecord?.sha256.lowercased(), expected != sourceSHA {
+            throw IPhoneUSBExportError.shaMismatch
+        }
+
+        try fileManager.createDirectory(
+            at: zipWorkingDirectory,
+            withIntermediateDirectories: true
+        )
+        let extractionRoot = zipWorkingDirectory.appendingPathComponent(
+            "extract-\(UUID().uuidString.lowercased())",
+            isDirectory: true
+        )
+        defer { try? fileManager.removeItem(at: extractionRoot) }
+
+        let extraction: SafeZIPExtraction
+        do {
+            extraction = try SafeZIPExtractor(fileManager: fileManager)
+                .extract(file.url, to: extractionRoot)
+        } catch SafeZIPExtractorError.unsafeArchive {
+            throw IPhoneUSBExportError.unsafeZIPArchive
+        } catch SafeZIPExtractorError.extractionFailed {
+            throw IPhoneUSBExportError.zipExtractionFailed
+        }
+
+        guard try fileSize(file.url) == sourceSize,
+              try hashFile(file.url) == sourceSHA else {
+            throw IPhoneUSBExportError.sourceChanged
+        }
+
+        let partialDirectory = destination.url.appendingPathComponent(
+            Self.partialDirectoryName,
+            isDirectory: true
+        )
+        try fileManager.createDirectory(
+            at: partialDirectory,
+            withIntermediateDirectories: true
+        )
+        let partialURL = partialDirectory.appendingPathComponent(
+            "export-\(UUID().uuidString.lowercased()).partial",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: partialURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: partialURL) }
+
+        for relativePath in extraction.directories {
+            try fileManager.createDirectory(
+                at: partialURL.appendingPathComponent(relativePath, isDirectory: true),
+                withIntermediateDirectories: true
+            )
+        }
+
+        var copiedBytes: Int64 = 0
+        var copiedFiles: [(path: String, size: Int64, sha256: String)] = []
+        for extractedFile in extraction.files {
+            let partialFile = partialURL.appendingPathComponent(extractedFile.relativePath)
+            try fileManager.createDirectory(
+                at: partialFile.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            guard fileManager.createFile(atPath: partialFile.path, contents: nil) else {
+                throw IPhoneUSBExportError.destinationNotWritable
+            }
+            let copiedSHA = try copyAndHash(
+                source: extractedFile.url,
+                destination: partialFile,
+                progress: { bytes in
+                    self.publish(
+                        file: file,
+                        currentIndex: currentIndex,
+                        totalCount: totalCount,
+                        completedCount: completedCount,
+                        bytes: copiedBytes + bytes,
+                        totalBytes: extraction.totalBytes,
+                        startedAt: startedAt
+                    )
+                }
+            )
+            guard try fileSize(partialFile) == extractedFile.size else {
+                throw IPhoneUSBExportError.sizeMismatch
+            }
+            copiedBytes += extractedFile.size
+            copiedFiles.append((
+                path: extractedFile.relativePath,
+                size: extractedFile.size,
+                sha256: copiedSHA
+            ))
+        }
+
+        let requestedFolderName = (file.name as NSString)
+            .deletingPathExtension
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let storedName = try IPhoneLocalFileNaming.availableName(
+            requestedName: requestedFolderName.isEmpty ? "압축해제" : requestedFolderName,
+            in: destination.url,
+            fileManager: fileManager
+        )
+        let finalURL = destination.url.appendingPathComponent(storedName, isDirectory: true)
+        try coordinatedMove(from: partialURL, to: finalURL)
+        publish(
+            file: file,
+            currentIndex: currentIndex,
+            totalCount: totalCount,
+            completedCount: completedCount,
+            bytes: extraction.totalBytes,
+            totalBytes: extraction.totalBytes,
+            startedAt: startedAt,
+            stage: .verifying
+        )
+        do {
+            for copiedFile in copiedFiles {
+                let finalFile = finalURL.appendingPathComponent(copiedFile.path)
+                guard try fileSize(finalFile) == copiedFile.size else {
+                    throw IPhoneUSBExportError.sizeMismatch
+                }
+                guard try hashFile(finalFile) == copiedFile.sha256 else {
+                    throw IPhoneUSBExportError.shaMismatch
+                }
             }
         } catch {
             try? fileManager.removeItem(at: finalURL)
@@ -443,6 +606,7 @@ actor IPhoneUSBExportService {
         totalCount: Int,
         completedCount: Int,
         bytes: Int64,
+        totalBytes: Int64? = nil,
         startedAt: Date,
         stage: USBReceiveStage = .copyingToUSB
     ) {
@@ -455,7 +619,7 @@ actor IPhoneUSBExportService {
             totalCount: totalCount,
             completedCount: completedCount,
             bytesReceived: bytes,
-            totalBytes: file.size,
+            totalBytes: totalBytes ?? file.size,
             startedAt: startedAt,
             expiresAt: nil,
             errorMessage: nil
