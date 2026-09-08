@@ -64,6 +64,39 @@ final class USBReceiveLedgerTests: XCTestCase {
         )
     }
 
+    func testArchiveModeRoundTripsAndLegacyCheckpointDefaultsToKeepArchive() throws {
+        let directory = temporaryDirectory()
+        let fileURL = directory.appendingPathComponent("ledger.json")
+        let ledger = try USBReceiveLedger(fileURL: fileURL)
+        let checkpoint = USBReceiveCheckpoint(
+            deliveryID: UUID(),
+            fileName: "업무자료.zip",
+            sha256: String(repeating: "a", count: 64),
+            totalBytes: 10,
+            confirmedOffset: 10,
+            destinationVolumeID: "usb",
+            finalFileName: "업무자료",
+            state: .ackPending,
+            archiveMode: .extract
+        )
+        try ledger.save(checkpoint)
+        XCTAssertEqual(
+            try USBReceiveLedger(fileURL: fileURL)
+                .checkpoint(for: checkpoint.deliveryID)?.archiveMode,
+            .extract
+        )
+
+        let legacyURL = directory.appendingPathComponent("legacy.json")
+        let legacy = """
+        [{"deliveryID":"\(UUID().uuidString)","fileName":"old.zip","sha256":"\(String(repeating: "b", count: 64))","totalBytes":1,"confirmedOffset":0,"destinationVolumeID":"usb","finalFileName":"old.zip","state":"downloading"}]
+        """
+        try Data(legacy.utf8).write(to: legacyURL)
+        XCTAssertEqual(
+            try USBReceiveLedger(fileURL: legacyURL).allCheckpoints().first?.archiveMode,
+            .keepArchive
+        )
+    }
+
     private func temporaryDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

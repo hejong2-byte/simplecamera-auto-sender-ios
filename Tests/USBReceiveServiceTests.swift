@@ -204,6 +204,84 @@ final class USBReceiveServiceTests: XCTestCase {
         XCTAssertNil(fixture.ledger.checkpoint(for: fixture.delivery.deliveryID))
     }
 
+    func testExtractDecisionDownloadsPrivatelyCommitsFolderThenAcknowledges() async throws {
+        let fixture = try makeFixture(
+            payload: validZIPData(),
+            fileName: "업무자료.zip",
+            chunkSize: 32,
+            archiveMode: .extract
+        )
+        let updates = fixture.progressStore.updates()
+
+        let summary = try await fixture.service.runOnce()
+
+        XCTAssertEqual(summary, USBReceiveSummary(discovered: 1, completed: 1))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.destination.appendingPathComponent("업무자료.zip").path
+        ))
+        XCTAssertEqual(
+            try Data(contentsOf: fixture.destination.appendingPathComponent("업무자료/docs/report.txt")),
+            Data("report-data".utf8)
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: fixture.destination.appendingPathComponent("업무자료/root.txt")),
+            Data("root-data".utf8)
+        )
+        XCTAssertEqual(
+            await fixture.client.acknowledgementRecords().first?.storedName,
+            "업무자료"
+        )
+        XCTAssertNil(fixture.ledger.checkpoint(for: fixture.delivery.deliveryID))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.stagedZIP.path))
+
+        fixture.progressStore.publishFailure("end-of-test")
+        var stages: [USBReceiveStage] = []
+        for await progress in updates {
+            if progress.errorMessage == "end-of-test" { break }
+            stages.append(progress.stage)
+        }
+        XCTAssertTrue(stages.contains(.extracting))
+        XCTAssertTrue(stages.contains(.copyingToUSB))
+        XCTAssertTrue(stages.contains(.verifying))
+        XCTAssertTrue(stages.contains(.acknowledging))
+    }
+
+    func testExtractAckFailureRetainsPrivateZIPAndRetriesWithoutDownload() async throws {
+        let fixture = try makeFixture(
+            payload: validZIPData(),
+            fileName: "재시도.zip",
+            chunkSize: 32,
+            ackFailures: 1,
+            archiveMode: .extract
+        )
+
+        do {
+            _ = try await fixture.service.runOnce()
+            XCTFail("Expected first ACK to fail")
+        } catch StubReceiverError.ackFailed {
+            // Expected.
+        }
+        let firstRanges = await fixture.client.requestedRanges()
+        XCTAssertEqual(
+            fixture.ledger.checkpoint(for: fixture.delivery.deliveryID)?.state,
+            .ackPending
+        )
+        XCTAssertEqual(
+            fixture.ledger.checkpoint(for: fixture.delivery.deliveryID)?.archiveMode,
+            .extract
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.stagedZIP.path))
+        await fixture.client.clearInbox()
+
+        let summary = try await fixture.service.runOnce()
+
+        XCTAssertEqual(summary.completed, 1)
+        XCTAssertEqual(await fixture.client.requestedRanges(), firstRanges)
+        XCTAssertEqual(await fixture.client.ackAttemptCount(), 2)
+        XCTAssertNil(fixture.ledger.checkpoint(for: fixture.delivery.deliveryID))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.stagedZIP.path))
+    }
+
     func testRunOnceTruncatesUnconfirmedTailAndResumesFromSafeBoundary() async throws {
         let payload = zipPayload(count: 25)
         let fixture = try makeFixture(payload: payload, fileName: "resume.zip", chunkSize: 8)
@@ -445,7 +523,8 @@ final class USBReceiveServiceTests: XCTestCase {
         ackFailures: Int = 0,
         destinationIsStale: Bool = false,
         canAccessSecurityScope: Bool = true,
-        currentVolumeID: String = "test-volume"
+        currentVolumeID: String = "test-volume",
+        archiveMode: IPhoneReceiveArchiveMode = .keepArchive
     ) throws -> Fixture {
         let destination = temporaryDirectory()
         let delivery = IPhoneDelivery(
@@ -477,6 +556,7 @@ final class USBReceiveServiceTests: XCTestCase {
             secret: "receive-secret"
         )
         let progressStore = USBReceiveProgressStore()
+        let zipStagingDirectory = temporaryDirectory()
         let service = USBReceiveService(
             client: client,
             ledger: ledger,
@@ -493,7 +573,13 @@ final class USBReceiveServiceTests: XCTestCase {
             volumeIdentity: { _ in currentVolumeID },
             startAccessing: { _ in canAccessSecurityScope },
             stopAccessing: { _ in },
-            progressStore: progressStore
+            progressStore: progressStore,
+            receiveDecision: { _, deliveryID in
+                deliveryID == delivery.deliveryID
+                    ? IPhoneReceiveDecision(destination: .usb, archiveMode: archiveMode)
+                    : nil
+            },
+            zipStagingDirectory: zipStagingDirectory
         )
         return Fixture(
             client: client,
@@ -502,7 +588,10 @@ final class USBReceiveServiceTests: XCTestCase {
             destination: destination,
             delivery: delivery,
             payload: payload,
-            progressStore: progressStore
+            progressStore: progressStore,
+            stagedZIP: zipStagingDirectory.appendingPathComponent(
+                delivery.deliveryID.uuidString.lowercased() + ".zip.partial"
+            )
         )
     }
 
@@ -526,6 +615,12 @@ final class USBReceiveServiceTests: XCTestCase {
         precondition(count >= 4)
         return Data([0x50, 0x4b, 0x03, 0x04])
             + Data(repeating: 0x5a, count: count - 4)
+    }
+
+    private func validZIPData() -> Data {
+        Data(base64Encoded:
+            "UEsDBBQAAAAIANJIKF03rc1dEwAAAAsAAAAPAAAAZG9jcy9yZXBvcnQudHh0KkotyC8q0U1JLEkEAAAA//8DAFBLAwQUAAAACADSSChd+/k8aREAAAAJAAAACAAAAHJvb3QudHh0KsrPL9FNSSxJBAAAAP//AwBQSwECFAAUAAAACADSSChdN63NXRMAAAALAAAADwAAAAAAAAAAAAAAAAAAAAAAZG9jcy9yZXBvcnQudHh0UEsBAhQAFAAAAAgA0kgoXfv5PGkRAAAACQAAAAgAAAAAAAAAAAAAAAAAQAAAAHJvb3QudHh0UEsFBgAAAAACAAIAcwAAAHcAAAAAAA=="
+        )!
     }
 
     private func sha256(_ data: Data) -> String {
@@ -552,6 +647,7 @@ private struct Fixture {
     let delivery: IPhoneDelivery
     let payload: Data
     let progressStore: USBReceiveProgressStore
+    let stagedZIP: URL
 }
 
 private actor StubReceiverClient: IPhoneReceiverServing {
