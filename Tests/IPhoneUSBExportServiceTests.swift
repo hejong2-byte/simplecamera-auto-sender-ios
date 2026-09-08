@@ -8,7 +8,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         let context = try makeContext()
         let payload = Data(repeating: 0x5a, count: 2 * 1_024 * 1_024 + 17)
         let file = try makeStoredFile(
-            name: "large-test.zip",
+            name: "large-test.bin",
             data: payload,
             in: context.sourceDirectory
         )
@@ -45,7 +45,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         )
         let payload = Data("original-local-file".utf8)
         let file = try makeStoredFile(
-            name: "local.zip",
+            name: "local.bin",
             data: payload,
             in: context.sourceDirectory
         )
@@ -61,6 +61,85 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
                 payload
             )
         }
+    }
+
+    func testZIPExportExtractsIntoNamedUSBFolderKeepsOriginalAndCleansWorkingFiles() async throws {
+        let context = try makeContext()
+        let archiveData = try XCTUnwrap(Data(base64Encoded:
+            "UEsDBBQAAAAIANJIKF03rc1dEwAAAAsAAAAPAAAAZG9jcy9yZXBvcnQudHh0KkotyC8q0U1JLEkEAAAA//8DAFBLAwQUAAAACADSSChd+/k8aREAAAAJAAAACAAAAHJvb3QudHh0KsrPL9FNSSxJBAAAAP//AwBQSwECFAAUAAAACADSSChdN63NXRMAAAALAAAADwAAAAAAAAAAAAAAAAAAAAAAZG9jcy9yZXBvcnQudHh0UEsBAhQAFAAAAAgA0kgoXfv5PGkRAAAACQAAAAgAAAAAAAAAAAAAAAAAQAAAAHJvb3QudHh0UEsFBgAAAAACAAIAcwAAAHcAAAAAAA=="
+        ))
+        let file = try makeStoredFile(
+            name: "업무자료.ZIP",
+            data: archiveData,
+            in: context.sourceDirectory
+        )
+
+        let summary = await context.service.export([file], to: context.destination)
+
+        XCTAssertEqual(summary.failed, [])
+        let decision = try XCTUnwrap(summary.verified.first)
+        XCTAssertEqual(decision.sourceID, file.id)
+        XCTAssertEqual(decision.usbStoredName, "업무자료")
+        XCTAssertEqual(try Data(contentsOf: file.url), archiveData, "The received ZIP must remain unchanged")
+        let exportedFolder = context.usbDirectory.appendingPathComponent(decision.usbStoredName)
+        XCTAssertEqual(
+            try Data(contentsOf: exportedFolder.appendingPathComponent("docs/report.txt")),
+            Data("report-data".utf8)
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: exportedFolder.appendingPathComponent("root.txt")),
+            Data("root-data".utf8)
+        )
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: context.zipWorkingDirectory.path),
+            [],
+            "Temporary extracted files must be removed after verified USB copy"
+        )
+    }
+
+    func testUnsafeZIPPathFailsWithoutLeavingUSBOrWorkingFiles() async throws {
+        let context = try makeContext()
+        let archiveData = try XCTUnwrap(Data(base64Encoded:
+            "UEsDBBQAAAAIANJIKF1Oa16IFQAAAA0AAAAQAAAALi4vLi4vZXNjYXBlLnR4dErJ183LL9FNLU5OLEgFAAAA//8DAFBLAQIUABQAAAAIANJIKF1Oa16IFQAAAA0AAAAQAAAAAAAAAAAAAAAAAAAAAAAuLi8uLi9lc2NhcGUudHh0UEsFBgAAAAABAAEAPgAAAEMAAAAAAA=="
+        ))
+        let file = try makeStoredFile(
+            name: "unsafe.zip",
+            data: archiveData,
+            in: context.sourceDirectory
+        )
+
+        let summary = await context.service.export([file], to: context.destination)
+
+        XCTAssertEqual(summary.verified, [])
+        XCTAssertEqual(summary.failed.map(\.error), [.unsafeZIPArchive])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: context.zipWorkingDirectory.deletingLastPathComponent()
+                .appendingPathComponent("escape.txt").path
+        ))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: context.zipWorkingDirectory.path), [])
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: context.usbDirectory.path)
+                .filter { $0 != IPhoneUSBExportService.partialDirectoryName },
+            []
+        )
+    }
+
+    func testCorruptZIPFailsAndCleansTemporaryFilesWithoutDeletingOriginal() async throws {
+        let context = try makeContext()
+        let archiveData = Data("not-a-zip".utf8)
+        let file = try makeStoredFile(
+            name: "damaged.zip",
+            data: archiveData,
+            in: context.sourceDirectory
+        )
+
+        let summary = await context.service.export([file], to: context.destination)
+
+        XCTAssertEqual(summary.verified, [])
+        XCTAssertEqual(summary.failed.map(\.error), [.zipExtractionFailed])
+        XCTAssertEqual(try Data(contentsOf: file.url), archiveData)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: context.zipWorkingDirectory.path), [])
     }
 
     func testMissingVolumeMetadataDoesNotAcceptDifferentSavedIdentity() async throws {
@@ -82,7 +161,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
     func testAccessFailureReportsTheActualReasonAndFileName() async throws {
         let context = try makeContext(canAccessSecurityScope: false)
         let file = try makeStoredFile(
-            name: "cannot-copy.zip",
+            name: "cannot-copy.bin",
             data: Data("keep-original".utf8),
             in: context.sourceDirectory
         )
@@ -163,7 +242,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         let context = try makeContext(fileManager: fileManager)
         let payload = Data(repeating: 0x5a, count: 1_024 * 1_024 + 31)
         let file = try makeStoredFile(
-            name: "capacity-report.zip",
+            name: "capacity-report.bin",
             data: payload,
             in: context.sourceDirectory
         )
@@ -197,7 +276,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             let context = try makeContext(fileManager: DiskFullUSBFileManager(error: error))
             let payload = Data(repeating: 0x3c, count: 1_024 * 1_024 + 31)
             let file = try makeStoredFile(
-                name: "keep-original.zip",
+                name: "keep-original.bin",
                 data: payload,
                 in: context.sourceDirectory
             )
@@ -317,8 +396,10 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         let root = temporaryDirectory()
         let sourceDirectory = root.appendingPathComponent("received", isDirectory: true)
         let usbDirectory = root.appendingPathComponent("usb", isDirectory: true)
+        let zipWorkingDirectory = root.appendingPathComponent("zip-work", isDirectory: true)
         try FileManager.default.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: usbDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: zipWorkingDirectory, withIntermediateDirectories: true)
         let deletionStore = try IPhoneUSBDeletionDecisionStore(
             fileURL: root.appendingPathComponent("decisions.json")
         )
@@ -330,11 +411,13 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             stopAccessing: { _ in },
             volumeIdentity: volumeIdentity,
             progressStore: progressStore,
+            zipWorkingDirectory: zipWorkingDirectory,
             now: { Date(timeIntervalSince1970: 456) }
         )
         return ExportContext(
             sourceDirectory: sourceDirectory,
             usbDirectory: usbDirectory,
+            zipWorkingDirectory: zipWorkingDirectory,
             destination: USBBookmarkDestination(
                 url: usbDirectory,
                 volumeID: destinationVolumeID ?? usbDirectory.path,
@@ -389,6 +472,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
 private struct ExportContext {
     let sourceDirectory: URL
     let usbDirectory: URL
+    let zipWorkingDirectory: URL
     let destination: USBBookmarkDestination
     let deletionStore: IPhoneUSBDeletionDecisionStore
     let service: IPhoneUSBExportService
