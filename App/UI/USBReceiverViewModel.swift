@@ -33,6 +33,13 @@ final class USBReceiverViewModel: ObservableObject {
     typealias PendingDeletionDecisions = @Sendable () -> [IPhoneUSBDeletionDecision]
     typealias KeepOriginals = @Sendable (Set<UUID>) async throws -> Void
     typealias DeleteOriginals = @Sendable (Set<UUID>) async -> IPhoneUSBDeletionSummary
+    typealias InspectUSBFolder = @Sendable (
+        USBBookmarkDestination
+    ) async throws -> USBFolderContentsSummary
+    typealias DeleteUSBFolderContents = @Sendable (
+        USBBookmarkDestination,
+        USBFolderContentsSummary
+    ) async throws -> USBFolderDeletionSummary
     typealias RefreshFeatures = @Sendable () async throws -> Void
     typealias ProgressUpdates = @Sendable () -> AsyncStream<USBReceiveProgress>
     typealias LoadOutcome = @Sendable (UUID) -> IPhoneReceiveOutcome?
@@ -44,6 +51,7 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var registrationCode: String?
     @Published private(set) var deviceName: String?
     @Published private(set) var usbDisplayName: String?
+    @Published private(set) var usbFileSystemDescription: String?
     @Published private(set) var receiveProgress: USBReceiveProgress?
     @Published private(set) var receiveOutcome: IPhoneReceiveOutcome?
     @Published private(set) var usbExportProgress: USBReceiveProgress?
@@ -68,6 +76,11 @@ final class USBReceiverViewModel: ObservableObject {
     @Published var isChoosingUSBFolder = false
     @Published var isShowingSettingsConfirmation = false
     @Published private(set) var isPerformingReceive = false
+    @Published private(set) var isInspectingUSBFolderContents = false
+    @Published private(set) var isDeletingUSBFolderContents = false
+    @Published private(set) var usbFolderContentsPendingDeletion: USBFolderContentsSummary?
+    @Published private(set) var usbFolderDeletionMessage: String?
+    @Published private(set) var usbFolderDeletionError: String?
 
     private enum USBFallbackMode {
         case none
@@ -90,6 +103,8 @@ final class USBReceiverViewModel: ObservableObject {
     private let pendingDeletionDecisions: PendingDeletionDecisions
     private let keepOriginalFiles: KeepOriginals
     private let deleteOriginalFiles: DeleteOriginals
+    private let inspectUSBFolder: InspectUSBFolder
+    private let deleteUSBFolderContents: DeleteUSBFolderContents
     private let refreshFeatures: RefreshFeatures
     private let loadOutcome: LoadOutcome
     private let saveOutcome: SaveOutcome
@@ -104,6 +119,7 @@ final class USBReceiverViewModel: ObservableObject {
     private var fallbackMode: USBFallbackMode = .none
     private var promptedDeliveryIDs: Set<UUID> = []
     private var receiverID: UUID?
+    private var usbDestinationPendingDeletion: USBBookmarkDestination?
 
     init(
         uploadCredentialStore: CredentialStore,
@@ -129,6 +145,12 @@ final class USBReceiverViewModel: ObservableObject {
         keepOriginals: @escaping KeepOriginals = { _ in },
         deleteOriginals: @escaping DeleteOriginals = { _ in
             IPhoneUSBDeletionSummary(deletedSourceIDs: [], failed: [])
+        },
+        inspectUSBFolder: @escaping InspectUSBFolder = { _ in
+            throw CocoaError(.featureUnsupported)
+        },
+        deleteUSBFolderContents: @escaping DeleteUSBFolderContents = { _, _ in
+            throw CocoaError(.featureUnsupported)
         },
         refreshFeatures: @escaping RefreshFeatures = {},
         progressUpdates: @escaping ProgressUpdates,
@@ -157,6 +179,8 @@ final class USBReceiverViewModel: ObservableObject {
         self.pendingDeletionDecisions = pendingDeletionDecisions
         self.keepOriginalFiles = keepOriginals
         self.deleteOriginalFiles = deleteOriginals
+        self.inspectUSBFolder = inspectUSBFolder
+        self.deleteUSBFolderContents = deleteUSBFolderContents
         self.refreshFeatures = refreshFeatures
         self.loadOutcome = loadOutcome
         self.saveOutcome = saveOutcome
@@ -194,6 +218,14 @@ final class USBReceiverViewModel: ObservableObject {
     var hasUSBDestination: Bool { usbDisplayName != nil }
     var hasStoredFileSelection: Bool { !selectedStoredFileIDs.isEmpty }
     var needsStoredFileDeletionConfirmation: Bool { !storedFilesPendingDeletion.isEmpty }
+    var needsUSBFolderDeletionConfirmation: Bool {
+        usbFolderContentsPendingDeletion != nil
+    }
+    var isCleaningUSBFolder: Bool {
+        isInspectingUSBFolderContents
+            || isDeletingUSBFolderContents
+            || needsUSBFolderDeletionConfirmation
+    }
     var canDeleteStoredFiles: Bool {
         hasStoredFileSelection && !isDeletingStoredFiles
     }
@@ -315,6 +347,7 @@ final class USBReceiverViewModel: ObservableObject {
             }
             let destination = try bookmarkStore.resolve()
             usbDisplayName = destination?.displayName
+            usbFileSystemDescription = destination?.formatDescription
             if selectedDestination == .usb, destination?.isStale == true {
                 lastError = "USB 폴더 권한이 만료되었습니다. 폴더를 다시 선택해 주세요."
             }
@@ -362,6 +395,7 @@ final class USBReceiverViewModel: ObservableObject {
             try bookmarkStore.save(folderURL: url)
             let destination = try bookmarkStore.resolve()
             usbDisplayName = destination?.displayName
+            usbFileSystemDescription = destination?.formatDescription
             lastError = destination?.isStale == true
                 ? "USB 폴더 권한이 만료되었습니다. 다시 선택해 주세요."
                 : nil
@@ -375,6 +409,10 @@ final class USBReceiverViewModel: ObservableObject {
         do {
             try bookmarkStore.clear()
             usbDisplayName = nil
+            usbFileSystemDescription = nil
+            cancelUSBFolderDeletion()
+            usbFolderDeletionMessage = nil
+            usbFolderDeletionError = nil
             lastError = nil
         } catch {
             lastError = "USB 폴더 설정을 지우지 못했습니다."
@@ -418,7 +456,8 @@ final class USBReceiverViewModel: ObservableObject {
     func pollOnce() async {
         guard !isExportingToUSB, !isPerformingReceive, !isChoosingUSBFolder,
               !needsLocalFallbackDecision, !needsDeletionDecision,
-              !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation else { return }
+              !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation,
+              !isCleaningUSBFolder else { return }
         isPerformingReceive = true
         defer { isPerformingReceive = false }
         do {
@@ -479,7 +518,7 @@ final class USBReceiverViewModel: ObservableObject {
     func requestStoredFileDeletion() {
         guard canDeleteStoredFiles, !needsStoredFileDeletionConfirmation,
               !isChoosingUSBFolder, !needsDeletionDecision,
-              !needsLocalFallbackDecision else { return }
+              !needsLocalFallbackDecision, !isCleaningUSBFolder else { return }
         guard !isReceivingFile, !isExportingToUSB else {
             storedFileDeletionError = "전송 중에는 삭제할 수 없습니다. 전송이 끝난 뒤 다시 눌러 주세요."
             return
@@ -493,7 +532,8 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     func deleteConfirmedStoredFiles() async {
-        guard !storedFilesPendingDeletion.isEmpty, !isDeletingStoredFiles else { return }
+        guard !storedFilesPendingDeletion.isEmpty, !isDeletingStoredFiles,
+              !isCleaningUSBFolder else { return }
         guard !isReceivingFile, !isExportingToUSB else {
             storedFilesPendingDeletion = []
             storedFileDeletionError = "전송 중에는 삭제할 수 없습니다. 전송이 끝난 뒤 다시 눌러 주세요."
@@ -530,7 +570,8 @@ final class USBReceiverViewModel: ObservableObject {
 
     func exportSelectedFilesToUSB() async {
         guard !isExportingToUSB, !isReceivingFile,
-              !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation else { return }
+              !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation,
+              !isCleaningUSBFolder else { return }
         let selected = storedFiles.filter { selectedStoredFileIDs.contains($0.id) }
         guard !selected.isEmpty else { return }
         isExportingToUSB = true
@@ -591,6 +632,90 @@ final class USBReceiverViewModel: ObservableObject {
             usbExportProgress = nil
             usbExportCompletionMessage = "USB 복사 완료 · iPhone 원본 \(summary.deletedSourceIDs.count)개 삭제됨"
         }
+    }
+
+    func prepareUSBFolderDeletion() async {
+        guard !isCleaningUSBFolder, !isChoosingUSBFolder,
+              !isPerformingReceive, !isReceivingFile,
+              !isExportingToUSB, !isDeletingStoredFiles,
+              !needsStoredFileDeletionConfirmation,
+              !needsDeletionDecision, !needsLocalFallbackDecision else { return }
+        isInspectingUSBFolderContents = true
+        usbFolderDeletionMessage = nil
+        usbFolderDeletionError = nil
+        defer { isInspectingUSBFolderContents = false }
+        do {
+            guard let destination = try bookmarkStore.resolve() else {
+                throw USBReceiveServiceError.missingDestination
+            }
+            let summary = try await inspectUSBFolder(destination)
+            usbFileSystemDescription = summary.fileSystemDescription
+                ?? destination.formatDescription
+            guard summary.totalItemCount > 0 else {
+                usbFolderDeletionMessage = "선택한 SD/USB 폴더가 이미 비어 있습니다."
+                return
+            }
+            usbDestinationPendingDeletion = destination
+            usbFolderContentsPendingDeletion = summary
+        } catch {
+            usbFolderDeletionError = Self.message(for: error)
+        }
+    }
+
+    func cancelUSBFolderDeletion() {
+        usbDestinationPendingDeletion = nil
+        usbFolderContentsPendingDeletion = nil
+    }
+
+    func deleteConfirmedUSBFolderContents() async {
+        guard !isDeletingUSBFolderContents,
+              let confirmedDestination = usbDestinationPendingDeletion,
+              let confirmedSummary = usbFolderContentsPendingDeletion else { return }
+        cancelUSBFolderDeletion()
+        guard !isPerformingReceive, !isReceivingFile,
+              !isExportingToUSB, !isDeletingStoredFiles else {
+            usbFolderDeletionError = "전송 중에는 SD/USB 파일을 삭제할 수 없습니다."
+            return
+        }
+        isDeletingUSBFolderContents = true
+        usbFolderDeletionMessage = nil
+        usbFolderDeletionError = nil
+        defer { isDeletingUSBFolderContents = false }
+        do {
+            guard let currentDestination = try bookmarkStore.resolve() else {
+                throw USBReceiveServiceError.missingDestination
+            }
+            guard currentDestination.volumeID == confirmedDestination.volumeID,
+                  currentDestination.url.standardizedFileURL.path
+                    == confirmedDestination.url.standardizedFileURL.path else {
+                throw USBFolderCleanupError.destinationChanged
+            }
+            let result = try await deleteUSBFolderContents(
+                currentDestination,
+                confirmedSummary
+            )
+            if result.failures.isEmpty, result.remainingItemCount == 0 {
+                usbFolderDeletionMessage = "SD/USB 파일 \(result.deletedItemCount)개 삭제 완료"
+            } else {
+                let firstFailure = result.failures.first?.message
+                    ?? "삭제되지 않은 항목이 \(result.remainingItemCount)개 있습니다."
+                usbFolderDeletionError = "일부 파일을 삭제하지 못했습니다. \(firstFailure)"
+            }
+        } catch {
+            usbFolderDeletionError = Self.message(for: error)
+        }
+    }
+
+    var usbFolderDeletionConfirmationTitle: String {
+        guard let summary = usbFolderContentsPendingDeletion else {
+            return "SD/USB 전체 파일 삭제"
+        }
+        return "‘\(summary.folderName)’의 모든 파일을 삭제할까요?"
+    }
+
+    var usbFolderDeletionConfirmationMessage: String {
+        guard let summary = usbFolderContentsPendingDeletion else { return "" }
+        return "파일 \(summary.fileCount)개 · 폴더 \(summary.directoryCount)개 · \(Self.byteText(summary.totalBytes))\n\n선택한 폴더 자체는 유지되며, iPhone에 저장된 파일은 삭제하지 않습니다. 이 작업은 되돌릴 수 없습니다."
     }
 
     var usbExportStageTitle: String {

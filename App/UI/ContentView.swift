@@ -155,6 +155,7 @@ struct ContentView: View {
             && !filePickerModel.isPresenting
             && !receiverModel.isChoosingUSBFolder && !receiverModel.isShowingSettingsConfirmation
             && !receiverModel.isDeletingStoredFiles && !receiverModel.needsStoredFileDeletionConfirmation
+            && !receiverModel.isCleaningUSBFolder
             && receiverModel.previewFile == nil && receiverModel.storedFilePreviewError == nil
             && !receiverModel.isExportingToUSB && !receiverIsBusy
     }

@@ -36,6 +36,21 @@ struct USBBookmarkDestination: Equatable, Sendable {
     let volumeID: String
     let displayName: String
     let isStale: Bool
+    let formatDescription: String?
+
+    init(
+        url: URL,
+        volumeID: String,
+        displayName: String,
+        isStale: Bool,
+        formatDescription: String? = nil
+    ) {
+        self.url = url
+        self.volumeID = volumeID
+        self.displayName = displayName
+        self.isStale = isStale
+        self.formatDescription = formatDescription
+    }
 }
 
 final class USBBookmarkStore: @unchecked Sendable {
@@ -43,6 +58,7 @@ final class USBBookmarkStore: @unchecked Sendable {
         let bookmark: Data
         let volumeID: String
         let displayName: String
+        let formatDescription: String?
     }
 
     private let fileURL: URL
@@ -58,20 +74,30 @@ final class USBBookmarkStore: @unchecked Sendable {
         let values = try folderURL.resourceValues(
             forKeys: [.volumeIdentifierKey, .nameKey]
         )
+        let formatValues = try? folderURL.resourceValues(
+            forKeys: [.volumeLocalizedFormatDescriptionKey]
+        )
         let volumeID = values.volumeIdentifier.map { String(describing: $0) }
             ?? folderURL.path
         try save(
             folderURL: folderURL,
             volumeID: volumeID,
-            displayName: values.name ?? folderURL.lastPathComponent
+            displayName: values.name ?? folderURL.lastPathComponent,
+            formatDescription: formatValues?.volumeLocalizedFormatDescription
         )
     }
 
-    func save(folderURL: URL, volumeID: String, displayName: String) throws {
+    func save(
+        folderURL: URL,
+        volumeID: String,
+        displayName: String,
+        formatDescription: String? = nil
+    ) throws {
         let record = Record(
             bookmark: try codec.makeBookmark(for: folderURL),
             volumeID: volumeID,
-            displayName: displayName
+            displayName: displayName,
+            formatDescription: formatDescription
         )
         try lock.withLock {
             try FileManager.default.createDirectory(
@@ -92,11 +118,16 @@ final class USBBookmarkStore: @unchecked Sendable {
                 from: Data(contentsOf: fileURL)
             )
             let resolution = try codec.resolve(record.bookmark)
+            let formatValues = try? resolution.url.resourceValues(
+                forKeys: [.volumeLocalizedFormatDescriptionKey]
+            )
             return USBBookmarkDestination(
                 url: resolution.url,
                 volumeID: record.volumeID,
                 displayName: record.displayName,
-                isStale: resolution.isStale
+                isStale: resolution.isStale,
+                formatDescription: record.formatDescription
+                    ?? formatValues?.volumeLocalizedFormatDescription
             )
         }
     }

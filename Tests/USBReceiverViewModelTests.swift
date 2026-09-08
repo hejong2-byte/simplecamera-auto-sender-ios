@@ -4,6 +4,56 @@ import XCTest
 
 @MainActor
 final class USBReceiverViewModelTests: XCTestCase {
+    func testUSBFolderCleanupRequiresInspectionAndConfirmationBeforeDeletion() async throws {
+        let calls = USBFolderCleanupCallLog()
+        let summary = USBFolderContentsSummary(
+            folderName: "SD CARD",
+            fileSystemDescription: "ExFAT",
+            fileCount: 3,
+            directoryCount: 1,
+            totalBytes: 4_096,
+            volumeID: "test-volume",
+            folderPath: "/SD CARD",
+            fingerprint: "confirmed"
+        )
+        let model = try exportModel(
+            files: [],
+            inspectUSBFolder: { _ in
+                await calls.recordInspection()
+                return summary
+            },
+            deleteUSBFolderContents: { _, receivedSummary in
+                await calls.recordDeletion(summary: receivedSummary)
+                return USBFolderDeletionSummary(
+                    deletedItemCount: receivedSummary.totalItemCount,
+                    remainingItemCount: 0,
+                    failures: []
+                )
+            }
+        ) { _, _ in
+            IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        await model.refresh()
+
+        await model.prepareUSBFolderDeletion()
+
+        XCTAssertTrue(model.needsUSBFolderDeletionConfirmation)
+        XCTAssertEqual(model.usbFileSystemDescription, "ExFAT")
+        XCTAssertTrue(model.usbFolderDeletionConfirmationMessage.contains("파일 3개"))
+        let inspectionCount = await calls.inspectionCount()
+        let deletionCountBeforeConfirmation = await calls.deletionCount()
+        XCTAssertEqual(inspectionCount, 1)
+        XCTAssertEqual(deletionCountBeforeConfirmation, 0)
+
+        await model.deleteConfirmedUSBFolderContents()
+
+        XCTAssertFalse(model.needsUSBFolderDeletionConfirmation)
+        let deletionCountAfterConfirmation = await calls.deletionCount()
+        XCTAssertEqual(deletionCountAfterConfirmation, 1)
+        XCTAssertEqual(model.usbFolderDeletionMessage, "SD/USB 파일 4개 삭제 완료")
+        XCTAssertNil(model.usbFolderDeletionError)
+    }
+
     func testChoosingUSBFolderDoesNotStartReceiveOrFallback() async throws {
         let model = fallbackModel(pending: { [UUID()] }, receiveLocal: {}, approve: { _ in })
         model.isChoosingUSBFolder = true
@@ -632,6 +682,12 @@ final class USBReceiverViewModelTests: XCTestCase {
         deleteOriginals: @escaping USBReceiverViewModel.DeleteOriginals = { _ in
             IPhoneUSBDeletionSummary(deletedSourceIDs: [], failed: [])
         },
+        inspectUSBFolder: @escaping USBReceiverViewModel.InspectUSBFolder = { _ in
+            throw CocoaError(.featureUnsupported)
+        },
+        deleteUSBFolderContents: @escaping USBReceiverViewModel.DeleteUSBFolderContents = { _, _ in
+            throw CocoaError(.featureUnsupported)
+        },
         export: @escaping USBReceiverViewModel.ExportFiles
     ) throws -> USBReceiverViewModel {
         let usb = temporaryDirectory()
@@ -654,6 +710,8 @@ final class USBReceiverViewModelTests: XCTestCase {
             pendingDeletionDecisions: pendingDeletionDecisions,
             keepOriginals: keepOriginals,
             deleteOriginals: deleteOriginals,
+            inspectUSBFolder: inspectUSBFolder,
+            deleteUSBFolderContents: deleteUSBFolderContents,
             progressUpdates: {
                 receiveProgressStore?.updates() ?? AsyncStream { $0.finish() }
             },
@@ -742,6 +800,16 @@ final class USBReceiverViewModelTests: XCTestCase {
         }
         XCTFail("수신 상태가 시간 안에 반영되지 않았습니다.")
     }
+}
+
+private actor USBFolderCleanupCallLog {
+    private var inspections = 0
+    private var deletions: [USBFolderContentsSummary] = []
+
+    func recordInspection() { inspections += 1 }
+    func recordDeletion(summary: USBFolderContentsSummary) { deletions.append(summary) }
+    func inspectionCount() -> Int { inspections }
+    func deletionCount() -> Int { deletions.count }
 }
 
 private actor USBExportGate {

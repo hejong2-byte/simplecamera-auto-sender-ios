@@ -103,6 +103,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
             deletionStore: deletionStore,
             progressStore: exportProgressStore
         )
+        let folderCleanupService = USBFolderCleanupService()
         let dependencies = USBReceiverDependencies(
             registrationStore: registrationStore,
             bookmarkStore: bookmarkStore,
@@ -115,6 +116,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
             localEngine: localEngine,
             catalog: catalog,
             exporter: exporter,
+            folderCleanupService: folderCleanupService,
             deletionStore: deletionStore,
             progressStore: progressStore,
             exportProgressStore: exportProgressStore,
@@ -135,6 +137,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
     private let localEngine: IPhoneLocalReceiveEngine
     private let catalog: IPhoneReceivedFileCatalog
     private let exporter: IPhoneUSBExportService
+    private let folderCleanupService: USBFolderCleanupService
     private let deletionStore: IPhoneUSBDeletionDecisionStore
     private let progressStore: USBReceiveProgressStore
     private let exportProgressStore: USBReceiveProgressStore
@@ -152,6 +155,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
         localEngine: IPhoneLocalReceiveEngine,
         catalog: IPhoneReceivedFileCatalog,
         exporter: IPhoneUSBExportService,
+        folderCleanupService: USBFolderCleanupService,
         deletionStore: IPhoneUSBDeletionDecisionStore,
         progressStore: USBReceiveProgressStore,
         exportProgressStore: USBReceiveProgressStore,
@@ -168,6 +172,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
         self.localEngine = localEngine
         self.catalog = catalog
         self.exporter = exporter
+        self.folderCleanupService = folderCleanupService
         self.deletionStore = deletionStore
         self.progressStore = progressStore
         self.exportProgressStore = exportProgressStore
@@ -227,6 +232,15 @@ final class USBReceiverDependencies: @unchecked Sendable {
             keepOriginals: { [exporter] ids in try await exporter.keep(decisionIDs: ids) },
             deleteOriginals: { [exporter] ids in
                 await exporter.delete(decisionIDs: ids)
+            },
+            inspectUSBFolder: { [folderCleanupService] destination in
+                try await folderCleanupService.inspect(destination)
+            },
+            deleteUSBFolderContents: { [folderCleanupService] destination, summary in
+                try await folderCleanupService.deleteAllContents(
+                    of: destination,
+                    matching: summary
+                )
             },
             refreshFeatures: { [client, registrationStore] in
                 guard let credentials = try registrationStore.load() else { return }
