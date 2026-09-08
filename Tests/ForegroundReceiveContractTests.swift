@@ -40,6 +40,19 @@ final class ForegroundReceiveContractTests: XCTestCase {
         XCTAssertTrue(root.contains("수신 보류 · 앱을 다시 열면 다시 안내합니다."))
     }
 
+    func testMultiplePendingFilesHaveAnExplicitPrioritySelectionSheet() throws {
+        let root = try source("App/UI/ContentView.swift")
+        let selection = try source("App/UI/PendingIncomingSelectionView.swift")
+
+        XCTAssertTrue(root.contains("PendingIncomingSelectionView"))
+        XCTAssertTrue(selection.contains("pending-file-selection"))
+        XCTAssertTrue(selection.contains("pending-select-all"))
+        XCTAssertTrue(selection.contains("pending-clear-selection"))
+        XCTAssertTrue(selection.contains("pending-confirm-selection"))
+        XCTAssertTrue(selection.contains("선택 파일 먼저 받기"))
+        XCTAssertTrue(selection.contains("selectedPendingFileIDs"))
+    }
+
     private func source(_ path: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()

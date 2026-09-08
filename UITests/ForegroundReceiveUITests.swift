@@ -230,6 +230,27 @@ final class ForegroundReceiveUITests: XCTestCase {
         keepScreenshot("iphone-receive-screen", app: app)
     }
 
+    func testMultiplePendingFilesCanBeSelectedAndReceivedFirst() {
+        let app = launchSimulation(withMultipleIncoming: true)
+
+        let selection = app.otherElements["pending-file-selection"]
+        XCTAssertTrue(selection.waitForExistence(timeout: 20))
+        let first = app.buttons["pending-file-10000000-0000-0000-0000-000000000001"]
+        let second = app.buttons["pending-file-10000000-0000-0000-0000-000000000002"]
+        XCTAssertTrue(first.exists)
+        XCTAssertTrue(second.exists)
+        XCTAssertFalse(app.buttons["pending-confirm-selection"].isEnabled)
+
+        second.tap()
+        XCTAssertTrue(app.buttons["pending-confirm-selection"].isEnabled)
+        keepScreenshot("pending-file-priority-selection", app: app)
+        app.buttons["pending-confirm-selection"].tap()
+
+        XCTAssertTrue(app.buttons["iPhone에 저장"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["second.txt"].exists)
+        XCTAssertFalse(app.staticTexts["first.txt"].exists)
+    }
+
     func testZIPChoicePrecedesDestinationAndPostponementReturnsAfterActivation() {
         let app = launchSimulation(withZIP: true)
         XCTAssertTrue(app.buttons["압축 해제"].waitForExistence(timeout: 20))
@@ -288,7 +309,8 @@ final class ForegroundReceiveUITests: XCTestCase {
         withStoredFiles: Bool = false,
         withTextMessage: Bool = false,
         withSavedTextRecipient: Bool = false,
-        withZIP: Bool = false
+        withZIP: Bool = false,
+        withMultipleIncoming: Bool = false
     ) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -302,6 +324,9 @@ final class ForegroundReceiveUITests: XCTestCase {
             app.launchArguments.append("--ui-test-text-recipient")
         }
         if withZIP { app.launchArguments.append("--ui-test-incoming-zip") }
+        if withMultipleIncoming {
+            app.launchArguments.append("--ui-test-multiple-incoming")
+        }
         app.launch()
         addTeardownBlock { app.terminate() }
         return app
