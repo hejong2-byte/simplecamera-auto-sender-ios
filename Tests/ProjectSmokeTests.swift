@@ -19,8 +19,8 @@ final class ProjectSmokeTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 27"))
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.16"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 28"))
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.17"))
         XCTAssertTrue(project.contains("exactVersion: 0.9.20"))
         XCTAssertTrue(project.contains("UIFileSharingEnabled: true"))
         XCTAssertTrue(
@@ -51,7 +51,42 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(install.contains("앱이 다시 활성화될 때마다"))
         XCTAssertTrue(install.contains("iPhone 내부 임시공간"))
         XCTAssertTrue(install.contains("검증된 압축 해제 폴더"))
-        XCTAssertTrue(readme.contains("현재 버전은 0.3.16(빌드 27)"))
+        XCTAssertTrue(readme.contains("현재 버전은 0.3.17(빌드 28)"))
+    }
+
+    func testReleaseDocumentsPriorityReceiveStoredZIPAndStorageManagement() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let pending = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/PendingIncomingSelectionView.swift"),
+            encoding: .utf8
+        )
+        let receiver = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/USBReceiverView.swift"),
+            encoding: .utf8
+        )
+        let settings = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/SettingsView.swift"),
+            encoding: .utf8
+        )
+        let install = try String(
+            contentsOf: repository.appendingPathComponent("docs/install.md"),
+            encoding: .utf8
+        )
+        let readme = try String(
+            contentsOf: repository.appendingPathComponent("README.md"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(pending.contains("선택 파일 먼저 받기"))
+        XCTAssertTrue(receiver.contains("압축 해제해서 복사"))
+        XCTAssertTrue(receiver.contains("ZIP 그대로 복사"))
+        XCTAssertTrue(settings.contains("SD/USB 저장장치 관리"))
+        XCTAssertTrue(install.contains("선택하지 않은 파일은 서버에 그대로 남"))
+        XCTAssertTrue(install.contains("ZIP 그대로 복사"))
+        XCTAssertTrue(readme.contains("선택 파일 먼저 받기"))
+        XCTAssertTrue(readme.contains("설정 → SD/USB 저장장치 관리"))
     }
 
     func testReleaseDeclaresModernLaunchScreen() throws {
