@@ -60,6 +60,15 @@ final class ForegroundReceiveContractTests: XCTestCase {
         XCTAssertTrue(receiver.contains("confirmStoredZIPExport"))
     }
 
+    func testSettingsUsesDedicatedStorageManagementScreen() throws {
+        let settings = try source("App/UI/SettingsView.swift")
+        let storage = try source("App/UI/USBStorageManagementView.swift")
+        XCTAssertTrue(settings.contains("SD/USB 저장장치 관리"))
+        XCTAssertTrue(storage.contains("선택한 저장장치 내용 전체 삭제"))
+        XCTAssertTrue(storage.contains("파일시스템(참고)"))
+        XCTAssertFalse(settings.contains("Button(\"SD/USB 전체 파일 삭제\""))
+    }
+
     private func source(_ path: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()

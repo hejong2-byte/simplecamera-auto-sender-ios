@@ -135,6 +135,40 @@ final class ForegroundReceiveUITests: XCTestCase {
         XCTAssertTrue(export.isEnabled, "Cancelling the ZIP choice must keep the file selected")
     }
 
+    func testSettingsStorageManagementInspectsAndDeletesOnlyAfterConfirmation() {
+        let app = launchSimulation(delay: 3_600, withStorageManagement: true)
+        let settings = app.buttons["open-settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 20))
+        reveal(settings, in: app)
+        settings.tap()
+
+        let storage = app.buttons["storage-management"]
+        reveal(storage, in: app)
+        XCTAssertTrue(storage.isHittable)
+        storage.tap()
+        XCTAssertTrue(app.navigationBars["SD/USB 저장장치 관리"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "ExFAT")
+        ).firstMatch.exists)
+
+        let delete = app.buttons["storage-delete-all"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 5))
+        delete.tap()
+        XCTAssertTrue(app.buttons["모든 파일 삭제"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "파일 2개 · 폴더 1개")
+        ).firstMatch.exists)
+        keepScreenshot("storage-delete-confirmation", app: app)
+        app.buttons["취소"].tap()
+
+        XCTAssertTrue(delete.waitForExistence(timeout: 5))
+        delete.tap()
+        XCTAssertTrue(app.buttons["모든 파일 삭제"].waitForExistence(timeout: 5))
+        app.buttons["모든 파일 삭제"].tap()
+        XCTAssertTrue(app.staticTexts["SD/USB 파일 3개 삭제 완료"].waitForExistence(timeout: 10))
+        keepScreenshot("storage-delete-completed", app: app)
+    }
+
     func testMainScreenCriticalActionsAreHittableWithoutInitialScroll() {
         let app = launchSimulation(delay: 60)
 
@@ -339,7 +373,8 @@ final class ForegroundReceiveUITests: XCTestCase {
         withTextMessage: Bool = false,
         withSavedTextRecipient: Bool = false,
         withZIP: Bool = false,
-        withMultipleIncoming: Bool = false
+        withMultipleIncoming: Bool = false,
+        withStorageManagement: Bool = false
     ) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -355,6 +390,9 @@ final class ForegroundReceiveUITests: XCTestCase {
         if withZIP { app.launchArguments.append("--ui-test-incoming-zip") }
         if withMultipleIncoming {
             app.launchArguments.append("--ui-test-multiple-incoming")
+        }
+        if withStorageManagement {
+            app.launchArguments.append("--ui-test-storage-management")
         }
         app.launch()
         addTeardownBlock { app.terminate() }
