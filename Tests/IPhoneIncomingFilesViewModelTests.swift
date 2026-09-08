@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import SimpleCameraAutoSender
 
@@ -58,6 +59,20 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
 
         XCTAssertEqual(context.model.selectionBatch?.id, batch.id)
         XCTAssertEqual(context.model.selectedPendingFileIDs, [selectedID])
+    }
+
+    func testUnchangedPollingDoesNotRepublishPresentedSelection() async throws {
+        let context = try makeContext(count: 2)
+        await activate(context)
+        var publishedUpdates = 0
+        let observation = context.model.objectWillChange.sink {
+            publishedUpdates += 1
+        }
+
+        await context.model.refresh()
+
+        XCTAssertEqual(publishedUpdates, 0)
+        withExtendedLifetime(observation) {}
     }
 
     func testNewArrivalDoesNotJoinFrozenSelectionAndDisappearedSelectionIsRemoved() async throws {
