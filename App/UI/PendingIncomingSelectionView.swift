@@ -50,10 +50,10 @@ struct PendingIncomingSelectionView: View {
                     Text(byteText(file.size))
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
-                    Text("도착 (file.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                    Text("도착 \(file.createdAt.formatted(date: .abbreviated, time: .shortened))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("보관 만료 (file.expiresAt.formatted(date: .abbreviated, time: .shortened))")
+                    Text("보관 만료 \(file.expiresAt.formatted(date: .abbreviated, time: .shortened))")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }

@@ -13,7 +13,6 @@ struct ContentView: View {
     @State private var readinessMessage: String?
     @State private var receiveNotice: String?
     @State private var isAdvancingIncomingPrompt = false
-    @State private var confirmPendingSelectionAfterDismiss = false
 
     private enum Destination: Hashable {
         case receiver
@@ -137,10 +136,10 @@ struct ContentView: View {
                 },
                 set: { _ in }
             ),
-            onDismiss: finishPendingSelection
+            onDismiss: incomingModel.cancelPendingFileSelection
         ) {
             PendingIncomingSelectionView(model: incomingModel) {
-                confirmPendingSelectionAfterDismiss = true
+                _ = incomingModel.confirmPendingFileSelection()
             }
         }
         .confirmationDialog(
@@ -244,15 +243,6 @@ struct ContentView: View {
     private func postponeIncoming() {
         incomingModel.postponePrompt()
         receiveNotice = "수신 보류 · 앱을 다시 열면 다시 안내합니다."
-    }
-
-    private func finishPendingSelection() {
-        if confirmPendingSelectionAfterDismiss {
-            confirmPendingSelectionAfterDismiss = false
-            _ = incomingModel.confirmPendingFileSelection()
-        } else {
-            incomingModel.cancelPendingFileSelection()
-        }
     }
 
     private var manualTransferCard: some View {
