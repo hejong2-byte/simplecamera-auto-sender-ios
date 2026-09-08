@@ -300,6 +300,14 @@ final class ForegroundReceiveUITests: XCTestCase {
         XCTAssertTrue(second.exists)
         XCTAssertFalse(app.buttons["pending-confirm-selection"].isEnabled)
 
+        for _ in 0..<4 {
+            RunLoop.current.run(until: Date().addingTimeInterval(1))
+            XCTAssertEqual(app.state, .runningForeground)
+            XCTAssertTrue(selection.exists)
+            XCTAssertTrue(first.exists)
+            XCTAssertTrue(second.exists)
+        }
+
         second.tap()
         XCTAssertTrue(app.buttons["pending-confirm-selection"].isEnabled)
         keepScreenshot("pending-file-priority-selection", app: app)

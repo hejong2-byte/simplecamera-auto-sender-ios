@@ -118,13 +118,16 @@ final class IPhoneIncomingFilesViewModel: ObservableObject {
                 cancelPendingFileSelection()
             }
             var unique: Set<UUID> = []
-            pendingFiles = snapshot.receiverID == nil ? [] : snapshot.files.filter {
+            let refreshedPendingFiles = snapshot.receiverID == nil ? [] : snapshot.files.filter {
                 [.available, .leased].contains($0.state)
                     && !acceptedIDs.contains($0.deliveryID)
                     && unique.insert($0.deliveryID).inserted
             }.sorted {
                 if $0.createdAt == $1.createdAt { return $0.deliveryID.uuidString < $1.deliveryID.uuidString }
                 return $0.createdAt < $1.createdAt
+            }
+            if refreshedPendingFiles != pendingFiles {
+                pendingFiles = refreshedPendingFiles
             }
             let pendingIDs = Set(pendingFiles.map(\.deliveryID))
             offeredIDs.formIntersection(pendingIDs)
@@ -140,12 +143,22 @@ final class IPhoneIncomingFilesViewModel: ObservableObject {
             }
             if let existing = selectionBatch {
                 let remaining = existing.files.filter { pendingIDs.contains($0.deliveryID) }
-                selectedPendingFileIDs.formIntersection(remaining.map(\.deliveryID))
-                selectionBatch = remaining.isEmpty
-                    ? nil
-                    : IPhoneIncomingBatch(receiverID: existing.receiverID, files: remaining)
+                let remainingIDs = Set(remaining.map(\.deliveryID))
+                if !selectedPendingFileIDs.isSubset(of: remainingIDs) {
+                    selectedPendingFileIDs.formIntersection(remainingIDs)
+                }
+                if remaining.isEmpty {
+                    selectionBatch = nil
+                } else if remaining != existing.files {
+                    selectionBatch = IPhoneIncomingBatch(
+                        receiverID: existing.receiverID,
+                        files: remaining
+                    )
+                }
             }
-            lastError = nil
+            if lastError != nil {
+                lastError = nil
+            }
             offerUnseenFiles()
         } catch let error where IPhoneReceiveErrorMessage.isCancellation(error) {
             return
