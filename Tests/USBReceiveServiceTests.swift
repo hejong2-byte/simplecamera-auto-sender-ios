@@ -227,10 +227,8 @@ final class USBReceiveServiceTests: XCTestCase {
             try Data(contentsOf: fixture.destination.appendingPathComponent("업무자료/root.txt")),
             Data("root-data".utf8)
         )
-        XCTAssertEqual(
-            await fixture.client.acknowledgementRecords().first?.storedName,
-            "업무자료"
-        )
+        let acknowledgementRecords = await fixture.client.acknowledgementRecords()
+        XCTAssertEqual(acknowledgementRecords.first?.storedName, "업무자료")
         XCTAssertNil(fixture.ledger.checkpoint(for: fixture.delivery.deliveryID))
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.stagedZIP.path))
 
@@ -276,8 +274,10 @@ final class USBReceiveServiceTests: XCTestCase {
         let summary = try await fixture.service.runOnce()
 
         XCTAssertEqual(summary.completed, 1)
-        XCTAssertEqual(await fixture.client.requestedRanges(), firstRanges)
-        XCTAssertEqual(await fixture.client.ackAttemptCount(), 2)
+        let finalRanges = await fixture.client.requestedRanges()
+        let finalAckAttempts = await fixture.client.ackAttemptCount()
+        XCTAssertEqual(finalRanges, firstRanges)
+        XCTAssertEqual(finalAckAttempts, 2)
         XCTAssertNil(fixture.ledger.checkpoint(for: fixture.delivery.deliveryID))
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.stagedZIP.path))
     }
