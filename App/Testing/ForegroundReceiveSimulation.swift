@@ -102,6 +102,13 @@ final class ForegroundReceiveSimulation {
                 message: "iPhone 저장 완료",
                 occurredAt: Date(timeIntervalSince1970: 1_787_990_400)
             )
+        case "server-canceled":
+            receiveOutcome = IPhoneReceiveOutcome(
+                receiverID: receiverID, kind: .savedWithoutReceipt, destination: .iphoneLocal,
+                fileName: "stored.zip", totalCount: 1, completedCount: 1,
+                message: "iPhone 저장·검증 완료. 서버 전송이 취소되어 완료 확인을 보내지 못했습니다. 저장된 파일은 사용할 수 있습니다.",
+                occurredAt: Date(timeIntervalSince1970: 1_787_990_400)
+            )
         case "error":
             receiveOutcome = IPhoneReceiveOutcome(
                 receiverID: receiverID,
@@ -116,6 +123,8 @@ final class ForegroundReceiveSimulation {
         default:
             receiveOutcome = nil
         }
+        let outcomeStore = IPhoneReceiveOutcomeStore(fileURL: root.appendingPathComponent("outcome.json"))
+        if let receiveOutcome { try outcomeStore.save(receiveOutcome) }
         filePicker = KakaoFilePickerModel(store: KakaoFolderStore(fileURL: root.appendingPathComponent("kakao-folder.json")))
         let textRoot = root.appendingPathComponent("TextMessages", isDirectory: true)
         if withTextMessage { try Self.seedTextMessage(at: textRoot) }
@@ -238,8 +247,10 @@ final class ForegroundReceiveSimulation {
                 continuation.finish()
             } },
             loadOutcome: { id in
-                receiveOutcome?.receiverID == id ? receiveOutcome : nil
+                outcomeStore.load(receiverID: id)
             },
+            saveOutcome: { try outcomeStore.save($0) },
+            clearOutcome: { try outcomeStore.clear(receiverID: $0) },
             defaultDeviceName: "수신 테스트 iPhone",
             preferences: preferences
         )

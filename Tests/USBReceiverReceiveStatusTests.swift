@@ -8,6 +8,83 @@ final class USBReceiverReceiveStatusTests: XCTestCase {
     private let otherReceiverID = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
     private let fixedNow = Date(timeIntervalSince1970: 1_788_000_000)
 
+    func testDismissedServerWarningStaysClearedAfterReloadAndPreservesFiles() async throws {
+        let directory = temporaryDirectory()
+        let url = directory.appendingPathComponent("original.zip")
+        let usbURL = directory.appendingPathComponent("usb-copy.zip")
+        let bytes = Data("original and USB bytes must remain".utf8)
+        try bytes.write(to: url)
+        try bytes.write(to: usbURL)
+        let file = IPhoneStoredFile(id: url.path, url: url, name: url.lastPathComponent,
+                                   size: Int64(bytes.count), modifiedAt: fixedNow, receivedRecord: nil)
+        let storeURL = directory.appendingPathComponent("outcome.json")
+        let store = IPhoneReceiveOutcomeStore(fileURL: storeURL)
+        try store.save(outcome(receiverID: receiverID, kind: .savedWithoutReceipt))
+        let context = try makeContext(storedFiles: [file], outcomeStore: store)
+        await context.model.refresh()
+        context.model.toggleStoredFileSelection(file.id)
+        XCTAssertTrue(context.model.canDismissReceiveOutcome)
+
+        context.model.dismissReceiveOutcome()
+
+        XCTAssertNil(store.load(receiverID: receiverID))
+        XCTAssertEqual(context.model.receiveStatus.kind, .waiting)
+        XCTAssertEqual(context.model.storedFiles, [file])
+        XCTAssertEqual(context.model.selectedStoredFileIDs, [file.id])
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        XCTAssertEqual(try Data(contentsOf: usbURL), bytes)
+        await context.model.refresh()
+        XCTAssertFalse(context.model.canDismissReceiveOutcome)
+        let reopened = try makeContext(storedFiles: [file], outcomeStore: IPhoneReceiveOutcomeStore(fileURL: storeURL))
+        await reopened.model.refresh()
+        XCTAssertNil(reopened.model.receiveOutcome)
+        XCTAssertEqual(reopened.model.storedFiles, [file])
+    }
+
+    func testNewFailureAppearsAfterPreviousNoticeWasDismissed() async throws {
+        let context = try makeContext(outcome: outcome(receiverID: receiverID, kind: .savedWithoutReceipt))
+        await context.model.refresh()
+        context.model.dismissReceiveOutcome()
+        context.progress.publish(progress(stage: .failed, destination: .iphoneLocal,
+                                          deliveryID: UUID(), fileName: "new.zip", errorMessage: "새 서버 오류"))
+        await waitUntil { context.model.receiveStatus.kind == .failed }
+        XCTAssertEqual(context.model.receiveStatus.fileName, "new.zip")
+        XCTAssertTrue(context.model.canDismissReceiveOutcome)
+        context.model.dismissReceiveOutcome()
+        XCTAssertNil(context.model.lastError)
+        XCTAssertNil(context.outcomes.latest)
+    }
+
+    func testCannotDismissWhileReceivingOrWaitingWithoutOutcome() async throws {
+        let context = try makeContext()
+        await context.model.refresh()
+        XCTAssertFalse(context.model.canDismissReceiveOutcome)
+        context.model.dismissReceiveOutcome()
+        XCTAssertNil(context.model.receiveOutcomeDismissalError)
+        context.progress.publish(progress(stage: .completed, destination: .iphoneLocal,
+                                          deliveryID: UUID(), fileName: "old.zip", completedCount: 1))
+        await waitUntil { context.model.receiveStatus.kind == .saved }
+        let saved = context.outcomes.latest
+        context.progress.publish(progress(stage: .downloading, destination: .iphoneLocal,
+                                          deliveryID: UUID(), fileName: "active.zip", bytesReceived: 1, totalBytes: 100))
+        await waitUntil { context.model.receiveStatus.kind == .active }
+        XCTAssertFalse(context.model.canDismissReceiveOutcome)
+        context.model.dismissReceiveOutcome()
+        XCTAssertEqual(context.outcomes.latest, saved)
+        XCTAssertEqual(context.model.receiveStatus.kind, .active)
+    }
+
+    func testDismissPersistenceFailureKeepsNoticeVisible() async throws {
+        let warning = outcome(receiverID: receiverID, kind: .savedWithoutReceipt)
+        let context = try makeContext(outcome: warning, clearFails: true)
+        await context.model.refresh()
+        context.model.dismissReceiveOutcome()
+        XCTAssertEqual(context.model.receiveOutcome, warning)
+        XCTAssertEqual(context.outcomes.latest, warning)
+        XCTAssertNotNil(context.model.receiveOutcomeDismissalError)
+        XCTAssertTrue(context.model.canDismissReceiveOutcome)
+    }
+
     func testIdleDoesNotEraseLastSavedOutcome() async throws {
         let saved = outcome(receiverID: receiverID, kind: .saved)
         let context = try makeContext(outcome: saved)
@@ -191,7 +268,10 @@ final class USBReceiverReceiveStatusTests: XCTestCase {
     }
 
     private func makeContext(
-        outcome: IPhoneReceiveOutcome? = nil
+        outcome: IPhoneReceiveOutcome? = nil,
+        storedFiles: [IPhoneStoredFile] = [],
+        outcomeStore: IPhoneReceiveOutcomeStore? = nil,
+        clearFails: Bool = false
     ) throws -> (
         model: USBReceiverViewModel,
         progress: USBReceiveProgressStore,
@@ -221,10 +301,21 @@ final class USBReceiverReceiveStatusTests: XCTestCase {
             ),
             registrar: ReceiveStatusRegistrar(),
             receiveOnce: { USBReceiveSummary(discovered: 0, completed: 0) },
+            storedFiles: { storedFiles },
             progressUpdates: { progress.updates() },
-            loadOutcome: { outcomes.load(receiverID: $0) },
-            saveOutcome: { try outcomes.save($0) },
-            clearOutcome: { try outcomes.clear(receiverID: $0) },
+            loadOutcome: { id in
+                if let outcomeStore { return outcomeStore.load(receiverID: id) }
+                return outcomes.load(receiverID: id)
+            },
+            saveOutcome: { value in
+                if let outcomeStore { try outcomeStore.save(value) }
+                else { try outcomes.save(value) }
+            },
+            clearOutcome: { id in
+                if clearFails { throw CocoaError(.fileWriteNoPermission) }
+                if let outcomeStore { try outcomeStore.clear(receiverID: id) }
+                else { try outcomes.clear(receiverID: id) }
+            },
             now: { now },
             defaultDeviceName: "테스트 iPhone"
         )

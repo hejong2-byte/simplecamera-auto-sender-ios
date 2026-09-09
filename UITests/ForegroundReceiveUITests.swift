@@ -487,6 +487,30 @@ final class ForegroundReceiveUITests: XCTestCase {
         keepScreenshot("main-receive-error", app: app)
     }
 
+    func testReceiverCanDismissServerCanceledWarningAndKeepStoredFiles() {
+        let app = launchSimulation(delay: 120, outcome: "server-canceled", withStoredFiles: true)
+        let open = app.buttons["open-receiver"]
+        reveal(open, in: app)
+        open.tap()
+        XCTAssertTrue(app.navigationBars["PC 파일 수신"].waitForExistence(timeout: 10))
+        let warning = app.otherElements["pc-receive-receipt-warning"]
+        reveal(warning, in: app)
+        XCTAssertTrue(warning.exists)
+        let dismiss = app.buttons["pc-receive-dismiss"]
+        reveal(dismiss, in: app)
+        keepScreenshot("receiver-server-warning-dismiss-button", app: app)
+        dismiss.tap()
+        XCTAssertFalse(warning.exists)
+        let file = app.staticTexts["stored.zip"].firstMatch
+        reveal(file, in: app)
+        XCTAssertTrue(file.exists)
+        app.navigationBars.buttons.firstMatch.tap()
+        let openAgain = app.buttons["open-receiver"]
+        reveal(openAgain, in: app)
+        XCTAssertFalse(app.otherElements["pc-receive-receipt-warning"].exists)
+        keepScreenshot("home-server-warning-dismissed", app: app)
+    }
+
     private func launchSimulation(
         delay: Int = 0,
         outcome: String? = nil,

@@ -3,6 +3,8 @@ import SwiftUI
 struct PCReceiveStatusView: View {
     let status: IPhoneReceiveStatus
     var compact = false
+    var dismissAction: (() -> Void)? = nil
+    var dismissalError: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 6 : 10) {
@@ -38,10 +40,21 @@ struct PCReceiveStatusView: View {
                 .foregroundStyle(status.kind == .failed ? tint : .secondary)
                 .lineLimit(compact ? 2 : nil)
 
-            if let occurredAt = status.occurredAt {
-                Text(occurredAt.formatted(date: .abbreviated, time: .shortened))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+            HStack {
+                if let occurredAt = status.occurredAt {
+                    Text(occurredAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                if let dismissAction {
+                    Spacer(minLength: 8)
+                    Button("확인·닫기", action: dismissAction)
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("pc-receive-dismiss")
+                }
+            }
+            if let dismissalError {
+                Text(dismissalError).font(.caption).foregroundStyle(.red)
             }
         }
         .padding(compact ? 10 : 12)

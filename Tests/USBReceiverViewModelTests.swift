@@ -43,6 +43,36 @@ final class USBReceiverViewModelTests: XCTestCase {
         XCTAssertEqual(model.usbExportDisplayedPercent, 100)
     }
 
+    func testUSBCopyETASeparatesCalculationCopyAndFinalization() async throws {
+        let store = USBReceiveProgressStore()
+        let model = try exportModel(files: [], exportProgressStore: store) { _, _, _ in
+            IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        let start = Date(timeIntervalSince1970: 100)
+        func publish(_ stage: USBReceiveStage, bytes: Int64, total: Int64) {
+            store.publish(USBReceiveProgress(stage: stage, deliveryID: nil, fileName: "archive.zip",
+                currentIndex: 1, totalCount: 2, completedCount: 0, bytesReceived: bytes,
+                totalBytes: total, startedAt: start, expiresAt: nil, errorMessage: nil))
+        }
+        publish(.copyingToUSB, bytes: 0, total: 100)
+        await waitUntil { model.usbExportProgress != nil }
+        XCTAssertEqual(model.usbExportRemainingTimeText(at: start.addingTimeInterval(10)), "남은 시간 계산 중")
+        publish(.copyingToUSB, bytes: 25, total: 100)
+        await waitUntil { model.usbExportProgress?.bytesReceived == 25 }
+        XCTAssertEqual(model.usbExportRemainingTimeText(at: start.addingTimeInterval(10)), "현재 복사 작업 · 약 30초 남음")
+        XCTAssertEqual(model.usbExportRemainingTimeText(at: start.addingTimeInterval(100)), "현재 복사 작업 · 약 5분 남음")
+        XCTAssertEqual(model.usbExportRemainingTimeText(at: start.addingTimeInterval(1_200)), "현재 복사 작업 · 약 1시간 0분 남음")
+        XCTAssertEqual(model.usbExportRemainingTimeText(at: try XCTUnwrap(model.usbExportLastUpdatedAt).addingTimeInterval(10)), "진행 응답 대기 · 남은 시간 다시 계산 중")
+        publish(.copyingToUSB, bytes: 100, total: 100)
+        await waitUntil { model.usbExportProgress?.bytesReceived == 100 }
+        XCTAssertEqual(model.usbExportRemainingTimeText(at: start.addingTimeInterval(10)), "파일 기록 마무리 중")
+        for stage in [USBReceiveStage.extracting, .finalizing, .completed, .failed] {
+            publish(stage, bytes: 100, total: 100)
+            await waitUntil { model.usbExportProgress?.stage == stage }
+            XCTAssertNil(model.usbExportRemainingTimeText(at: start.addingTimeInterval(10)))
+        }
+    }
+
     func testOptionalVerificationFailureDoesNotReplaceCopyOrReceiveResults() async throws {
         let file = try storedFile()
         let store = USBReceiveProgressStore()

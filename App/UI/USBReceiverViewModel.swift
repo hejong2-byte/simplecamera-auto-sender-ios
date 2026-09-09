@@ -59,6 +59,7 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var isUSBAvailable: Bool?
     @Published private(set) var receiveProgress: USBReceiveProgress?
     @Published private(set) var receiveOutcome: IPhoneReceiveOutcome?
+    @Published private(set) var receiveOutcomeDismissalError: String?
     @Published private(set) var usbExportProgress: USBReceiveProgress?
     @Published private(set) var usbExportLastUpdatedAt: Date?
     @Published private(set) var lastUSBExportError: String?
@@ -366,6 +367,23 @@ final class USBReceiverViewModel: ObservableObject {
             occurredAt: nil,
             percent: nil
         )
+    }
+
+    var canDismissReceiveOutcome: Bool {
+        receiveOutcome != nil && !isReceivingFile && !isPerformingReceive
+    }
+
+    func dismissReceiveOutcome() {
+        guard canDismissReceiveOutcome, let outcome = receiveOutcome,
+              outcome.receiverID == receiverID else { return }
+        do {
+            try clearOutcome(outcome.receiverID)
+            receiveOutcome = nil
+            receiveOutcomeDismissalError = nil
+            if lastError == outcome.message { lastError = nil }
+        } catch {
+            receiveOutcomeDismissalError = "알림을 닫지 못했습니다. 다시 시도해 주세요."
+        }
     }
 
     func openStoredFile(_ file: IPhoneStoredFile) {
@@ -932,6 +950,33 @@ final class USBReceiverViewModel: ObservableObject {
         return String(format: "현재 단계 평균 %.1f MB/s", locale: Locale(identifier: "en_US_POSIX"), rate)
     }
 
+    func usbExportRemainingTimeText(at date: Date) -> String? {
+        guard let progress = visibleUSBExportProgress, progress.stage == .copyingToUSB else { return nil }
+        if progress.totalBytes > 0, progress.bytesReceived >= progress.totalBytes {
+            return "파일 기록 마무리 중"
+        }
+        if let updatedAt = usbExportLastUpdatedAt, date.timeIntervalSince(updatedAt) >= 5 {
+            return "진행 응답 대기 · 남은 시간 다시 계산 중"
+        }
+        guard let start = progress.startedAt, date.timeIntervalSince(start) >= 2,
+              progress.bytesReceived > 0, progress.totalBytes > progress.bytesReceived else {
+            return "남은 시간 계산 중"
+        }
+        let estimate = Double(progress.totalBytes - progress.bytesReceived)
+            * date.timeIntervalSince(start) / Double(progress.bytesReceived)
+        guard estimate.isFinite, estimate < Double(Int.max) else { return "남은 시간 계산 중" }
+        let seconds = max(1, Int(ceil(estimate)))
+        let duration: String
+        if seconds >= 3_600 {
+            duration = "\(seconds / 3_600)시간 \((seconds % 3_600) / 60)분"
+        } else if seconds >= 60 {
+            duration = "\(Int(ceil(Double(seconds) / 60)))분"
+        } else {
+            duration = "\(seconds)초"
+        }
+        return "현재 복사 작업 · 약 \(duration) 남음"
+    }
+
     var receiveStageTitle: String {
         guard let progress = receiveProgress else { return "PC 파일 수신 대기" }
         let position = progress.totalCount > 0
@@ -1062,6 +1107,7 @@ final class USBReceiverViewModel: ObservableObject {
             occurredAt: now()
         )
         receiveOutcome = outcome
+        receiveOutcomeDismissalError = nil
         try? saveOutcome(outcome)
     }
 

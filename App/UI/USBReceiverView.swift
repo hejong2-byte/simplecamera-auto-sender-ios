@@ -167,7 +167,9 @@ struct USBReceiverView: View {
                 }
             }
 
-            PCReceiveStatusView(status: model.receiveStatus)
+            PCReceiveStatusView(status: model.receiveStatus,
+                dismissAction: model.canDismissReceiveOutcome ? { model.dismissReceiveOutcome() } : nil,
+                dismissalError: model.receiveOutcomeDismissalError)
 
             if model.receiveStatus.kind == .active,
                let progress = model.receiveProgress {
@@ -353,14 +355,13 @@ struct USBReceiverView: View {
                 if let detail = progress.detail {
                     Text(detail).font(.subheadline).fixedSize(horizontal: false, vertical: true)
                 }
-                if model.isExportingToUSB, progress.stage == .copyingToUSB {
-                    Text("진행률은 용량 기준입니다. 작은 파일이 많으면 폴더 생성·파일 기록 때문에 %가 천천히 오를 수 있습니다. 위의 처리 개수와 파일명도 확인하세요.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
                 if model.isExportingToUSB, let updatedAt = model.usbExportLastUpdatedAt {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         if let speed = model.usbExportSpeedText(at: context.date) {
-                            Text(speed).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            Text(speed).font(.title3.monospacedDigit().bold()).foregroundStyle(.cyan)
+                        }
+                        if let remaining = model.usbExportRemainingTimeText(at: context.date) {
+                            Text(remaining).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
                         }
                         let seconds = max(0, Int(context.date.timeIntervalSince(updatedAt)))
                         if seconds >= 3 {

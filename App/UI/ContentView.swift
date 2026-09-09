@@ -290,7 +290,9 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("open-receiver")
 
-            PCReceiveStatusView(status: receiverModel.receiveStatus, compact: true)
+            PCReceiveStatusView(status: receiverModel.receiveStatus, compact: true,
+                dismissAction: receiverModel.canDismissReceiveOutcome ? { receiverModel.dismissReceiveOutcome() } : nil,
+                dismissalError: receiverModel.receiveOutcomeDismissalError)
 
             if !incomingModel.pendingFiles.isEmpty {
                 Button("수신 대기 \(incomingModel.pendingFiles.count)개 · 저장 위치 선택") {
