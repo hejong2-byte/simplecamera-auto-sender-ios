@@ -1,0 +1,14 @@
+name: Production SHA memory regression
+on:
+  push:
+    branches: ["codex/foreground-receive-alert"]
+permissions:
+  contents: read
+jobs:
+  memory:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify production SHA checksums and memory budget
+        run: python3 scripts/check-hash-memory.py
