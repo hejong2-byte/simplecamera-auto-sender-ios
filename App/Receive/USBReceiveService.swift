@@ -849,12 +849,14 @@ actor USBReceiveService {
         defer { try? handle.close() }
         var remaining = length
         while remaining > 0 {
-            let count = Int(min(remaining, 1_024 * 1_024))
-            guard let data = try handle.read(upToCount: count), !data.isEmpty else {
-                throw USBReceiveServiceError.sizeMismatch
+            try autoreleasepool {
+                let count = Int(min(remaining, 1_024 * 1_024))
+                guard let data = try handle.read(upToCount: count), !data.isEmpty else {
+                    throw USBReceiveServiceError.sizeMismatch
+                }
+                hasher.update(data: data)
+                remaining -= Int64(data.count)
             }
-            hasher.update(data: data)
-            remaining -= Int64(data.count)
         }
     }
 
