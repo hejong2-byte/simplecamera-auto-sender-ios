@@ -182,8 +182,65 @@ actor IPhoneUSBExportService {
         self.now = now
     }
 
-    func cleanupTemporaryFiles(to destination: USBBookmarkDestination?) -> USBExportTemporaryCleanupSummary {
-        USBExportTemporaryCleanupSummary()
+    func cleanupTemporaryFiles(to destination: USBBookmarkDestination?,
+                               progress: @Sendable (FileDeletionProgress) -> Void = { _ in }) -> USBExportTemporaryCleanupSummary {
+        var result = USBExportTemporaryCleanupSummary()
+        var candidates: [URL] = []
+        var scopedURL: URL?
+        defer { if let scopedURL { stopAccessing(scopedURL) } }
+        func collect(in root: URL, prefix: String, suffix: String) {
+            do {
+                guard fileManager.fileExists(atPath: root.path) else { return }
+                let attributes = try fileManager.attributesOfItem(atPath: root.path)
+                guard attributes[.type] as? FileAttributeType == .typeDirectory else {
+                    throw IPhoneUSBExportError.destinationAccessDenied
+                }
+                for child in try fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
+                    let name = child.lastPathComponent
+                    guard name.hasPrefix(prefix), name.hasSuffix(suffix),
+                          UUID(uuidString: String(name.dropFirst(prefix.count).dropLast(suffix.count))) != nil else { continue }
+                    guard child.standardizedFileURL.deletingLastPathComponent().path == root.standardizedFileURL.path,
+                          try fileManager.attributesOfItem(atPath: child.path)[.type] as? FileAttributeType != .typeSymbolicLink else {
+                        result.failures.append("안전 확인 실패 · \(name)")
+                        continue
+                    }
+                    candidates.append(child)
+                }
+            } catch {
+                result.failures.append("임시폴더 확인 실패 · \(root.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        collect(in: zipWorkingDirectory, prefix: "extract-", suffix: "")
+        if let destination {
+            do {
+                guard !destination.isStale, startAccessing(destination.url) else {
+                    throw IPhoneUSBExportError.destinationAccessDenied
+                }
+                scopedURL = destination.url
+                try validateDestination(destination)
+                let rootType = try fileManager.attributesOfItem(atPath: destination.url.path)[.type] as? FileAttributeType
+                guard rootType == .typeDirectory else { throw IPhoneUSBExportError.destinationAccessDenied }
+                collect(in: destination.url.appendingPathComponent(Self.partialDirectoryName, isDirectory: true),
+                        prefix: "export-", suffix: ".partial")
+                result.usbChecked = true
+            } catch {
+                result.failures.append("SD/USB 임시파일 확인 실패 · \(IPhoneReceiveErrorMessage.message(error))")
+            }
+        }
+        for (index, item) in candidates.enumerated() {
+            progress(FileDeletionProgress(totalCount: candidates.count, processedCount: index,
+                failedCount: result.failures.count, currentName: item.lastPathComponent))
+            do {
+                try fileManager.removeItem(at: item)
+                guard !fileManager.fileExists(atPath: item.path) else { throw IPhoneUSBExportError.copyFailed }
+                result.deletedCount += 1
+            } catch {
+                result.failures.append("정리 실패 · \(item.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        progress(FileDeletionProgress(totalCount: candidates.count, processedCount: candidates.count,
+            failedCount: result.failures.count, currentName: nil))
+        return result
     }
 
     func export(

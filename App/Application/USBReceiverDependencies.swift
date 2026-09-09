@@ -235,6 +235,9 @@ final class USBReceiverDependencies: @unchecked Sendable {
             exportFiles: { [exporter] files, destination, archiveMode in
                 await exporter.export(files, to: destination, archiveMode: archiveMode)
             },
+            cleanupExportTemps: { [exporter] destination, progress in
+                await exporter.cleanupTemporaryFiles(to: destination, progress: progress)
+            },
             pendingDeletionDecisions: { [deletionStore] in deletionStore.pending() },
             verifyCopies: { [exporter] files, destination, progress in
                 await exporter.verifyCopies(files, to: destination, progress: progress)

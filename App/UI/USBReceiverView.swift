@@ -37,6 +37,16 @@ struct USBReceiverView: View {
         .sheet(item: $model.previewFile) { file in
             StoredFilePreview(file: file, onClose: { model.previewFile = nil })
         }
+        .alert("임시파일을 정리할까요?", isPresented: Binding(
+            get: { model.needsTemporaryCleanupConfirmation }, set: { _ in }
+        )) {
+            Button("임시파일 정리", role: .destructive) {
+                Task { await model.cleanConfirmedTemporaryFiles() }
+            }
+            Button("취소", role: .cancel) { model.needsTemporaryCleanupConfirmation = false }
+        } message: {
+            Text("이 앱이 만든 임시 압축해제 파일·미완성 USB 복사본만 삭제합니다. 원본 ZIP·완료된 복사본·다른 파일은 유지합니다. SD/USB 임시파일을 정리하려면 다시 연결하고 폴더를 선택해 주세요.")
+        }
         .alert("파일 열기 실패", isPresented: Binding(
             get: { model.storedFilePreviewError != nil },
             set: { if !$0 { model.storedFilePreviewError = nil } }
@@ -289,6 +299,19 @@ struct USBReceiverView: View {
             if model.isDeletingStoredFiles || model.storedFileDeletionProgress != nil {
                 FileDeletionProgressView(progress: model.storedFileDeletionProgress, isRunning: model.isDeletingStoredFiles)
             }
+            Button("임시파일 정리") { model.requestTemporaryCleanup() }
+                .buttonStyle(.bordered)
+                .disabled(!model.canCleanTemporaryFiles)
+                .accessibilityIdentifier("stored-files-clean-temp")
+            if model.isCleaningTemporaryFiles || model.temporaryCleanupProgress != nil {
+                FileDeletionProgressView(progress: model.temporaryCleanupProgress, isRunning: model.isCleaningTemporaryFiles)
+            }
+            if let message = model.temporaryCleanupMessage {
+                Text(message).font(.subheadline).foregroundStyle(.secondary)
+            }
+            if let error = model.temporaryCleanupError {
+                Text(error).font(.subheadline).foregroundStyle(.red)
+            }
             Button {
                 Task { await model.verifySelectedUSBCopies() }
             } label: {
@@ -336,8 +359,20 @@ struct USBReceiverView: View {
         VStack(alignment: .leading, spacing: 10) {
             Divider()
             Text(model.usbExportStageTitle).font(.headline)
+            if model.isExportingToUSB && !model.isVerifyingUSBCopies {
+                Button(model.isCancellingUSBCopy ? "취소 처리 대기 중" : "복사 취소", role: .destructive) {
+                    model.cancelUSBCopy()
+                }
+                .buttonStyle(.bordered)
+                .disabled(!model.canCancelUSBCopy)
+                .accessibilityIdentifier("stored-files-cancel-export")
+                if model.isCancellingUSBCopy {
+                    Text("현재 SD/USB 작업이 반환되면 임시파일을 정리합니다. 운영체제의 쓰기 작업이 멈춘 동안에는 취소도 기다릴 수 있습니다.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
             if let progress = model.visibleUSBExportProgress {
-                if progress.stage != .failed, progress.totalBytes > 0 || progress.stage == .completed {
+                if progress.stage != .failed && progress.stage != .cancelled, progress.totalBytes > 0 || progress.stage == .completed {
                     ProgressView(value: Double(model.usbExportDisplayedPercent), total: 100)
                         .tint(.cyan)
                     HStack {

@@ -35,6 +35,7 @@ final class USBReceiverViewModel: ObservableObject {
     typealias PendingDeletionDecisions = @Sendable () -> [IPhoneUSBDeletionDecision]
     typealias VerifyCopies = @Sendable ([IPhoneStoredFile], USBBookmarkDestination, @Sendable (USBReceiveProgress) -> Void) async -> IPhoneUSBExportSummary
     typealias KeepOriginals = @Sendable (Set<UUID>) async throws -> Void
+    typealias CleanupExportTemps = @Sendable (USBBookmarkDestination?, @Sendable (FileDeletionProgress) -> Void) async -> USBExportTemporaryCleanupSummary
     typealias DeleteOriginals = @Sendable (Set<UUID>) async -> IPhoneUSBDeletionSummary
     typealias InspectUSBFolder = @Sendable (
         USBBookmarkDestination
@@ -67,6 +68,11 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var lastOriginalCleanupError: String?
     @Published private(set) var isExportingToUSB = false
     @Published private(set) var isCancellingUSBCopy = false
+    @Published var needsTemporaryCleanupConfirmation = false
+    @Published private(set) var isCleaningTemporaryFiles = false
+    @Published private(set) var temporaryCleanupProgress: FileDeletionProgress?
+    @Published private(set) var temporaryCleanupMessage: String?
+    @Published private(set) var temporaryCleanupError: String?
     @Published private(set) var isVerifyingUSBCopies = false
     @Published private(set) var usbVerificationMessage: String?
     @Published private(set) var usbVerificationFailed = false
@@ -117,6 +123,8 @@ final class USBReceiverViewModel: ObservableObject {
     private let canPreviewFile: @MainActor (URL) -> Bool
     private let deleteStoredFiles: DeleteStoredFiles
     private let exportFiles: ExportFiles
+    private let cleanupExportTemps: CleanupExportTemps
+    private var usbCopyTask: Task<IPhoneUSBExportSummary, Never>?
     private let verifyCopies: VerifyCopies
     private let pendingDeletionDecisions: PendingDeletionDecisions
     private let keepOriginalFiles: KeepOriginals
@@ -160,6 +168,7 @@ final class USBReceiverViewModel: ObservableObject {
         exportFiles: @escaping ExportFiles = { _, _, _ in
             IPhoneUSBExportSummary(verified: [], failed: [])
         },
+        cleanupExportTemps: @escaping CleanupExportTemps = { _, _ in USBExportTemporaryCleanupSummary() },
         pendingDeletionDecisions: @escaping PendingDeletionDecisions = { [] },
         verifyCopies: @escaping VerifyCopies = { files, _, _ in
             IPhoneUSBExportSummary(verified: [], failed: files.map {
@@ -201,6 +210,7 @@ final class USBReceiverViewModel: ObservableObject {
         self.canPreviewFile = canPreviewFile
         self.deleteStoredFiles = deleteStoredFiles
         self.exportFiles = exportFiles
+        self.cleanupExportTemps = cleanupExportTemps
         self.verifyCopies = verifyCopies
         self.pendingDeletionDecisions = pendingDeletionDecisions
         self.keepOriginalFiles = keepOriginals
@@ -286,6 +296,7 @@ final class USBReceiverViewModel: ObservableObject {
         isInspectingUSBFolderContents
             || isDeletingUSBFolderContents
             || needsUSBFolderDeletionConfirmation
+            || isCleaningTemporaryFiles || needsTemporaryCleanupConfirmation
     }
     var canDeleteStoredFiles: Bool {
         hasStoredFileSelection && !isDeletingStoredFiles
@@ -697,9 +708,55 @@ final class USBReceiverViewModel: ObservableObject {
         await exportStoredFiles(selected, archiveMode: archiveMode)
     }
 
-    var canCancelUSBCopy: Bool { false }
+    var canCancelUSBCopy: Bool {
+        isExportingToUSB && !isVerifyingUSBCopies && usbCopyTask != nil && !isCancellingUSBCopy
+    }
 
-    func cancelUSBCopy() {}
+    func cancelUSBCopy() {
+        guard canCancelUSBCopy else { return }
+        isCancellingUSBCopy = true
+        usbCopyTask?.cancel()
+    }
+
+    var canCleanTemporaryFiles: Bool {
+        !isExportingToUSB && !isReceivingFile && !isPerformingReceive && !isDeletingStoredFiles
+            && !isCleaningUSBFolder && !isChoosingUSBFolder && !needsDeletionDecision
+            && !needsStoredFileDeletionConfirmation && !needsStoredZIPExportChoice
+    }
+
+    func requestTemporaryCleanup() {
+        guard canCleanTemporaryFiles else { return }
+        needsTemporaryCleanupConfirmation = true
+    }
+
+    func cleanConfirmedTemporaryFiles() async {
+        guard needsTemporaryCleanupConfirmation else { return }
+        needsTemporaryCleanupConfirmation = false
+        guard canCleanTemporaryFiles else { return }
+        isCleaningTemporaryFiles = true
+        temporaryCleanupMessage = nil
+        temporaryCleanupError = nil
+        temporaryCleanupProgress = nil
+        defer { isCleaningTemporaryFiles = false }
+        var destination: USBBookmarkDestination?
+        do {
+            destination = try await Task.detached { [bookmarkStore] in try bookmarkStore.resolve() }.value
+        } catch {
+            temporaryCleanupError = "SD/USB 폴더를 다시 선택해 주세요. iPhone 임시파일만 정리합니다."
+        }
+        let (updates, continuation) = AsyncStream<FileDeletionProgress>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let observer = Task { for await progress in updates { temporaryCleanupProgress = progress } }
+        let result = await cleanupExportTemps(destination, { continuation.yield($0) })
+        continuation.finish()
+        await observer.value
+        temporaryCleanupMessage = "임시 작업 \(result.deletedCount)개 정리 · 원본 ZIP·완료 파일 유지"
+        if !result.usbChecked {
+            temporaryCleanupMessage! += "\nSD/USB는 확인하지 못했습니다. 연결 후 폴더를 선택하고 다시 정리해 주세요."
+        }
+        if !result.failures.isEmpty {
+            temporaryCleanupError = ([temporaryCleanupError].compactMap { $0 } + result.failures).joined(separator: "\n")
+        }
+    }
 
     private func exportStoredFiles(
         _ selected: [IPhoneStoredFile],
@@ -714,7 +771,11 @@ final class USBReceiverViewModel: ObservableObject {
         usbExportCompletionMessage = nil
         usbVerificationMessage = nil
         lastOriginalCleanupError = nil
-        defer { isExportingToUSB = false }
+        defer {
+            usbCopyTask = nil
+            isCancellingUSBCopy = false
+            isExportingToUSB = false
+        }
         do {
             guard let destination = try await Task.detached(priority: .userInitiated, operation: { [bookmarkStore] in
                 try bookmarkStore.resolve()
@@ -724,11 +785,18 @@ final class USBReceiverViewModel: ObservableObject {
             guard !destination.isStale else {
                 throw USBReceiveServiceError.staleDestination
             }
-            let summary = await exportFiles(selected, destination, archiveMode)
+            let task = Task { [exportFiles] in await exportFiles(selected, destination, archiveMode) }
+            usbCopyTask = task
+            let summary = await task.value
             selectedStoredFileIDs.subtract(summary.verified.map(\.sourceID))
+            if summary.cancelled {
+                try await keepOriginalFiles(Set(summary.verified.map(\.id)))
+                usbExportCompletionMessage = "USB 복사 취소 완료 · 원본 유지"
+            }
             storedFiles = try storedFilesProvider()
             needsDeletionDecision = !pendingDeletionDecisions().isEmpty
             lastUSBExportError = summary.errorMessage
+            lastOriginalCleanupError = summary.cleanupWarning
         } catch {
             lastUSBExportError = Self.message(for: error)
         }
@@ -908,6 +976,7 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     var usbExportStageTitle: String {
+        if isCancellingUSBCopy { return "취소 요청 중 · USB 작업 종료·임시파일 정리 대기" }
         if isVerifyingUSBCopies { return "선택한 USB 복사본 정밀 SHA 검증 중" }
         if lastUSBExportError != nil { return "USB 복사 실패" }
         if let usbExportCompletionMessage { return usbExportCompletionMessage }
@@ -924,6 +993,7 @@ final class USBReceiverViewModel: ObservableObject {
         case .verifying: return "USB 복사 검증 중\(position)"
         case .finalizing: return "복사 결과 정리 중\(position)"
         case .completed: return "USB 복사 완료"
+        case .cancelled: return "USB 복사 취소 완료"
         case .failed: return "USB 복사 실패"
         default: return "USB 복사 준비 중\(position)"
         }
