@@ -132,7 +132,17 @@ actor USBFolderCleanupService {
             var inspectionError: Error?
             var didInspect = false
             var coordinationError: NSError?
-            NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: root, options: [], error: &coordinationError) { coordinatedRoot in
+            // Deletion providers may acknowledge before their directory listing settles.
+            // Re-read only: never delete newly appearing items without confirmation.
+            for attempt in 0..<4 {
+                if attempt > 0 {
+                    progress(FileDeletionProgress(totalCount: children.count,
+                        processedCount: max(0, children.count - 1), failedCount: 0,
+                        currentName: "삭제 결과 다시 확인 \(attempt)/3"))
+                    Thread.sleep(forTimeInterval: 0.3)
+                }
+                let freshRoot = URL(fileURLWithPath: root.path, isDirectory: true)
+                NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: freshRoot, options: [], error: &coordinationError) { coordinatedRoot in
                 do {
                     guard coordinatedRoot.standardizedFileURL.path == root.path else {
                         throw USBFolderCleanupError.destinationChanged
@@ -141,6 +151,9 @@ actor USBFolderCleanupService {
                     remainingNames = Set(try topLevelChildren(in: coordinatedRoot).map(\.lastPathComponent))
                     didInspect = true
                 } catch { inspectionError = error }
+                }
+                if inspectionError != nil || coordinationError != nil { break }
+                if remaining?.totalItemCount == 0 && remainingNames.isEmpty { break }
             }
             if let inspectionError { throw inspectionError }
             if let coordinationError { throw coordinationError }
@@ -148,6 +161,9 @@ actor USBFolderCleanupService {
             // A provider can report a removal error after actually removing the item.
             // Reconcile against a fresh, successfully coordinated listing, including hidden items.
             failures.removeAll { !remainingNames.contains($0.name) }
+            for name in remainingNames.sorted() where !failures.contains(where: { $0.name == name }) {
+                failures.append(USBFolderDeletionFailure(name: name, message: "삭제 후에도 남아 있는 항목 · \(name)"))
+            }
             progress(FileDeletionProgress(totalCount: children.count, processedCount: children.count,
                                           failedCount: remainingNames.count, currentName: nil))
             return USBFolderDeletionSummary(

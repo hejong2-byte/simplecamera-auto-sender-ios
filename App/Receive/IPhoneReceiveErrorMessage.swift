@@ -50,12 +50,13 @@ enum IPhoneReceiveErrorMessage {
             return cleanupError.localizedDescription
         case USBReceiveServiceError.fat32FileTooLarge:
             return "FAT32 USB에는 4GiB 초과 파일을 저장할 수 없습니다. exFAT을 사용해 주세요."
+        case IPhoneUSBExportError.sizeMismatch:
+            return "USB 파일 크기가 원본과 다릅니다. 쓰기 또는 저장 결과 확인에 실패했습니다. 원본은 삭제하지 않았습니다."
         case USBReceiveServiceError.shaMismatch,
              USBReceiveServiceError.sizeMismatch,
              IPhoneLocalReceiveError.shaMismatch,
              IPhoneLocalReceiveError.sizeMismatch,
              IPhoneUSBExportError.shaMismatch,
-             IPhoneUSBExportError.sizeMismatch,
              USBZIPReceivePipelineError.shaMismatch,
              USBZIPReceivePipelineError.sizeMismatch:
             return "파일 무결성 검증에 실패했습니다. 원본은 삭제하지 않았습니다."

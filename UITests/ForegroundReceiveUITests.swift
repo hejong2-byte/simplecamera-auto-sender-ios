@@ -487,6 +487,24 @@ final class ForegroundReceiveUITests: XCTestCase {
         keepScreenshot("main-receive-error", app: app)
     }
 
+    func testTemporaryCleanupRequiresConfirmationAndCancelKeepsStoredZIP() {
+        let app = launchSimulation(delay: 120, withStoredFiles: true)
+        let open = app.buttons["open-receiver"]
+        reveal(open, in: app)
+        open.tap()
+        XCTAssertTrue(app.navigationBars["PC 파일 수신"].waitForExistence(timeout: 10))
+        let clean = app.buttons["stored-files-clean-temp"]
+        reveal(clean, in: app)
+        XCTAssertTrue(clean.waitForExistence(timeout: 5))
+        clean.tap()
+        let confirmation = app.alerts["임시파일을 정리할까요?"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        keepScreenshot("temporary-cleanup-confirmation", app: app)
+        confirmation.buttons["취소"].tap()
+        XCTAssertFalse(confirmation.exists)
+        XCTAssertTrue(app.staticTexts["stored.zip"].firstMatch.exists)
+    }
+
     func testReceiverCanDismissServerCanceledWarningAndKeepStoredFiles() {
         let app = launchSimulation(delay: 120, outcome: "server-canceled", withStoredFiles: true)
         let open = app.buttons["open-receiver"]
