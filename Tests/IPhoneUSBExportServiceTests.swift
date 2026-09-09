@@ -1,9 +1,61 @@
 import CryptoKit
 import Foundation
 import XCTest
+import ZIPFoundation
 @testable import SimpleCameraAutoSender
 
 final class IPhoneUSBExportServiceTests: XCTestCase {
+    func testZIPCopyAfterSDDeletionCoordinatesProviderWrites() async throws {
+        let provider = CoordinationRequiredFileManager()
+        let context = try makeContext(fileManager: provider, coordinateWrite: { url, body in
+            provider.coordinating = true
+            defer { provider.coordinating = false }
+            try body(url)
+        })
+        let archiveData = try XCTUnwrap(Data(base64Encoded: "UEsDBBQAAAAIANJIKF03rc1dEwAAAAsAAAAPAAAAZG9jcy9yZXBvcnQudHh0KkotyC8q0U1JLEkEAAAA//8DAFBLAwQUAAAACADSSChd+/k8aREAAAAJAAAACAAAAHJvb3QudHh0KsrPL9FNSSxJBAAAAP//AwBQSwECFAAUAAAACADSSChdN63NXRMAAAALAAAADwAAAAAAAAAAAAAAAAAAAAAAZG9jcy9yZXBvcnQudHh0UEsBAhQAFAAAAAgA0kgoXfv5PGkRAAAACQAAAAgAAAAAAAAAAAAAAAAAQAAAAHJvb3QudHh0UEsFBgAAAAACAAIAcwAAAHcAAAAAAA=="))
+        let file = try makeStoredFile(name: "after-delete.zip", data: archiveData, in: context.sourceDirectory)
+        try Data("old".utf8).write(to: context.usbDirectory.appendingPathComponent("old.txt"))
+        let cleanup = USBFolderCleanupService(volumeIdentity: { _ in "volume-1" },
+            startAccessing: { _ in true }, stopAccessing: { _ in })
+        let before = try await cleanup.inspect(context.destination)
+        let removed = try await cleanup.deleteAllContents(of: context.destination, matching: before)
+        XCTAssertEqual(removed.remainingItemCount, 0)
+        let result = await context.service.export([file], to: context.destination)
+        XCTAssertTrue(result.failed.isEmpty, "Provider writes must be coordinated after deleting SD contents")
+        let copy = try XCTUnwrap(result.verified.first)
+        XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent(copy.usbStoredName).appendingPathComponent("docs/report.txt")), Data("report-data".utf8))
+        XCTAssertEqual(try Data(contentsOf: file.url), archiveData)
+    }
+
+    func testDeleteThenExtract474FoldersAndCopy6683Files() async throws {
+        let context = try makeContext()
+        let fixture = temporaryDirectory()
+        for index in 0..<474 {
+            try FileManager.default.createDirectory(at: fixture.appendingPathComponent(String(format: "%05d", index)), withIntermediateDirectories: true)
+        }
+        for index in 0..<6683 {
+            try autoreleasepool {
+                let url = fixture.appendingPathComponent(String(format: "%05d/file-%05d.bin", index % 474, index))
+                try Data(repeating: UInt8(index % 251), count: 64).write(to: url)
+            }
+        }
+        let zip = context.sourceDirectory.appendingPathComponent("many-files.zip")
+        try FileManager.default.zipItem(at: fixture, to: zip, shouldKeepParent: false)
+        let file = try makeStoredFile(name: "received.zip", data: Data(contentsOf: zip), in: context.sourceDirectory)
+        try Data([1]).write(to: context.usbDirectory.appendingPathComponent("old.bin"))
+        let cleanup = USBFolderCleanupService(volumeIdentity: { _ in "volume-1" }, startAccessing: { _ in true }, stopAccessing: { _ in })
+        let before = try await cleanup.inspect(context.destination)
+        _ = try await cleanup.deleteAllContents(of: context.destination, matching: before)
+        let result = await context.service.export([file], to: context.destination)
+        XCTAssertTrue(result.failed.isEmpty)
+        let copy = try XCTUnwrap(result.verified.first)
+        XCTAssertEqual(copy.copiedFiles?.count, 6683)
+        let last = context.usbDirectory.appendingPathComponent(copy.usbStoredName).appendingPathComponent(String(format: "%05d/file-%05d.bin", 6682 % 474, 6682))
+        XCTAssertEqual(try Data(contentsOf: last), Data(repeating: UInt8(6682 % 251), count: 64))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: context.zipWorkingDirectory.path).isEmpty)
+    }
+
     func testManualCleanupRemovesLegacyExportTempsOnlyAndCanBeRepeated() async throws {
         let context = try makeContext()
         let localTemp = context.zipWorkingDirectory.appendingPathComponent("extract-\(UUID().uuidString.lowercased())")
@@ -571,7 +623,8 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         fileManager: FileManager = .default,
         volumeIdentity: @escaping @Sendable (URL) throws -> String? = { _ in "volume-1" },
         destinationVolumeID: String? = "volume-1",
-        canAccessSecurityScope: Bool = true
+        canAccessSecurityScope: Bool = true,
+        coordinateWrite: @escaping IPhoneUSBExportService.CoordinateWrite = IPhoneUSBExportService.coordinateWriteSystem
     ) throws -> ExportContext {
         let root = temporaryDirectory()
         let sourceDirectory = root.appendingPathComponent("received", isDirectory: true)
@@ -592,7 +645,8 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             volumeIdentity: volumeIdentity,
             progressStore: progressStore,
             zipWorkingDirectory: zipWorkingDirectory,
-            now: { Date(timeIntervalSince1970: 456) }
+            now: { Date(timeIntervalSince1970: 456) },
+            coordinateWrite: coordinateWrite
         )
         return ExportContext(
             sourceDirectory: sourceDirectory,
@@ -666,6 +720,19 @@ private final class CancelWhenExportPartialCreatedFileManager: FileManager, @unc
             withUnsafeCurrentTask { $0?.cancel() }
         }
         return created
+    }
+}
+
+private final class CoordinationRequiredFileManager: FileManager, @unchecked Sendable {
+    var coordinating = false
+    override func createDirectory(at url: URL, withIntermediateDirectories createIntermediates: Bool,
+                                  attributes: [FileAttributeKey: Any]? = nil) throws {
+        if url.path.contains("/usb/"), !coordinating { throw CocoaError(.fileWriteNoPermission) }
+        try super.createDirectory(at: url, withIntermediateDirectories: createIntermediates, attributes: attributes)
+    }
+    override func createFile(atPath path: String, contents data: Data?, attributes attr: [FileAttributeKey: Any]? = nil) -> Bool {
+        if path.contains("/usb/"), !coordinating { return false }
+        return super.createFile(atPath: path, contents: data, attributes: attr)
     }
 }
 

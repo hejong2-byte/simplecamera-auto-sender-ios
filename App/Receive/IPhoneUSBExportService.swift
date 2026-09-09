@@ -144,6 +144,7 @@ actor IPhoneUSBExportService {
     typealias SecurityScopeStart = @Sendable (URL) -> Bool
     typealias SecurityScopeStop = @Sendable (URL) -> Void
     typealias VolumeIdentity = @Sendable (URL) throws -> String?
+    typealias CoordinateWrite = @Sendable (URL, (URL) throws -> Void) throws -> Void
 
     static let partialDirectoryName = USBReceiveService.partialDirectoryName
 
@@ -155,6 +156,7 @@ actor IPhoneUSBExportService {
     private let progressStore: USBReceiveProgressStore
     private let zipWorkingDirectory: URL
     private let now: @Sendable () -> Date
+    private let coordinateWrite: CoordinateWrite
     private var cleanupFailures: [String] = []
 
     init(
@@ -170,7 +172,8 @@ actor IPhoneUSBExportService {
         progressStore: USBReceiveProgressStore = USBReceiveProgressStore(),
         zipWorkingDirectory: URL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SimpleCamera-ZIP-Export", isDirectory: true),
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        coordinateWrite: @escaping CoordinateWrite = IPhoneUSBExportService.coordinateWriteSystem
     ) {
         self.deletionStore = deletionStore
         self.fileManager = fileManager
@@ -180,6 +183,11 @@ actor IPhoneUSBExportService {
         self.progressStore = progressStore
         self.zipWorkingDirectory = zipWorkingDirectory
         self.now = now
+        self.coordinateWrite = coordinateWrite
+    }
+
+    static func coordinateWriteSystem(_ url: URL, operation: (URL) throws -> Void) throws {
+        try operation(url)
     }
 
     func cleanupTemporaryFiles(to destination: USBBookmarkDestination?,
