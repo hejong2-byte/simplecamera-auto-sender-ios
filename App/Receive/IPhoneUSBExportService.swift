@@ -231,11 +231,13 @@ actor IPhoneUSBExportService {
                     throw IPhoneUSBExportError.destinationAccessDenied
                 }
                 scopedURL = destination.url
-                try withCoordinatedDestination(destination) { try validateDestination(destination) }
-                let rootType = try fileManager.attributesOfItem(atPath: destination.url.path)[.type] as? FileAttributeType
-                guard rootType == .typeDirectory else { throw IPhoneUSBExportError.destinationAccessDenied }
-                collect(in: destination.url.appendingPathComponent(Self.partialDirectoryName, isDirectory: true),
-                        prefix: "export-", suffix: ".partial")
+                try withCoordinatedDestination(destination) {
+                    try validateDestination(destination)
+                    let rootType = try fileManager.attributesOfItem(atPath: destination.url.path)[.type] as? FileAttributeType
+                    guard rootType == .typeDirectory else { throw IPhoneUSBExportError.destinationAccessDenied }
+                    collect(in: destination.url.appendingPathComponent(Self.partialDirectoryName, isDirectory: true),
+                            prefix: "export-", suffix: ".partial")
+                }
                 result.usbChecked = true
             } catch {
                 result.failures.append("SD/USB 임시파일 확인 실패 · \(IPhoneReceiveErrorMessage.message(error))")
@@ -511,7 +513,7 @@ actor IPhoneUSBExportService {
         guard fileManager.createFile(atPath: partialURL.path, contents: nil) else {
             throw IPhoneUSBExportError.destinationNotWritable
         }
-        defer { removeExportTemporaryItem(partialURL) }
+        defer { removeExportTemporaryItem(partialURL, destination: destination) }
 
         let sourceSHA = try copyAndHash(
             source: file.url,
@@ -632,7 +634,7 @@ actor IPhoneUSBExportService {
             isDirectory: true
         )
         try fileManager.createDirectory(at: partialURL, withIntermediateDirectories: true)
-        defer { removeExportTemporaryItem(partialURL) }
+        defer { removeExportTemporaryItem(partialURL, destination: destination) }
 
         phaseStartedAt = now()
         report(.copyingToUSB, 0, extraction.totalBytes, "2/2 · USB 폴더 생성 준비")
@@ -726,9 +728,19 @@ actor IPhoneUSBExportService {
         }
     }
 
-    private func removeExportTemporaryItem(_ url: URL) {
-        guard fileManager.fileExists(atPath: url.path) else { return }
+    private func removeExportTemporaryItem(_ url: URL, destination: USBBookmarkDestination? = nil) {
         do {
+            if let destination {
+                // A missing path on an unplugged drive is not proof of cleanup.
+                var isDirectory: ObjCBool = false
+                guard fileManager.fileExists(atPath: destination.url.path, isDirectory: &isDirectory),
+                      isDirectory.boolValue,
+                      try volumeIdentity(destination.url) ?? destination.url.path == destination.volumeID else {
+                    cleanupFailures.append("SD/USB 임시파일 정리 여부를 확인할 수 없습니다. 다시 연결하고 폴더를 선택한 뒤 임시파일 정리를 실행해 주세요.")
+                    return
+                }
+            }
+            guard fileManager.fileExists(atPath: url.path) else { return }
             try fileManager.removeItem(at: url)
         } catch {
             cleanupFailures.append("임시파일 정리 실패 · \(url.lastPathComponent): \(error.localizedDescription)")
