@@ -3,6 +3,50 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class USBFolderCleanupServiceTests: XCTestCase {
+    func testInspectAndDeleteAcquireScopeOnOriginalBookmarkURL() async throws {
+        let parent = temporaryDirectory()
+        let root = parent.appendingPathComponent("SD CARD", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("test only".utf8).write(to: root.appendingPathComponent("inside.txt"))
+        let original = try XCTUnwrap(URL(string: root.absoluteString + "./"))
+        XCTAssertNotEqual(original.absoluteString, original.standardizedFileURL.absoluteString)
+        let access = CleanupScopeProbe(expected: original.absoluteString)
+        let service = USBFolderCleanupService(
+            volumeIdentity: { _ in "volume-1" },
+            startAccessing: { access.start($0) },
+            stopAccessing: { access.stop($0) }
+        )
+        let target = destination(original, volumeID: "volume-1")
+        let summary = try await service.inspect(target)
+        XCTAssertEqual(summary.fileCount, 1)
+        let result = try await service.deleteAllContents(of: target, matching: summary)
+        XCTAssertEqual(result.deletedItemCount, 1)
+        XCTAssertEqual(result.remainingItemCount, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.path))
+        XCTAssertEqual(access.started, [original.absoluteString, original.absoluteString])
+        XCTAssertEqual(access.stopped, access.started)
+    }
+
+    func testDeniedSecurityScopeNeverDeletesEvenReadableLocalFolder() async throws {
+        let root = temporaryDirectory()
+        let protectedFile = root.appendingPathComponent("keep.txt")
+        try Data("keep".utf8).write(to: protectedFile)
+        let target = destination(root, volumeID: "volume-1")
+        let summary = try await makeService(volumeID: "volume-1").inspect(target)
+        let service = USBFolderCleanupService(
+            volumeIdentity: { _ in "volume-1" },
+            startAccessing: { _ in false },
+            stopAccessing: { _ in XCTFail("Do not release a scope that was not acquired") }
+        )
+        do {
+            _ = try await service.deleteAllContents(of: target, matching: summary)
+            XCTFail("Denied access must stop deletion")
+        } catch let error as USBFolderCleanupError {
+            XCTAssertEqual(error, .destinationUnavailable)
+        }
+        XCTAssertEqual(try Data(contentsOf: protectedFile), Data("keep".utf8))
+    }
+
     func testInspectionCountsHiddenAndNestedItemsAndReportsFileSystem() async throws {
         let root = temporaryDirectory().appendingPathComponent("SD CARD", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -139,5 +183,22 @@ final class USBFolderCleanupServiceTests: XCTestCase {
         )
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         return directory
+    }
+}
+
+private final class CleanupScopeProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let expected: String
+    private var starts: [String] = []
+    private var stops: [String] = []
+    init(expected: String) { self.expected = expected }
+    var started: [String] { lock.withLock { starts } }
+    var stopped: [String] { lock.withLock { stops } }
+    func start(_ url: URL) -> Bool {
+        lock.withLock { starts.append(url.absoluteString) }
+        return url.absoluteString == expected
+    }
+    func stop(_ url: URL) {
+        lock.withLock { stops.append(url.absoluteString) }
     }
 }
