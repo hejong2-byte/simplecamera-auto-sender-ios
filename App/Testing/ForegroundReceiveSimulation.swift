@@ -1,4 +1,4 @@
-#if DEBUG && targetEnvironment(simulator)
+#if targetEnvironment(simulator)
 import Foundation
 
 // UI tests use synthetic metadata and a temporary directory; never the relay or Keychain.

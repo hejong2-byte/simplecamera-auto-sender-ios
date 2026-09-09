@@ -8,7 +8,7 @@ enum AppIdentity {
 struct SimpleCameraAutoSenderApp: App {
     @UIApplicationDelegateAdaptor(BackgroundSessionAppDelegate.self) private var appDelegate
 
-    #if DEBUG && targetEnvironment(simulator)
+    #if targetEnvironment(simulator)
     init() {
         LiveStateCorruptionSimulation.seedIfRequested()
     }
@@ -16,7 +16,7 @@ struct SimpleCameraAutoSenderApp: App {
 
     var body: some Scene {
         WindowGroup {
-            #if DEBUG && targetEnvironment(simulator)
+            #if targetEnvironment(simulator)
             if let simulation = ForegroundReceiveSimulation.current {
                 ContentView(
                     model: simulation.content,

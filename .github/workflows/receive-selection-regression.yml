@@ -26,9 +26,11 @@ jobs:
           DEVICE_ID="$(xcrun simctl list devices available -j | /usr/bin/python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for r,ds in data["devices"].items() if "iOS-26-2" in r for d in ds if d["name"] == "iPhone 16"))')"
           xcodebuild test -project SimpleCameraAutoSender.xcodeproj \
             -scheme SimpleCameraAutoSender \
+            -configuration Release \
             -destination "platform=iOS Simulator,id=${DEVICE_ID}" \
             -resultBundlePath build/SelectionResults.xcresult \
             -parallel-testing-enabled NO \
+            -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testProductionLaunchRecoversCorruptLocalState \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testMultiplePendingFilesCanBeSelectedAndReceivedFirst \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testPendingSelectionSurvivesRotationAndRepeatedForegrounding \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/selection-test.log

@@ -348,7 +348,11 @@ final class USBReceiverViewModel: ObservableObject {
             } else {
                 receiveOutcome = nil
             }
-            let destination = try bookmarkStore.resolve()
+            // Resolving a disconnected external volume can wait on its file provider.
+            // Keep the main actor available for the incoming-file picker and navigation.
+            let destination = try await Task.detached(priority: .userInitiated) { [bookmarkStore] in
+                try bookmarkStore.resolve()
+            }.value
             usbDisplayName = destination?.displayName
             usbFileSystemDescription = destination?.formatDescription
             if selectedDestination == .usb, destination?.isStale == true {
