@@ -45,6 +45,7 @@ func residentBytes() -> UInt64 {
 
 let size = Int64(CommandLine.arguments[1])!
 let fixture = URL(fileURLWithPath: CommandLine.arguments[2])
+let selected = Int(CommandLine.arguments[3])!
 FileManager.default.createFile(atPath: fixture.path, contents: nil)
 let output = try FileHandle(forWritingTo: fixture)
 try output.truncate(atOffset: UInt64(size))
@@ -66,7 +67,7 @@ for index, source in enumerate(SOURCES):
     SWIFT += hash_method(source)
     SWIFT += '\nstatic func hex(_ digest: SHA256.Digest) -> String { digest.map { String(format: "%02x", $0) }.joined() }\n}\n'
     SWIFT += f'''
-try autoreleasepool {{
+if selected == {index} {{ try autoreleasepool {{
     let before = residentBytes()
     let started = Date()
     let digest = try ProductionHash{index}().hashFile(fixture)
@@ -75,7 +76,7 @@ try autoreleasepool {{
     let checksumOK = digest == expected
     print("{source}: bytes=\\(size) memoryGrowth=\\(growth) checksumOK=\\(checksumOK) seconds=\\(Date().timeIntervalSince(started))")
     if !checksumOK || growth > 64 * 1_024 * 1_024 {{ failures += 1 }}
-}}
+}} }}
 '''
 SWIFT += "\nexit(failures == 0 ? 0 : 1)\n"
 
@@ -86,5 +87,8 @@ with tempfile.TemporaryDirectory(prefix="simplecam-hash-memory-") as temporary:
     binary = folder / "hash-memory"
     subprocess.run(["swiftc", "-O", str(swift), "-o", str(binary)], check=True)
     size = int(sys.argv[1]) if len(sys.argv) > 1 else 256 * 1024 * 1024 + 123
-    completed = subprocess.run([str(binary), str(size), str(folder / "zeros.bin")])
-    sys.exit(completed.returncode)
+    failures = 0
+    for index in range(len(SOURCES)):
+        completed = subprocess.run([str(binary), str(size), str(folder / "zeros.bin"), str(index)])
+        failures += completed.returncode != 0
+    sys.exit(1 if failures else 0)

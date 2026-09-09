@@ -828,8 +828,13 @@ actor USBReceiveService {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         var hasher = SHA256()
-        while let data = try handle.read(upToCount: 1_024 * 1_024), !data.isEmpty {
+        // FileHandle can retain autoreleased buffers until this long operation returns.
+        // Drain each chunk so verifying multi-GB files uses bounded memory.
+        while try autoreleasepool(invoking: {
+            guard let data = try handle.read(upToCount: 1_024 * 1_024), !data.isEmpty else { return false }
             hasher.update(data: data)
+            return true
+        }) {
         }
         return Self.hex(hasher.finalize())
     }
