@@ -4,6 +4,37 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneUSBExportServiceTests: XCTestCase {
+    func testCancelledExportDoesNotCopyOrOfferOriginalDeletion() async throws {
+        let context = try makeContext()
+        let file = try makeStoredFile(name: "keep.bin", data: Data("keep-original".utf8), in: context.sourceDirectory)
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await context.service.export([file], to: context.destination)
+        }
+        let summary = await task.value
+        XCTAssertTrue(summary.verified.isEmpty, "Canceled copy must not complete a USB file")
+        XCTAssertTrue(context.deletionStore.pending().isEmpty, "Cancel must never offer source deletion")
+        XCTAssertEqual(try Data(contentsOf: file.url), Data("keep-original".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: context.usbDirectory.appendingPathComponent(file.name).path))
+    }
+
+    func testCancelDuringZIPCopyCleansExtractionAndUSBPartialButKeepsOriginal() async throws {
+        let context = try makeContext(fileManager: CancelWhenExportPartialCreatedFileManager())
+        let data = try XCTUnwrap(Data(base64Encoded: "UEsDBBQAAAAIANJIKF03rc1dEwAAAAsAAAAPAAAAZG9jcy9yZXBvcnQudHh0KkotyC8q0U1JLEkEAAAA//8DAFBLAwQUAAAACADSSChd+/k8aREAAAAJAAAACAAAAHJvb3QudHh0KsrPL9FNSSxJBAAAAP//AwBQSwECFAAUAAAACADSSChdN63NXRMAAAALAAAADwAAAAAAAAAAAAAAAAAAAAAAZG9jcy9yZXBvcnQudHh0UEsBAhQAFAAAAAgA0kgoXfv5PGkRAAAACQAAAAgAAAAAAAAAAAAAAAAAQAAAAHJvb3QudHh0UEsFBgAAAAACAAIAcwAAAHcAAAAAAA=="))
+        let file = try makeStoredFile(name: "cancel.zip", data: data, in: context.sourceDirectory)
+        let existing = context.usbDirectory.appendingPathComponent("existing.txt")
+        try Data("existing".utf8).write(to: existing)
+        let task = Task { await context.service.export([file], to: context.destination) }
+        let summary = await task.value
+        XCTAssertTrue(summary.verified.isEmpty, "Cancellation during ZIP copying must stop before final rename")
+        XCTAssertTrue(context.deletionStore.pending().isEmpty)
+        XCTAssertEqual(try Data(contentsOf: file.url), data)
+        XCTAssertEqual(try Data(contentsOf: existing), Data("existing".utf8))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: context.zipWorkingDirectory.path), [])
+        let partials = context.usbDirectory.appendingPathComponent(IPhoneUSBExportService.partialDirectoryName)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: partials.path), [])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: context.usbDirectory.appendingPathComponent("cancel").path))
+    }
     func testOptionalVerificationDetectsTamperingWithoutDeletingEitherCopy() async throws {
         let context = try makeContext()
         let file = try makeStoredFile(name: "optional.bin", data: Data("original".utf8), in: context.sourceDirectory)
@@ -585,6 +616,16 @@ private struct ExportContext {
     let deletionStore: IPhoneUSBDeletionDecisionStore
     let service: IPhoneUSBExportService
     let progressStore: USBReceiveProgressStore
+}
+
+private final class CancelWhenExportPartialCreatedFileManager: FileManager, @unchecked Sendable {
+    override func createFile(atPath path: String, contents data: Data?, attributes attr: [FileAttributeKey: Any]? = nil) -> Bool {
+        let created = super.createFile(atPath: path, contents: data, attributes: attr)
+        if path.contains("export-"), path.contains(".partial/") {
+            withUnsafeCurrentTask { $0?.cancel() }
+        }
+        return created
+    }
 }
 
 private final class ZeroCapacityUSBFileManager: FileManager, @unchecked Sendable {
