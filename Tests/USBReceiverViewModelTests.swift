@@ -4,6 +4,35 @@ import XCTest
 
 @MainActor
 final class USBReceiverViewModelTests: XCTestCase {
+    func testStartupBookmarkLookupLeavesMainQueueResponsive() async throws {
+        let bookmarkStore = USBBookmarkStore(
+            fileURL: temporaryDirectory().appendingPathComponent("destination.json"),
+            codec: MainQueueProbeBookmarkCodec()
+        )
+        try bookmarkStore.save(
+            folderURL: URL(fileURLWithPath: "/Volumes/UNPLUGGED", isDirectory: true),
+            volumeID: "removed-volume",
+            displayName: "REMOVED USB"
+        )
+        let model = USBReceiverViewModel(
+            uploadCredentialStore: InMemoryCredentialStore(),
+            registrationStore: IPhoneReceiverRegistrationStore(
+                identityStore: InMemoryCredentialStore(),
+                secretStore: InMemoryCredentialStore()
+            ),
+            bookmarkStore: bookmarkStore,
+            registrar: StubReceiverRegistrar(),
+            receiveOnce: { USBReceiveSummary(discovered: 0, completed: 0) },
+            progressUpdates: { AsyncStream { $0.finish() } },
+            defaultDeviceName: "iPhone",
+            preferences: isolatedPreferences()
+        )
+
+        await model.refresh()
+
+        XCTAssertNotNil(model.lastError, "Unavailable USB must remain an ordinary error")
+    }
+
     func testUSBFolderCleanupRequiresInspectionAndConfirmationBeforeDeletion() async throws {
         let calls = USBFolderCleanupCallLog()
         let summary = USBFolderContentsSummary(
@@ -911,6 +940,21 @@ private struct FailingResolutionBookmarkCodec: USBBookmarkCoding {
 
     func resolve(_ data: Data) throws -> USBBookmarkResolution {
         throw CocoaError(.fileReadNoPermission)
+    }
+}
+
+private struct MainQueueProbeBookmarkCodec: USBBookmarkCoding {
+    func makeBookmark(for url: URL) throws -> Data { Data("bookmark".utf8) }
+
+    func resolve(_ data: Data) throws -> USBBookmarkResolution {
+        XCTAssertFalse(Thread.isMainThread, "External USB lookup must not run on the UI thread")
+        let heartbeat = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async { heartbeat.signal() }
+        XCTAssertEqual(
+            heartbeat.wait(timeout: .now() + 2), .success,
+            "The UI must process events while external bookmark lookup is waiting"
+        )
+        throw CocoaError(.fileReadNoSuchFile)
     }
 }
 
