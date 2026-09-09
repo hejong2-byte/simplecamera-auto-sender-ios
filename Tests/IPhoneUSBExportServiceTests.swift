@@ -34,7 +34,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             if let startedAt = progress.startedAt { startTimes.insert(startedAt) }
         }
         XCTAssertTrue(stages.contains(.copyingToUSB))
-        XCTAssertTrue(stages.contains(.verifying))
+        XCTAssertFalse(stages.contains(.verifying), "Default copy must finish without rereading the USB for SHA")
         XCTAssertEqual(startTimes.count, 1)
     }
 
@@ -83,7 +83,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             reported.append(progress)
         }
         XCTAssertTrue(reported.contains { $0.stage == .extracting && $0.totalBytes > 0 })
-        XCTAssertTrue(reported.contains { $0.stage == .verifying && $0.bytesReceived == 0 && $0.totalBytes > 0 })
+        XCTAssertFalse(reported.contains { $0.stage == .verifying || $0.stage == .checkingSource }, "Default ZIP export must not perform full SHA passes")
 
         XCTAssertEqual(summary.failed, [])
         let decision = try XCTUnwrap(summary.verified.first)
