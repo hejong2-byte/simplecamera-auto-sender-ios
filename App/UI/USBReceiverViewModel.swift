@@ -1004,6 +1004,7 @@ final class USBReceiverViewModel: ObservableObject {
         case .checkingSource: return "ZIP 원본 검사 중\(position)"
         case .completed: return "\(destination) 저장 완료"
         case .paused: return "PC 파일 수신 일시정지"
+        case .cancelled: return "USB 복사 취소 완료"
         case .failed:
             return progress.deliveryID == nil ? "새 파일 확인 오류" : "\(destination) 수신 오류"
         }

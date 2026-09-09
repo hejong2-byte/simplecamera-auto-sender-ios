@@ -16,6 +16,7 @@ enum USBReceiveStage: String, Codable, Sendable, Equatable {
     case checkingSource
     case completed
     case paused
+    case cancelled
     case failed
 }
 

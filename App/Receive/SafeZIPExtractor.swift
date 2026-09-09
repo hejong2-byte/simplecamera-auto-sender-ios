@@ -23,6 +23,7 @@ struct SafeZIPExtractor {
 
     func extract(_ source: URL, to destination: URL,
                  progress: @escaping (Int64, Int64, String, Int, Int) -> Void = { _, _, _, _, _ in }) throws -> SafeZIPExtraction {
+        try Task.checkCancellation()
         let archive: Archive
         do {
             archive = try Archive(url: source, accessMode: .read)
@@ -33,6 +34,7 @@ struct SafeZIPExtractor {
         var entryCount = 0
         var totalBytes: Int64 = 0
         for entry in archive {
+            try Task.checkCancellation()
             entryCount += 1
             let entryURL = destination.appendingPathComponent(entry.path)
             guard entryURL.isContained(in: destination), entry.type != .symlink else {
@@ -52,11 +54,14 @@ struct SafeZIPExtractor {
             var completedBytes: Int64 = 0
             for (index, entry) in archive.enumerated() {
                 try autoreleasepool {
+                    try Task.checkCancellation()
                     let base = completedBytes
                     let entrySize = entry.type == .file ? Int64(entry.uncompressedSize) : 0
                     let entryProgress = Progress(totalUnitCount: entrySize)
                     progress(base, totalBytes, entry.path, index, entryCount)
+                    try Task.checkCancellation()
                     let observation = entryProgress.observe(\.completedUnitCount, options: [.new]) { value, _ in
+                        if Task.isCancelled { value.cancel() }
                         progress(base + min(entrySize, max(0, value.completedUnitCount)), totalBytes,
                                  entry.path, index, entryCount)
                     }
@@ -64,12 +69,14 @@ struct SafeZIPExtractor {
                     let checksum = try archive.extract(entry, to: destination.appendingPathComponent(entry.path),
                                                        bufferSize: 1_024 * 1_024, skipCRC32: false,
                                                        allowUncontainedSymlinks: false, progress: entryProgress)
+                    try Task.checkCancellation()
                     guard checksum == entry.checksum else { throw SafeZIPExtractorError.extractionFailed }
                     completedBytes += entrySize
                     progress(completedBytes, totalBytes, entry.path, index + 1, entryCount)
                 }
             }
         } catch {
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
             let value = error as NSError
             if value.domain == NSCocoaErrorDomain,
                value.code == CocoaError.Code.fileReadInvalidFileName.rawValue {
@@ -106,6 +113,7 @@ struct SafeZIPExtractor {
         var directories: [String] = []
         var totalBytes: Int64 = 0
         for case let url as URL in enumerator {
+            try Task.checkCancellation()
             let values: URLResourceValues
             do {
                 values = try url.resourceValues(forKeys: Set(keys))

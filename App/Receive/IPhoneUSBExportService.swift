@@ -155,6 +155,7 @@ actor IPhoneUSBExportService {
     private let progressStore: USBReceiveProgressStore
     private let zipWorkingDirectory: URL
     private let now: @Sendable () -> Date
+    private var cleanupFailures: [String] = []
 
     init(
         deletionStore: IPhoneUSBDeletionDecisionStore,
@@ -195,8 +196,11 @@ actor IPhoneUSBExportService {
         }
         var verified: [IPhoneUSBDeletionDecision] = []
         var failed: [IPhoneUSBExportFailure] = []
+        var cancelled = false
+        cleanupFailures = []
         for (index, file) in files.enumerated() {
             do {
+                try Task.checkCancellation()
                 let decision = try exportOne(
                     file,
                     to: destination,
@@ -206,6 +210,9 @@ actor IPhoneUSBExportService {
                     archiveMode: archiveMode
                 )
                 verified.append(decision)
+            } catch is CancellationError {
+                cancelled = true
+                break
             } catch {
                 let reason = Self.failure(sourceID: file.id, error: error)
                 let last = progressStore.snapshot()
@@ -214,8 +221,15 @@ actor IPhoneUSBExportService {
                     detail: "\(phase)\n\(reason.message)"))
             }
         }
-        let summary = IPhoneUSBExportSummary(verified: verified, failed: failed)
-        if failed.isEmpty {
+        let summary = IPhoneUSBExportSummary(verified: verified, failed: failed,
+            cancelled: cancelled, cleanupWarning: cleanupFailures.isEmpty ? nil : cleanupFailures.joined(separator: "\n"))
+        if cancelled {
+            progressStore.publish(USBReceiveProgress(
+                stage: .cancelled, deliveryID: nil, fileName: nil, currentIndex: verified.count,
+                totalCount: files.count, completedCount: verified.count, bytesReceived: 0,
+                totalBytes: 0, startedAt: nil, expiresAt: nil, errorMessage: summary.cleanupWarning,
+                detail: cleanupFailures.isEmpty ? "복사 취소 · 임시파일 정리 완료 · 원본 유지" : "복사 취소 · 일부 임시파일 정리 실패"))
+        } else if failed.isEmpty {
             let copiedBytes = verified.reduce(Int64(0)) { total, record in
                 total + (record.copiedFiles?.reduce(Int64(0)) { $0 + $1.size } ?? record.sourceSize)
             }
@@ -414,7 +428,7 @@ actor IPhoneUSBExportService {
         guard fileManager.createFile(atPath: partialURL.path, contents: nil) else {
             throw IPhoneUSBExportError.destinationNotWritable
         }
-        defer { try? fileManager.removeItem(at: partialURL) }
+        defer { removeExportTemporaryItem(partialURL) }
 
         let sourceSHA = try copyAndHash(
             source: file.url,
@@ -444,6 +458,7 @@ actor IPhoneUSBExportService {
             fileManager: fileManager
         )
         let finalURL = destination.url.appendingPathComponent(storedName)
+        try Task.checkCancellation()
         try coordinatedMove(from: partialURL, to: finalURL)
         publish(
             file: file,
@@ -500,7 +515,7 @@ actor IPhoneUSBExportService {
             "extract-\(UUID().uuidString.lowercased())",
             isDirectory: true
         )
-        defer { try? fileManager.removeItem(at: extractionRoot) }
+        defer { removeExportTemporaryItem(extractionRoot) }
 
         let extraction: SafeZIPExtraction
         do {
@@ -532,11 +547,12 @@ actor IPhoneUSBExportService {
             isDirectory: true
         )
         try fileManager.createDirectory(at: partialURL, withIntermediateDirectories: true)
-        defer { try? fileManager.removeItem(at: partialURL) }
+        defer { removeExportTemporaryItem(partialURL) }
 
         phaseStartedAt = now()
         report(.copyingToUSB, 0, extraction.totalBytes, "2/2 · USB 폴더 생성 준비")
         for (index, relativePath) in extraction.directories.enumerated() {
+            try Task.checkCancellation()
             report(.copyingToUSB, 0, extraction.totalBytes,
                    "2/2 · USB 폴더 생성 \(index)/\(extraction.directories.count)개\n\(relativePath)")
             try fileManager.createDirectory(
@@ -548,6 +564,7 @@ actor IPhoneUSBExportService {
         var copiedBytes: Int64 = 0
         var copiedFiles: [USBCopyFileDigest] = []
         for extractedFile in extraction.files {
+            try Task.checkCancellation()
             report(.copyingToUSB, copiedBytes, extraction.totalBytes,
                    "2/2 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\n\(extractedFile.relativePath)")
             let partialFile = partialURL.appendingPathComponent(extractedFile.relativePath)
@@ -593,6 +610,7 @@ actor IPhoneUSBExportService {
             fileManager: fileManager
         )
         let finalURL = destination.url.appendingPathComponent(storedName, isDirectory: true)
+        try Task.checkCancellation()
         try coordinatedMove(from: partialURL, to: finalURL)
         publish(
             file: file,
@@ -620,6 +638,15 @@ actor IPhoneUSBExportService {
         )
         try deletionStore.save(decision)
         return decision
+    }
+
+    private func removeExportTemporaryItem(_ url: URL) {
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        do {
+            try fileManager.removeItem(at: url)
+        } catch {
+            cleanupFailures.append("임시파일 정리 실패 · \(url.lastPathComponent): \(error.localizedDescription)")
+        }
     }
 
     private func validateDestination(_ destination: USBBookmarkDestination) throws {
@@ -658,8 +685,10 @@ actor IPhoneUSBExportService {
         var copied: Int64 = 0
         do {
             while try autoreleasepool(invoking: {
+                try Task.checkCancellation()
                 guard let data = try input.read(upToCount: 1_024 * 1_024), !data.isEmpty else { return false }
                 try output.write(contentsOf: data)
+                try Task.checkCancellation()
                 hasher.update(data: data)
                 copied += Int64(data.count)
                 progress(copied)
@@ -670,6 +699,7 @@ actor IPhoneUSBExportService {
             // and propagate write/close errors without fsync on every tiny file.
             try input.close()
             try output.close()
+            try Task.checkCancellation()
         } catch {
             try? input.close()
             try? output.close()
