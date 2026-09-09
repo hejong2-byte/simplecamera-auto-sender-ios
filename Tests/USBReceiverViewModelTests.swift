@@ -4,6 +4,33 @@ import XCTest
 
 @MainActor
 final class USBReceiverViewModelTests: XCTestCase {
+    func testCopyCancellationKeepsBusyUntilWorkerReturnsAndPreservesOriginal() async throws {
+        let file = try storedFile()
+        let started = expectation(description: "copy started")
+        let model = try exportModel(files: [file]) { _, _, _ in
+            started.fulfill()
+            try? await Task.sleep(for: .milliseconds(400))
+            let cancelled = Task.isCancelled
+            await Task.detached { try? await Task.sleep(for: .milliseconds(50)) }.value
+            return IPhoneUSBExportSummary(verified: [], failed: [], cancelled: cancelled)
+        }
+        await model.refresh()
+        model.toggleStoredFileSelection(file.id)
+        let task = Task { await model.exportSelectedFilesToUSB() }
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertTrue(model.canCancelUSBCopy)
+        model.cancelUSBCopy()
+        XCTAssertTrue(model.isCancellingUSBCopy)
+        XCTAssertTrue(model.isExportingToUSB, "Do not claim cancellation before cleanup returns")
+        await task.value
+        XCTAssertFalse(model.isExportingToUSB)
+        XCTAssertFalse(model.isCancellingUSBCopy)
+        XCTAssertFalse(model.needsDeletionDecision)
+        XCTAssertNil(model.lastUSBExportError)
+        XCTAssertEqual(model.usbExportCompletionMessage, "USB 복사 취소 완료 · 원본 유지")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
+
     func testCopyAndOptionalVerificationResolveUSBOffTheMainThread() async throws {
         let file = try storedFile()
         let bookmark = USBBookmarkStore(fileURL: temporaryDirectory().appendingPathComponent("probe.json"),

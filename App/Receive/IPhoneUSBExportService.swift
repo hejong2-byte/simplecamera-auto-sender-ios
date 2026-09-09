@@ -53,6 +53,8 @@ struct IPhoneUSBDeletionDecision: Codable, Equatable, Sendable, Identifiable {
 struct IPhoneUSBExportSummary: Equatable, Sendable {
     let verified: [IPhoneUSBDeletionDecision]
     let failed: [IPhoneUSBExportFailure]
+    var cancelled = false
+    var cleanupWarning: String? = nil
 
     var errorMessage: String? {
         guard let first = failed.first else { return nil }

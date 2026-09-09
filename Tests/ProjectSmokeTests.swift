@@ -19,7 +19,7 @@ final class ProjectSmokeTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 34"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 35"))
         XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.24"))
         XCTAssertTrue(project.contains("exactVersion: 0.9.20"))
         XCTAssertTrue(project.contains("UIFileSharingEnabled: true"))

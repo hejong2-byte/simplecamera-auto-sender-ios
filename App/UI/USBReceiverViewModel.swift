@@ -66,6 +66,7 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var usbExportCompletionMessage: String?
     @Published private(set) var lastOriginalCleanupError: String?
     @Published private(set) var isExportingToUSB = false
+    @Published private(set) var isCancellingUSBCopy = false
     @Published private(set) var isVerifyingUSBCopies = false
     @Published private(set) var usbVerificationMessage: String?
     @Published private(set) var usbVerificationFailed = false
@@ -695,6 +696,10 @@ final class USBReceiverViewModel: ObservableObject {
         storedZIPExportFilesPendingChoice = []
         await exportStoredFiles(selected, archiveMode: archiveMode)
     }
+
+    var canCancelUSBCopy: Bool { false }
+
+    func cancelUSBCopy() {}
 
     private func exportStoredFiles(
         _ selected: [IPhoneStoredFile],
