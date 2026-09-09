@@ -31,6 +31,7 @@ jobs:
             -resultBundlePath build/SelectionResults.xcresult \
             -parallel-testing-enabled NO \
             -only-testing:SimpleCameraAutoSenderTests/USBFolderCleanupServiceTests \
+            -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testHomeCannotReopenZIPDecisionWhileReceiving \
             -only-testing:SimpleCameraAutoSenderTests/IPhoneIncomingFilesViewModelTests/testMultipleArrivalsStayPendingUntilUserOpensSelectionAfterEachLaunch \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testMultipleArrivalsDoNotOpenSheetUntilTappedAfterColdLaunch \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testProductionLaunchRecoversCorruptLocalState \

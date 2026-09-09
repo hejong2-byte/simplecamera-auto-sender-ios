@@ -138,11 +138,14 @@ actor USBFolderCleanupService {
         perform work: (URL) throws -> T
     ) throws -> T {
         guard !destination.isStale else { throw USBFolderCleanupError.staleDestination }
-        let root = destination.url.standardizedFileURL
-        guard root.isFileURL, startAccessing(root) else {
+        // Acquire/release the scope on the URL returned by the bookmark/picker.
+        // Normalize only for containment checks, after access has been acquired.
+        let scopedURL = destination.url
+        guard scopedURL.isFileURL, startAccessing(scopedURL) else {
             throw USBFolderCleanupError.destinationUnavailable
         }
-        defer { stopAccessing(root) }
+        defer { stopAccessing(scopedURL) }
+        let root = scopedURL.standardizedFileURL
 
         let rootValues = try? root.resourceValues(
             forKeys: [.isDirectoryKey, .isSymbolicLinkKey]

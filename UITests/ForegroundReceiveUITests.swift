@@ -1,6 +1,15 @@
 import XCTest
 
 final class ForegroundReceiveUITests: XCTestCase {
+    func testHomeCannotReopenZIPDecisionWhileReceiving() {
+        let app = launchSimulation(delay: 2, outcome: "downloading", withZIP: true)
+        let pending = app.buttons["incoming-pending"]
+        XCTAssertTrue(pending.waitForExistence(timeout: 20))
+        XCTAssertFalse(pending.isEnabled, "Home must block duplicate receive decisions too")
+        XCTAssertFalse(app.buttons["incoming-zip-extract"].exists)
+        XCTAssertFalse(app.buttons["incoming-zip-keep"].exists)
+    }
+
     func testMultipleArrivalsDoNotOpenSheetUntilTappedAfterColdLaunch() {
         let app = launchSimulation(withMultipleIncoming: true)
         for launch in 0..<2 {

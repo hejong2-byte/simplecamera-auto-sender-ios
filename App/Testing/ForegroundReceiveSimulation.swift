@@ -215,7 +215,18 @@ final class ForegroundReceiveSimulation {
             deleteUSBFolderContents: { destination, summary in
                 try await cleanup.deleteAllContents(of: destination, matching: summary)
             },
-            progressUpdates: { AsyncStream { $0.finish() } },
+            progressUpdates: { AsyncStream { continuation in
+                if outcome == "downloading", let file = files.first {
+                    continuation.yield(USBReceiveProgress(
+                        stage: .downloading, destination: .iphoneLocal,
+                        deliveryID: file.deliveryID, fileName: file.fileName,
+                        currentIndex: 1, totalCount: 1, completedCount: 0,
+                        bytesReceived: 1, totalBytes: file.size,
+                        startedAt: Date(), expiresAt: file.expiresAt, errorMessage: nil
+                    ))
+                }
+                continuation.finish()
+            } },
             loadOutcome: { id in
                 receiveOutcome?.receiverID == id ? receiveOutcome : nil
             },
