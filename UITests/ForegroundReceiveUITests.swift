@@ -23,6 +23,7 @@ final class ForegroundReceiveUITests: XCTestCase {
 
     func testPendingSelectionSurvivesRotationAndRepeatedForegrounding() {
         let app = launchSimulation(withMultipleIncoming: true)
+        openPendingSelection(app)
         addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
         let selection = app.otherElements["pending-file-selection"]
         let second = app.buttons["pending-file-10000000-0000-0000-0000-000000000002"]
@@ -44,6 +45,7 @@ final class ForegroundReceiveUITests: XCTestCase {
         for _ in 0..<2 {
             XCUIDevice.shared.press(.home)
             app.activate()
+            openPendingSelection(app)
             XCTAssertTrue(selection.waitForExistence(timeout: 10))
             second.tap()
             XCTAssertTrue(app.buttons["pending-confirm-selection"].isEnabled)
@@ -350,6 +352,7 @@ final class ForegroundReceiveUITests: XCTestCase {
 
     func testMultiplePendingFilesCanBeSelectedAndReceivedFirst() {
         let app = launchSimulation(withMultipleIncoming: true)
+        openPendingSelection(app)
 
         let selection = app.otherElements["pending-file-selection"]
         XCTAssertTrue(selection.waitForExistence(timeout: 20))
@@ -379,6 +382,13 @@ final class ForegroundReceiveUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS %@", "first.txt")
         ).firstMatch.exists)
+    }
+
+    private func openPendingSelection(_ app: XCUIApplication) {
+        let pending = app.buttons["incoming-pending"]
+        XCTAssertTrue(pending.waitForExistence(timeout: 20))
+        reveal(pending, in: app)
+        pending.tap()
     }
 
     func testZIPChoicePrecedesDestinationAndPostponementReturnsAfterActivation() {

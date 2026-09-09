@@ -282,6 +282,12 @@ final class IPhoneIncomingFilesViewModel: ObservableObject {
         guard prompt == nil, selectionBatch == nil, let receiverID else { return }
         let files = pendingFiles.filter { !offeredIDs.contains($0.deliveryID) }
         guard !files.isEmpty else { return }
+        // Keep launch/foreground activation independent of the multi-file sheet.
+        // The pending-files action opens that sheet explicitly, without approving downloads.
+        guard files.count == 1 else {
+            offeredIDs.formUnion(files.map(\.deliveryID))
+            return
+        }
         present(files, receiverID: receiverID)
     }
 

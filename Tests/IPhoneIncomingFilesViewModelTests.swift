@@ -31,7 +31,7 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
 
         XCTAssertEqual(context.model.pendingFiles.count, 10)
         XCTAssertNil(context.model.prompt)
-        XCTAssertEqual(context.model.selectionBatch?.files.count, 10)
+        XCTAssertNil(context.model.selectionBatch)
         XCTAssertTrue(context.model.selectedPendingFileIDs.isEmpty)
         XCTAssertTrue(try context.store.destinations(receiverID: context.server.receiverID).isEmpty)
     }
@@ -39,6 +39,7 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
     func testTwoArrivalsRequireSelectionAndApproveOnlyChosenFile() async throws {
         let context = try makeContext(count: 2)
         await activate(context)
+        context.model.showPendingFiles()
 
         XCTAssertNil(context.model.prompt)
         XCTAssertEqual(context.model.selectionBatch?.files.count, 2)
@@ -63,6 +64,7 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
     func testUnchangedPollingKeepsPresentedSelectionBatchStable() async throws {
         let context = try makeContext(count: 2)
         await activate(context)
+        context.model.showPendingFiles()
         let batch = try XCTUnwrap(context.model.selectionBatch)
         let selectedID = try XCTUnwrap(batch.files.first?.deliveryID)
         context.model.togglePendingFileSelection(selectedID)
@@ -78,6 +80,7 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
     func testUnchangedPollingDoesNotRepublishPresentedSelection() async throws {
         let context = try makeContext(count: 2)
         await activate(context)
+        context.model.showPendingFiles()
         var publishedUpdates = 0
         let observation = context.model.objectWillChange.sink {
             publishedUpdates += 1
@@ -92,6 +95,7 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
     func testNewArrivalDoesNotJoinFrozenSelectionAndDisappearedSelectionIsRemoved() async throws {
         let context = try makeContext(count: 2)
         await activate(context)
+        context.model.showPendingFiles()
         let frozenIDs = try XCTUnwrap(context.model.selectionBatch).files.map(\.deliveryID)
         let chosen = try XCTUnwrap(frozenIDs.first)
         context.model.togglePendingFileSelection(chosen)
@@ -110,6 +114,7 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
     func testCancelledSelectionDoesNotReopenEveryPollAndCanBeReopenedManually() async throws {
         let context = try makeContext(count: 2)
         await activate(context)
+        context.model.showPendingFiles()
         context.model.cancelPendingFileSelection()
         for _ in 0..<10 { await context.model.refresh() }
         XCTAssertNil(context.model.prompt)
@@ -177,6 +182,7 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
     func testUSBChoiceApprovesAllTenFilesAndNoMore() async throws {
         let context = try makeContext(count: 10)
         await activate(context)
+        context.model.showPendingFiles()
         context.model.selectAllPendingFiles()
         XCTAssertTrue(context.model.confirmPendingFileSelection())
         let batch = try XCTUnwrap(context.model.prompt)
@@ -315,10 +321,12 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
     }
 
     private func activate(_ context: Context) async {
+        let completedBeforeActivation = context.server.completedCalls
         context.model.setActive(true)
         await waitUntil {
-            context.server.completedCalls > 0
+            context.server.completedCalls > completedBeforeActivation
                 && (context.model.prompt != nil
+                    || !context.model.pendingFiles.isEmpty
                     || context.model.selectionBatch != nil
                     || context.server.files.isEmpty
                     || context.server.files.allSatisfy { ![.available, .leased].contains($0.state) })

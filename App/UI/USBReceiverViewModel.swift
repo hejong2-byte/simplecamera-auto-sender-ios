@@ -850,7 +850,7 @@ final class USBReceiverViewModel: ObservableObject {
                 lastError = nil
             }
         }
-        if progress.stage == .idle {
+        if progress.stage == .idle, previousStage != nil {
             clearRecoveredDiscoveryOutcome()
         }
 
