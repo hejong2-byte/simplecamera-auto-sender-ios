@@ -303,11 +303,14 @@ struct USBZIPReceivePipeline {
         var hasher = SHA256()
         var copied: Int64 = 0
         do {
-            while let data = try input.read(upToCount: 1_024 * 1_024), !data.isEmpty {
+            while try autoreleasepool(invoking: {
+                guard let data = try input.read(upToCount: 1_024 * 1_024), !data.isEmpty else { return false }
                 try output.write(contentsOf: data)
                 hasher.update(data: data)
                 copied += Int64(data.count)
                 progress(copied)
+                return true
+            }) {
             }
             try output.synchronize()
             try input.close()

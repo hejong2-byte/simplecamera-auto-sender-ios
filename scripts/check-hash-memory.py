@@ -30,6 +30,7 @@ SWIFT = r'''
 import Foundation
 import CryptoKit
 import Darwin
+enum USBReceiveServiceError: Error { case sizeMismatch }
 
 func residentBytes() -> UInt64 {
     var info = mach_task_basic_info()
@@ -65,13 +66,18 @@ var failures = 0
 CASES = [(source, "hashFile") for source in SOURCES] + [
     ("IPhoneUSBExportService.swift", "copyAndHash"),
     ("USBZIPReceivePipeline.swift", "copyAndHash"),
+    ("USBReceiveService.swift", "hashPrefix"),
 ]
 for index, (source, method) in enumerate(CASES):
     SWIFT += "\nstruct ProductionHash%d {\n" % index
     SWIFT += hash_method(source, method)
+    if method == "hashPrefix":
+        SWIFT += '\nfunc prefixDigest(_ url: URL, size: Int64) throws -> String { var hasher = SHA256(); try hashPrefix(of: url, length: size, into: &hasher); return Self.hex(hasher.finalize()) }\n'
     SWIFT += '\nstatic func hex(_ digest: SHA256.Digest) -> String { digest.map { String(format: "%02x", $0) }.joined() }\n}\n'
     call = (f"ProductionHash{index}().hashFile(fixture)" if method == "hashFile" else
             f"ProductionHash{index}().copyAndHash(source: fixture, destination: copied, progress: {{ _ in }})")
+    if method == "hashPrefix":
+        call = f"ProductionHash{index}().prefixDigest(fixture, size: size)"
     SWIFT += f'''
 let copied{index} = fixture.appendingPathExtension("copy-{index}")
 if selected == {index} {{ try autoreleasepool {{
