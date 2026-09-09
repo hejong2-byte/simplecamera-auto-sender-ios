@@ -377,7 +377,14 @@ actor IPhoneUSBExportService {
         completedCount: Int,
         startedAt: Date
     ) throws -> IPhoneUSBDeletionDecision {
-        let sourceSHA = try hashFile(file.url)
+        func report(_ stage: USBReceiveStage, _ bytes: Int64, _ total: Int64, _ detail: String) {
+            publish(file: file, currentIndex: currentIndex, totalCount: totalCount,
+                    completedCount: completedCount, bytes: bytes, totalBytes: total,
+                    startedAt: startedAt, stage: stage, detail: detail)
+        }
+        let sourceSHA = try hashFile(file.url) { bytes in
+            report(.checkingSource, bytes, sourceSize, "1/4 · ZIP 원본 SHA 검사")
+        }
         if let expected = file.receivedRecord?.sha256.lowercased(), expected != sourceSHA {
             throw IPhoneUSBExportError.shaMismatch
         }
@@ -395,7 +402,9 @@ actor IPhoneUSBExportService {
         let extraction: SafeZIPExtraction
         do {
             extraction = try SafeZIPExtractor(fileManager: fileManager)
-                .extract(file.url, to: extractionRoot)
+                .extract(file.url, to: extractionRoot) { bytes, total, name, done, count in
+                    report(.extracting, bytes, total, "2/4 · 압축 해제 \(done)/\(count)개\n\(name)")
+                }
         } catch SafeZIPExtractorError.unsafeArchive {
             throw IPhoneUSBExportError.unsafeZIPArchive
         } catch SafeZIPExtractorError.extractionFailed {
@@ -403,7 +412,9 @@ actor IPhoneUSBExportService {
         }
 
         guard try fileSize(file.url) == sourceSize,
-              try hashFile(file.url) == sourceSHA else {
+              try hashFile(file.url, progress: { bytes in
+                  report(.checkingSource, bytes, sourceSize, "2/4 · 압축 해제 후 ZIP 원본 변경 여부 검사")
+              }) == sourceSHA else {
             throw IPhoneUSBExportError.sourceChanged
         }
 
@@ -422,7 +433,10 @@ actor IPhoneUSBExportService {
         try fileManager.createDirectory(at: partialURL, withIntermediateDirectories: true)
         defer { try? fileManager.removeItem(at: partialURL) }
 
-        for relativePath in extraction.directories {
+        report(.copyingToUSB, 0, extraction.totalBytes, "3/4 · USB 폴더 생성 준비")
+        for (index, relativePath) in extraction.directories.enumerated() {
+            report(.copyingToUSB, 0, extraction.totalBytes,
+                   "3/4 · USB 폴더 생성 \(index)/\(extraction.directories.count)개\n\(relativePath)")
             try fileManager.createDirectory(
                 at: partialURL.appendingPathComponent(relativePath, isDirectory: true),
                 withIntermediateDirectories: true
@@ -432,6 +446,8 @@ actor IPhoneUSBExportService {
         var copiedBytes: Int64 = 0
         var copiedFiles: [(path: String, size: Int64, sha256: String)] = []
         for extractedFile in extraction.files {
+            report(.copyingToUSB, copiedBytes, extraction.totalBytes,
+                   "3/4 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\n\(extractedFile.relativePath)")
             let partialFile = partialURL.appendingPathComponent(extractedFile.relativePath)
             try fileManager.createDirectory(
                 at: partialFile.deletingLastPathComponent(),
@@ -451,7 +467,8 @@ actor IPhoneUSBExportService {
                         completedCount: completedCount,
                         bytes: copiedBytes + bytes,
                         totalBytes: extraction.totalBytes,
-                        startedAt: startedAt
+                        startedAt: startedAt,
+                        detail: "3/4 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\n\(extractedFile.relativePath)"
                     )
                 }
             )
@@ -464,6 +481,8 @@ actor IPhoneUSBExportService {
                 size: extractedFile.size,
                 sha256: copiedSHA
             ))
+            report(.copyingToUSB, copiedBytes, extraction.totalBytes,
+                   "3/4 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\n\(extractedFile.relativePath)")
         }
 
         let requestedFolderName = (file.name as NSString)
@@ -481,20 +500,25 @@ actor IPhoneUSBExportService {
             currentIndex: currentIndex,
             totalCount: totalCount,
             completedCount: completedCount,
-            bytes: extraction.totalBytes,
+            bytes: 0,
             totalBytes: extraction.totalBytes,
             startedAt: startedAt,
             stage: .verifying
         )
         do {
-            for copiedFile in copiedFiles {
+            var verifiedBytes: Int64 = 0
+            for (index, copiedFile) in copiedFiles.enumerated() {
                 let finalFile = finalURL.appendingPathComponent(copiedFile.path)
                 guard try fileSize(finalFile) == copiedFile.size else {
                     throw IPhoneUSBExportError.sizeMismatch
                 }
-                guard try hashFile(finalFile) == copiedFile.sha256 else {
+                guard try hashFile(finalFile, progress: { bytes in
+                    report(.verifying, verifiedBytes + bytes, extraction.totalBytes,
+                           "4/4 · USB 검증 \(index)/\(copiedFiles.count)개\n\(copiedFile.path)")
+                }) == copiedFile.sha256 else {
                     throw IPhoneUSBExportError.shaMismatch
                 }
+                verifiedBytes += copiedFile.size
             }
         } catch {
             try? fileManager.removeItem(at: finalURL)
@@ -577,15 +601,19 @@ actor IPhoneUSBExportService {
         return Int64(values.fileSize ?? 0)
     }
 
-    private func hashFile(_ url: URL) throws -> String {
+    private func hashFile(_ url: URL, progress: (Int64) -> Void = { _ in }) throws -> String {
         let input = try FileHandle(forReadingFrom: url)
         defer { try? input.close() }
         var hasher = SHA256()
+        var processedBytes: Int64 = 0
+        progress(0)
         // FileHandle can retain autoreleased buffers until this long operation returns.
         // Drain each chunk so verifying multi-GB files uses bounded memory.
         while try autoreleasepool(invoking: {
             guard let data = try input.read(upToCount: 1_024 * 1_024), !data.isEmpty else { return false }
             hasher.update(data: data)
+            processedBytes += Int64(data.count)
+            progress(processedBytes)
             return true
         }) {
         }
@@ -618,7 +646,8 @@ actor IPhoneUSBExportService {
         bytes: Int64,
         totalBytes: Int64? = nil,
         startedAt: Date,
-        stage: USBReceiveStage = .copyingToUSB
+        stage: USBReceiveStage = .copyingToUSB,
+        detail: String? = nil
     ) {
         progressStore.publish(USBReceiveProgress(
             stage: stage,
@@ -632,7 +661,8 @@ actor IPhoneUSBExportService {
             totalBytes: totalBytes ?? file.size,
             startedAt: startedAt,
             expiresAt: nil,
-            errorMessage: nil
+            errorMessage: nil,
+            detail: detail
         ))
     }
 

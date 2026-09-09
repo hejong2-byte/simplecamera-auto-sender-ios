@@ -277,9 +277,9 @@ final class USBReceiverManualDeletionTests: XCTestCase {
             storedFiles: { try catalog.refresh() },
             previewStoredFile: { try catalog.previewURL(for: $0) },
             canPreviewFile: canPreview,
-            deleteStoredFiles: { files in
+            deleteStoredFiles: { files, progress in
                 await beforeDelete()
-                return catalog.delete(files)
+                return catalog.delete(files, progress: progress)
             },
             progressUpdates: { progress.updates() },
             defaultDeviceName: "Test iPhone",

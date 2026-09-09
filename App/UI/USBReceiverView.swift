@@ -127,9 +127,6 @@ struct USBReceiverView: View {
             if model.selectedDestination == .iphoneLocal {
                 Label("받은 파일 폴더에 저장", systemImage: "iphone.gen3")
                     .foregroundStyle(.green)
-                Text("시작된 다운로드는 다른 앱을 사용 중에도 iOS가 이어갈 수 있습니다.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             } else {
                 Label("USB에 직접 저장", systemImage: "externaldrive")
             }
@@ -148,9 +145,6 @@ struct USBReceiverView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(model.isExportingToUSB || model.isReceivingFile || model.isDeletingStoredFiles)
-            Text("새 파일은 도착 안내에서 저장 위치를 선택한 뒤 받습니다. 이미 저장된 파일은 아래 목록에서 USB로 복사하세요.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
         .cardStyle()
     }
@@ -231,9 +225,6 @@ struct USBReceiverView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else {
-                Text("파일을 선택한 뒤 USB로 복사하거나 삭제하세요. 선택 \(model.selectedStoredFileIDs.count)개")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 ForEach(model.storedFiles) { file in
                     HStack(spacing: 8) {
                         Button {
@@ -270,23 +261,31 @@ struct USBReceiverView: View {
                     Divider()
                 }
             }
-            Button("선택 파일 USB로 복사") {
-                Task { await model.requestStoredFilesUSBExport() }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(!model.hasStoredFileSelection || model.isExportingToUSB || model.isReceivingFile
-                || model.isDeletingStoredFiles || model.needsStoredZIPExportChoice)
-            .accessibilityIdentifier("stored-files-export")
+            HStack(alignment: .center, spacing: 8) {
+                Button {
+                    Task { await model.requestStoredFilesUSBExport() }
+                } label: {
+                    Text("선택 파일 USB로 복사")
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!model.hasStoredFileSelection || model.isExportingToUSB || model.isReceivingFile
+                    || model.isDeletingStoredFiles || model.needsStoredZIPExportChoice)
+                .accessibilityIdentifier("stored-files-export")
 
-            Button("선택 파일 삭제", role: .destructive) {
-                model.requestStoredFileDeletion()
+                Button(role: .destructive) {
+                    model.requestStoredFileDeletion()
+                } label: {
+                    Text("선택 파일 삭제")
+                        .frame(minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!model.canDeleteStoredFiles)
+                .accessibilityIdentifier("stored-files-delete")
             }
-            .buttonStyle(.bordered)
-            .disabled(!model.canDeleteStoredFiles)
-            .accessibilityIdentifier("stored-files-delete")
 
-            if model.isDeletingStoredFiles {
-                ProgressView("선택 파일 삭제 중…")
+            if model.isDeletingStoredFiles || model.storedFileDeletionProgress != nil {
+                FileDeletionProgressView(progress: model.storedFileDeletionProgress, isRunning: model.isDeletingStoredFiles)
             }
             if let message = model.storedFileDeletionMessage {
                 Label(message, systemImage: "checkmark.circle.fill")
@@ -321,7 +320,7 @@ struct USBReceiverView: View {
             Divider()
             Text(model.usbExportStageTitle).font(.headline)
             if let progress = model.usbExportProgress {
-                if progress.stage != .failed {
+                if progress.stage != .failed, progress.totalBytes > 0 || progress.stage == .completed {
                     ProgressView(value: Double(progress.percent), total: 100)
                         .tint(.cyan)
                     HStack {
@@ -331,6 +330,25 @@ struct USBReceiverView: View {
                         Text(model.usbExportByteText)
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
+                    }
+                }
+                if progress.totalBytes == 0, model.isExportingToUSB {
+                    ProgressView("작업량 확인 중").tint(.cyan)
+                }
+                if let detail = progress.detail {
+                    Text(detail).font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                }
+                if model.isExportingToUSB, progress.stage == .copyingToUSB {
+                    Text("진행률은 용량 기준입니다. 작은 파일이 많으면 폴더 생성·파일 기록·동기화 때문에 %가 천천히 오를 수 있습니다. 위의 처리 개수와 파일명도 확인하세요.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if model.isExportingToUSB, let updatedAt = model.usbExportLastUpdatedAt {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        let seconds = max(0, Int(context.date.timeIntervalSince(updatedAt)))
+                        if seconds >= 3 {
+                            Text("현재 작업의 진행 응답 대기 · 마지막 갱신 후 \(seconds)초")
+                                .font(.caption.monospacedDigit()).foregroundStyle(.orange)
+                        }
                     }
                 }
                 if let fileName = progress.fileName {

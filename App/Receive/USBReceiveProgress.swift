@@ -11,6 +11,9 @@ enum USBReceiveStage: String, Codable, Sendable, Equatable {
     case finalizing
     case copyingToUSB
     case acknowledging
+    case receiptPending
+    case savedWithoutReceipt
+    case checkingSource
     case completed
     case paused
     case failed
@@ -34,6 +37,7 @@ struct USBReceiveProgress: Codable, Sendable, Equatable {
     let startedAt: Date?
     let expiresAt: Date?
     let errorMessage: String?
+    let detail: String?
 
     init(
         stage: USBReceiveStage,
@@ -47,7 +51,8 @@ struct USBReceiveProgress: Codable, Sendable, Equatable {
         totalBytes: Int64,
         startedAt: Date?,
         expiresAt: Date?,
-        errorMessage: String?
+        errorMessage: String?,
+        detail: String? = nil
     ) {
         self.stage = stage
         self.destination = destination
@@ -61,6 +66,7 @@ struct USBReceiveProgress: Codable, Sendable, Equatable {
         self.startedAt = startedAt
         self.expiresAt = expiresAt
         self.errorMessage = errorMessage
+        self.detail = detail
     }
 
     var percent: Int {

@@ -2,6 +2,7 @@ import Foundation
 import QuickLook
 
 enum IPhoneReceiveStatusKind: Sendable, Equatable {
+    case warning
     case waiting
     case active
     case saved
@@ -25,7 +26,7 @@ final class USBReceiverViewModel: ObservableObject {
     typealias ApproveLocalFallback = @Sendable (Set<UUID>) throws -> Void
     typealias StoredFilesProvider = @Sendable () throws -> [IPhoneStoredFile]
     typealias StoredFilePreviewAction = @Sendable (IPhoneStoredFile) throws -> URL
-    typealias DeleteStoredFiles = @Sendable ([IPhoneStoredFile]) async throws -> IPhoneStoredFileDeletionSummary
+    typealias DeleteStoredFiles = @Sendable ([IPhoneStoredFile], @Sendable (FileDeletionProgress) -> Void) async throws -> IPhoneStoredFileDeletionSummary
     typealias ExportFiles = @Sendable (
         [IPhoneStoredFile],
         USBBookmarkDestination,
@@ -39,7 +40,8 @@ final class USBReceiverViewModel: ObservableObject {
     ) async throws -> USBFolderContentsSummary
     typealias DeleteUSBFolderContents = @Sendable (
         USBBookmarkDestination,
-        USBFolderContentsSummary
+        USBFolderContentsSummary,
+        @Sendable (FileDeletionProgress) -> Void
     ) async throws -> USBFolderDeletionSummary
     typealias RefreshFeatures = @Sendable () async throws -> Void
     typealias ProgressUpdates = @Sendable () -> AsyncStream<USBReceiveProgress>
@@ -57,6 +59,7 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var receiveProgress: USBReceiveProgress?
     @Published private(set) var receiveOutcome: IPhoneReceiveOutcome?
     @Published private(set) var usbExportProgress: USBReceiveProgress?
+    @Published private(set) var usbExportLastUpdatedAt: Date?
     @Published private(set) var lastUSBExportError: String?
     @Published private(set) var usbExportCompletionMessage: String?
     @Published private(set) var lastOriginalCleanupError: String?
@@ -70,6 +73,8 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var storedFilesPendingDeletion: [IPhoneStoredFile] = []
     @Published private(set) var storedZIPExportFilesPendingChoice: [IPhoneStoredFile] = []
     @Published private(set) var isDeletingStoredFiles = false
+    @Published private(set) var storedFileDeletionProgress: FileDeletionProgress?
+    @Published private(set) var usbFolderDeletionProgress: FileDeletionProgress?
     @Published private(set) var storedFileDeletionMessage: String?
     @Published private(set) var storedFileDeletionError: String?
     @Published var previewFile: IPhoneStoredFile?
@@ -141,7 +146,7 @@ final class USBReceiverViewModel: ObservableObject {
             throw IPhoneStoredFilePreviewError.unavailable
         },
         canPreviewFile: @escaping @MainActor (URL) -> Bool = { QLPreviewController.canPreview($0 as NSURL) },
-        deleteStoredFiles: @escaping DeleteStoredFiles = { _ in
+        deleteStoredFiles: @escaping DeleteStoredFiles = { _, _ in
             throw CocoaError(.featureUnsupported)
         },
         exportFiles: @escaping ExportFiles = { _, _, _ in
@@ -155,7 +160,7 @@ final class USBReceiverViewModel: ObservableObject {
         inspectUSBFolder: @escaping InspectUSBFolder = { _ in
             throw CocoaError(.featureUnsupported)
         },
-        deleteUSBFolderContents: @escaping DeleteUSBFolderContents = { _, _ in
+        deleteUSBFolderContents: @escaping DeleteUSBFolderContents = { _, _, _ in
             throw CocoaError(.featureUnsupported)
         },
         refreshFeatures: @escaping RefreshFeatures = {},
@@ -208,6 +213,7 @@ final class USBReceiverViewModel: ObservableObject {
             for await progress in exportProgressUpdates() {
                 guard !Task.isCancelled else { break }
                 self?.usbExportProgress = progress.stage == .idle ? nil : progress
+                self?.usbExportLastUpdatedAt = Date()
                 if progress.stage == .failed {
                     self?.lastUSBExportError = progress.errorMessage
                 }
@@ -304,6 +310,13 @@ final class USBReceiverViewModel: ObservableObject {
         if let outcome = receiveOutcome {
             let destination = outcome.destination == .iphoneLocal ? "iPhone" : "USB"
             switch outcome.kind {
+            case .receiptPending, .savedWithoutReceipt:
+                return IPhoneReceiveStatus(
+                    kind: .warning,
+                    title: outcome.kind == .receiptPending ? "iPhone 저장 완료 · 서버 확인 대기" : "iPhone 저장 완료 · 서버 확인 불가",
+                    message: outcome.message, fileName: outcome.fileName,
+                    occurredAt: outcome.occurredAt, percent: nil
+                )
             case .saved:
                 let count = max(outcome.totalCount, outcome.completedCount)
                 let message = count > 0
@@ -597,8 +610,11 @@ final class USBReceiverViewModel: ObservableObject {
         storedFileDeletionMessage = nil
         storedFileDeletionError = nil
         defer { isDeletingStoredFiles = false }
+        storedFileDeletionProgress = FileDeletionProgress(totalCount: confirmedFiles.count, processedCount: 0, failedCount: 0, currentName: nil)
+        let (updates, continuation) = AsyncStream<FileDeletionProgress>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let progressTask = Task { for await value in updates { storedFileDeletionProgress = value } }
         do {
-            let summary = try await deleteStoredFiles(confirmedFiles)
+            let summary = try await deleteStoredFiles(confirmedFiles) { continuation.yield($0) }
             let deletedIDs = Set(summary.deletedIDs)
             selectedStoredFileIDs.subtract(deletedIDs)
             storedFiles.removeAll { deletedIDs.contains($0.id) }
@@ -611,6 +627,8 @@ final class USBReceiverViewModel: ObservableObject {
         } catch {
             storedFileDeletionError = "파일을 삭제하지 못했습니다. \(error.localizedDescription)"
         }
+        continuation.finish()
+        await progressTask.value
         do {
             storedFiles = try storedFilesProvider()
             selectedStoredFileIDs.formIntersection(Set(storedFiles.map(\.id)))
@@ -766,6 +784,9 @@ final class USBReceiverViewModel: ObservableObject {
         usbFolderDeletionMessage = nil
         usbFolderDeletionError = nil
         defer { isDeletingUSBFolderContents = false }
+        usbFolderDeletionProgress = nil
+        let (updates, continuation) = AsyncStream<FileDeletionProgress>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let progressTask = Task { for await value in updates { usbFolderDeletionProgress = value } }
         do {
             guard let currentDestination = try bookmarkStore.resolve() else {
                 throw USBReceiveServiceError.missingDestination
@@ -777,7 +798,8 @@ final class USBReceiverViewModel: ObservableObject {
             }
             let result = try await deleteUSBFolderContents(
                 currentDestination,
-                confirmedSummary
+                confirmedSummary,
+                { continuation.yield($0) }
             )
             if result.failures.isEmpty, result.remainingItemCount == 0 {
                 usbFolderDeletionMessage = "SD/USB 파일 \(result.deletedItemCount)개 삭제 완료"
@@ -789,6 +811,8 @@ final class USBReceiverViewModel: ObservableObject {
         } catch {
             usbFolderDeletionError = Self.message(for: error)
         }
+        continuation.finish()
+        await progressTask.value
     }
 
     var usbFolderDeletionConfirmationTitle: String {
@@ -813,6 +837,8 @@ final class USBReceiverViewModel: ObservableObject {
             ? " · \(progress.currentIndex)/\(progress.totalCount)"
             : ""
         switch progress.stage {
+        case .checkingSource: return "ZIP 원본 검사 중\(position)"
+        case .extracting: return "ZIP 압축 해제 중\(position)"
         case .copyingToUSB: return "USB로 복사 중\(position)"
         case .verifying: return "USB 복사 검증 중\(position)"
         case .completed: return "USB 복사 완료"
@@ -843,6 +869,9 @@ final class USBReceiverViewModel: ObservableObject {
         case .finalizing: return "\(destination) 파일 확정 중\(position)"
         case .copyingToUSB: return "USB로 복사 중\(position)"
         case .acknowledging: return "PC에 저장 완료 알림 중\(position)"
+        case .receiptPending: return "iPhone 저장 완료 · 서버 확인 대기"
+        case .savedWithoutReceipt: return "iPhone 저장 완료 · 서버 확인 불가"
+        case .checkingSource: return "ZIP 원본 검사 중\(position)"
         case .completed: return "\(destination) 저장 완료"
         case .paused: return "PC 파일 수신 일시정지"
         case .failed:
@@ -897,11 +926,11 @@ final class USBReceiverViewModel: ObservableObject {
             clearRecoveredDiscoveryOutcome()
         }
 
-        if progress.stage == .completed || progress.stage == .failed {
+        if [.completed, .failed, .receiptPending, .savedWithoutReceipt].contains(progress.stage) {
             recordTerminalOutcome(progress)
         }
 
-        if progress.stage == .completed, progress.destination == .iphoneLocal {
+        if [.completed, .receiptPending, .savedWithoutReceipt].contains(progress.stage), progress.destination == .iphoneLocal {
             do {
                 storedFiles = try storedFilesProvider()
             } catch {
@@ -933,7 +962,13 @@ final class USBReceiverViewModel: ObservableObject {
         guard let activeReceiverID else { return }
 
         let destination = progress.destination == .iphoneLocal ? "iPhone" : "USB"
-        let kind: IPhoneReceiveOutcomeKind = progress.stage == .completed ? .saved : .failed
+        let kind: IPhoneReceiveOutcomeKind
+        switch progress.stage {
+        case .completed: kind = .saved
+        case .receiptPending: kind = .receiptPending
+        case .savedWithoutReceipt: kind = .savedWithoutReceipt
+        default: kind = .failed
+        }
         let outcome = IPhoneReceiveOutcome(
             receiverID: activeReceiverID,
             kind: kind,

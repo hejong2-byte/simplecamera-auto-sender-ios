@@ -8,6 +8,7 @@ enum IPhoneLocalReceiveStage: String, Codable, Sendable {
     case finalizing
     case ackPending
     case completed
+    case savedWithoutReceipt
     case failed
 }
 

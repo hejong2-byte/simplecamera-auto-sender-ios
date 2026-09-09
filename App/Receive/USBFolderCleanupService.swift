@@ -101,7 +101,9 @@ actor USBFolderCleanupService {
             }
 
             var failures: [USBFolderDeletionFailure] = []
-            for child in children {
+            for (index, child) in children.enumerated() {
+                progress(FileDeletionProgress(totalCount: children.count, processedCount: index,
+                                              failedCount: failures.count, currentName: child.lastPathComponent))
                 var coordinationError: NSError?
                 var removalError: Error?
                 NSFileCoordinator(filePresenter: nil).coordinate(
@@ -125,7 +127,29 @@ actor USBFolderCleanupService {
                 }
             }
 
-            let remaining = try makeSummary(root: root, destination: destination)
+            var remaining: USBFolderContentsSummary?
+            var remainingNames: Set<String> = []
+            var inspectionError: Error?
+            var didInspect = false
+            var coordinationError: NSError?
+            NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: root, options: [], error: &coordinationError) { coordinatedRoot in
+                do {
+                    guard coordinatedRoot.standardizedFileURL.path == root.path else {
+                        throw USBFolderCleanupError.destinationChanged
+                    }
+                    remaining = try makeSummary(root: coordinatedRoot, destination: destination)
+                    remainingNames = Set(try topLevelChildren(in: coordinatedRoot).map(\.lastPathComponent))
+                    didInspect = true
+                } catch { inspectionError = error }
+            }
+            if let inspectionError { throw inspectionError }
+            if let coordinationError { throw coordinationError }
+            guard didInspect, let remaining else { throw USBFolderCleanupError.destinationUnavailable }
+            // A provider can report a removal error after actually removing the item.
+            // Reconcile against a fresh, successfully coordinated listing, including hidden items.
+            failures.removeAll { !remainingNames.contains($0.name) }
+            progress(FileDeletionProgress(totalCount: children.count, processedCount: children.count,
+                                          failedCount: remainingNames.count, currentName: nil))
             return USBFolderDeletionSummary(
                 deletedItemCount: max(0, expected.totalItemCount - remaining.totalItemCount),
                 remainingItemCount: remaining.totalItemCount,

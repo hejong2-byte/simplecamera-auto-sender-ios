@@ -108,7 +108,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         defer { isDiscovering = false }
         guard force || automaticDiscoveryAllowed() else { return }
         let current = try jobStore.load().jobs
-        if current.contains(where: { ![.completed, .failed].contains($0.stage) }) {
+        if current.contains(where: { ![.completed, .failed, .savedWithoutReceipt].contains($0.stage) }) {
             return
         }
         let credentials: IPhoneReceiverCredentials
@@ -323,6 +323,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
 
     private func retryAcknowledgement(_ initial: IPhoneLocalReceiveJob) async {
         var job = initial
+        var verifiedLocalFile = false
         do {
             let credentials = try requiredCredentials()
             guard let storedName = job.finalFileName else {
@@ -334,6 +335,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
                 size: job.delivery.size,
                 sha256: job.delivery.sha256
             )
+            verifiedLocalFile = true
             publish(stage: .acknowledging, job: job)
             try await client.acknowledge(
                 receiverID: credentials.identity.receiverID,
@@ -349,11 +351,31 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
             publish(stage: .completed, job: job)
             try? await discoverAndSchedule()
         } catch {
+            guard verifiedLocalFile else {
+                await markFailed(job, error: error)
+                return
+            }
+            if case let IPhoneReceiverClientError.server(statusCode, code) = error,
+               statusCode == 410, code == "delivery canceled" || code == "delivery expired" {
+                job.stage = .savedWithoutReceipt
+                job.lastError = code == "delivery canceled"
+                    ? "iPhone 저장·검증 완료. 서버 전송이 취소되어 완료 확인을 보내지 못했습니다. 저장된 파일은 사용할 수 있습니다."
+                    : "iPhone 저장·검증 완료. 서버 보관 기한이 끝나 완료 확인을 보내지 못했습니다. 저장된 파일은 사용할 수 있습니다."
+                do {
+                    try jobStore.save(job)
+                    publish(stage: .savedWithoutReceipt, job: job, message: job.lastError)
+                    try? await discoverAndSchedule()
+                    return
+                } catch {
+                    // Keep the durable ACK retry path if recording the terminal result fails.
+                }
+            }
             job.stage = .ackPending
             job.retryCount += 1
             job.lastError = IPhoneReceiveErrorMessage.message(error)
             try? jobStore.save(job)
-            progressStore.publishFailure(job.lastError ?? "ACK failed")
+            publish(stage: .receiptPending, job: job,
+                    message: "iPhone 저장·검증 완료. 서버 완료 확인은 재시도 대기 중입니다. " + (job.lastError ?? "ACK failed"))
         }
     }
 
@@ -397,7 +419,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         return value
     }
 
-    private func publish(stage: USBReceiveStage, job: IPhoneLocalReceiveJob?) {
+    private func publish(stage: USBReceiveStage, job: IPhoneLocalReceiveJob?, message: String? = nil) {
         if progressDeliveryID != job?.delivery.deliveryID {
             progressDeliveryID = job?.delivery.deliveryID
             progressStartedAt = job == nil ? nil : now()
@@ -409,12 +431,12 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
             fileName: job?.delivery.fileName,
             currentIndex: job == nil ? 0 : 1,
             totalCount: job == nil ? 0 : 1,
-            completedCount: stage == .completed ? 1 : 0,
+            completedCount: [.completed, .receiptPending, .savedWithoutReceipt].contains(stage) ? 1 : 0,
             bytesReceived: job?.bytesReceived ?? 0,
             totalBytes: job?.delivery.size ?? 0,
             startedAt: progressStartedAt,
             expiresAt: job?.delivery.expiresAt,
-            errorMessage: nil
+            errorMessage: message
         ))
     }
 

@@ -218,12 +218,12 @@ final class ForegroundReceiveSimulation {
             },
             storedFiles: { try catalog.refresh() },
             previewStoredFile: { try catalog.previewURL(for: $0) },
-            deleteStoredFiles: { files in catalog.delete(files) },
+            deleteStoredFiles: { files, progress in catalog.delete(files, progress: progress) },
             inspectUSBFolder: { destination in
                 try await cleanup.inspect(destination)
             },
-            deleteUSBFolderContents: { destination, summary in
-                try await cleanup.deleteAllContents(of: destination, matching: summary)
+            deleteUSBFolderContents: { destination, summary, progress in
+                try await cleanup.deleteAllContents(of: destination, matching: summary, progress: progress)
             },
             progressUpdates: { AsyncStream { continuation in
                 if outcome == "downloading", let file = files.first {

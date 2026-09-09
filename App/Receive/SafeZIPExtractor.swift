@@ -21,7 +21,8 @@ struct SafeZIPExtraction {
 struct SafeZIPExtractor {
     let fileManager: FileManager
 
-    func extract(_ source: URL, to destination: URL) throws -> SafeZIPExtraction {
+    func extract(_ source: URL, to destination: URL,
+                 progress: @escaping (Int64, Int64, String, Int, Int) -> Void = { _, _, _, _, _ in }) throws -> SafeZIPExtraction {
         let archive: Archive
         do {
             archive = try Archive(url: source, accessMode: .read)
@@ -29,11 +30,17 @@ struct SafeZIPExtractor {
             throw SafeZIPExtractorError.extractionFailed
         }
 
-        for entry in archive {
+        let entries = Array(archive)
+        var totalBytes: Int64 = 0
+        for entry in entries {
             let entryURL = destination.appendingPathComponent(entry.path)
             guard entryURL.isContained(in: destination), entry.type != .symlink else {
                 throw SafeZIPExtractorError.unsafeArchive
             }
+            guard let size = Int64(exactly: entry.uncompressedSize), size <= Int64.max - totalBytes else {
+                throw SafeZIPExtractorError.unsafeArchive
+            }
+            if entry.type == .file { totalBytes += size }
         }
 
         do {
@@ -41,12 +48,26 @@ struct SafeZIPExtractor {
                 at: destination,
                 withIntermediateDirectories: true
             )
-            try fileManager.unzipItem(
-                at: source,
-                to: destination,
-                skipCRC32: false,
-                allowUncontainedSymlinks: false
-            )
+            var completedBytes: Int64 = 0
+            for (index, entry) in entries.enumerated() {
+                try autoreleasepool {
+                    let base = completedBytes
+                    let entrySize = entry.type == .file ? Int64(entry.uncompressedSize) : 0
+                    let entryProgress = Progress(totalUnitCount: entrySize)
+                    progress(base, totalBytes, entry.path, index, entries.count)
+                    let observation = entryProgress.observe(\.completedUnitCount, options: [.new]) { value, _ in
+                        progress(base + min(entrySize, max(0, value.completedUnitCount)), totalBytes,
+                                 entry.path, index, entries.count)
+                    }
+                    defer { observation.invalidate() }
+                    let checksum = try archive.extract(entry, to: destination.appendingPathComponent(entry.path),
+                                                       bufferSize: 1_024 * 1_024, skipCRC32: false,
+                                                       allowUncontainedSymlinks: false, progress: entryProgress)
+                    guard checksum == entry.checksum else { throw SafeZIPExtractorError.extractionFailed }
+                    completedBytes += entrySize
+                    progress(completedBytes, totalBytes, entry.path, index + 1, entries.count)
+                }
+            }
         } catch {
             let value = error as NSError
             if value.domain == NSCocoaErrorDomain,

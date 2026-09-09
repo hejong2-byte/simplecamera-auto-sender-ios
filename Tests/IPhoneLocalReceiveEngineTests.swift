@@ -214,6 +214,41 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
         XCTAssertEqual(scheduledAfter, scheduledBefore)
     }
 
+    func testCanceledServerReceiptPreservesVerifiedLocalFileAndDoesNotRetry() async throws {
+        for code in ["delivery canceled", "delivery expired"] {
+            let payload = Data("verified original".utf8)
+            let context = try makeContext(payloads: ["saved.zip": payload], ackFailures: 10,
+                                          ackError: .server(statusCode: 410, code: code))
+            try await context.engine.discoverAndSchedule()
+            let delivery = try XCTUnwrap(context.client.deliveries().first)
+            let staging = context.catalog.stagingDirectory.appendingPathComponent("saved.download")
+            try payload.write(to: staging)
+            await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+            XCTAssertEqual(try context.jobs.load().jobs.first?.stage, .savedWithoutReceipt)
+            let saved = try XCTUnwrap(context.catalog.refresh().first)
+            XCTAssertEqual(try Data(contentsOf: saved.url), payload)
+            let scheduled = await context.scheduler.scheduledIDs().count
+            await context.engine.restore()
+            let restored = await context.scheduler.scheduledIDs().count
+            XCTAssertEqual(restored, scheduled)
+            XCTAssertEqual(context.client.acks().count, 0)
+        }
+    }
+
+    func testUnknownConflictDoesNotClaimReceiptSuccess() async throws {
+        let payload = Data("keep pending".utf8)
+        let context = try makeContext(payloads: ["pending.bin": payload], ackFailures: 10,
+                                      ackError: .server(statusCode: 409, code: "delivery cannot be acknowledged"))
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        let staging = context.catalog.stagingDirectory.appendingPathComponent("pending.download")
+        try payload.write(to: staging)
+        await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+        XCTAssertEqual(try context.jobs.load().jobs.first?.stage, .ackPending)
+        XCTAssertEqual(try context.catalog.refresh().count, 1)
+        XCTAssertEqual(context.client.acks().count, 0)
+    }
+
     func testRestoreDoesNotClaimNewDeliveryWhenAutomaticDiscoveryIsDisabled() async throws {
         let context = try makeContext(
             payloads: ["usb-target.txt": Data("USB only".utf8)],
@@ -277,6 +312,7 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
     private func makeContext(
         payloads: [String: Data],
         ackFailures: Int = 0,
+        ackError: IPhoneReceiverClientError? = nil,
         automaticDiscoveryAllowed: @escaping @Sendable () -> Bool = { true },
         now: @escaping @Sendable () -> Date = { Date(timeIntervalSince1970: 500) }
     ) throws -> LocalReceiveContext {
@@ -296,7 +332,8 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
         }.sorted { $0.fileName < $1.fileName }
         let client = FakeLocalReceiveClient(
             deliveries: deliveries,
-            ackFailures: ackFailures
+            ackFailures: ackFailures,
+            ackError: ackError
         )
         let jobs = try IPhoneLocalReceiveJobStore(
             fileURL: root.appendingPathComponent("jobs.json")
@@ -384,12 +421,14 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
     private var modes: [IPhoneReceiveLeaseMode] = []
     private var successfulAcks: [LocalReceiveAck] = []
     private var remainingAckFailures: Int
+    private let ackError: IPhoneReceiverClientError?
     private var featureUpdateFailure: URLError.Code?
     private var listingFailure: URLError.Code?
 
-    init(deliveries: [IPhoneDelivery], ackFailures: Int) {
+    init(deliveries: [IPhoneDelivery], ackFailures: Int, ackError: IPhoneReceiverClientError? = nil) {
         availableDeliveries = deliveries
         remainingAckFailures = ackFailures
+        self.ackError = ackError
     }
 
     func updateFeatures(
@@ -465,6 +504,7 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
         try lock.withLock {
             if remainingAckFailures > 0 {
                 remainingAckFailures -= 1
+                if let ackError { throw ackError }
                 throw LocalReceiveTestError.ackFailed
             }
             successfulAcks.append(LocalReceiveAck(

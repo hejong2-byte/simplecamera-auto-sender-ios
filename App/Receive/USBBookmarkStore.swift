@@ -127,6 +127,8 @@ final class USBBookmarkStore: @unchecked Sendable {
                 from: Data(contentsOf: fileURL)
             )
             let resolution = try codec.resolve(record.bookmark)
+            let scoped = resolution.url.startAccessingSecurityScopedResource()
+            defer { if scoped { resolution.url.stopAccessingSecurityScopedResource() } }
             return USBBookmarkDestination(
                 url: resolution.url,
                 volumeID: record.volumeID,

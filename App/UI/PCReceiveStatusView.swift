@@ -54,6 +54,7 @@ struct PCReceiveStatusView: View {
 
     private var iconName: String {
         switch status.kind {
+        case .warning: return "exclamationmark.circle.fill"
         case .waiting: return "clock.fill"
         case .active: return "arrow.down.circle.fill"
         case .saved: return "checkmark.circle.fill"
@@ -63,6 +64,7 @@ struct PCReceiveStatusView: View {
 
     private var tint: Color {
         switch status.kind {
+        case .warning: return .orange
         case .waiting: return .secondary
         case .active: return .cyan
         case .saved: return .green
@@ -72,6 +74,7 @@ struct PCReceiveStatusView: View {
 
     private var resultIdentifier: String {
         switch status.kind {
+        case .warning: return "pc-receive-receipt-warning"
         case .saved: return "pc-receive-success"
         case .failed: return "pc-receive-error"
         case .waiting, .active: return "pc-receive-live"

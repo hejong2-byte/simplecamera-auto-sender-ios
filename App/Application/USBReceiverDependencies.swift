@@ -226,11 +226,11 @@ final class USBReceiverDependencies: @unchecked Sendable {
             },
             storedFiles: { [catalog] in try catalog.refresh() },
             previewStoredFile: { [catalog] in try catalog.previewURL(for: $0) },
-            deleteStoredFiles: { [catalog, jobStore] files in
+            deleteStoredFiles: { [catalog, jobStore] files, progress in
                 let protectedNames = Set(try jobStore.load().jobs
-                    .filter { $0.stage != .completed }
+                    .filter { $0.stage != .completed && $0.stage != .savedWithoutReceipt }
                     .compactMap(\.finalFileName))
-                return catalog.delete(files, protectedFileNames: protectedNames)
+                return catalog.delete(files, protectedFileNames: protectedNames, progress: progress)
             },
             exportFiles: { [exporter] files, destination, archiveMode in
                 await exporter.export(files, to: destination, archiveMode: archiveMode)
@@ -243,10 +243,11 @@ final class USBReceiverDependencies: @unchecked Sendable {
             inspectUSBFolder: { [folderCleanupService] destination in
                 try await folderCleanupService.inspect(destination)
             },
-            deleteUSBFolderContents: { [folderCleanupService] destination, summary in
+            deleteUSBFolderContents: { [folderCleanupService] destination, summary, progress in
                 try await folderCleanupService.deleteAllContents(
                     of: destination,
-                    matching: summary
+                    matching: summary,
+                    progress: progress
                 )
             },
             refreshFeatures: { [client, registrationStore] in

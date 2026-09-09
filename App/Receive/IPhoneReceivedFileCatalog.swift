@@ -160,7 +160,9 @@ final class IPhoneReceivedFileCatalog: @unchecked Sendable {
         lock.withLock {
             var deletedIDs: [String] = []
             var failures: [IPhoneStoredFileDeletionFailure] = []
-            for file in files {
+            for (index, file) in files.enumerated() {
+                progress(FileDeletionProgress(totalCount: files.count, processedCount: index,
+                                              failedCount: failures.count, currentName: file.name))
                 do {
                     guard !protectedFileNames.contains(file.url.lastPathComponent) else {
                         throw IPhoneStoredFileDeletionError.pendingReceipt
@@ -193,6 +195,8 @@ final class IPhoneReceivedFileCatalog: @unchecked Sendable {
                     ))
                 }
             }
+            progress(FileDeletionProgress(totalCount: files.count, processedCount: files.count,
+                                          failedCount: failures.count, currentName: nil))
             // Receipt history stays intact so a deliberately deleted file is not received again.
             return IPhoneStoredFileDeletionSummary(deletedIDs: deletedIDs, failures: failures)
         }

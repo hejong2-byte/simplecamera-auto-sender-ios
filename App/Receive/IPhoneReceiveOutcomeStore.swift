@@ -2,6 +2,8 @@ import Foundation
 
 enum IPhoneReceiveOutcomeKind: String, Codable, Sendable, Equatable {
     case saved
+    case receiptPending
+    case savedWithoutReceipt
     case failed
 }
 

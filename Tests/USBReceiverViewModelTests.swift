@@ -51,7 +51,7 @@ final class USBReceiverViewModelTests: XCTestCase {
                 await calls.recordInspection()
                 return summary
             },
-            deleteUSBFolderContents: { _, receivedSummary in
+            deleteUSBFolderContents: { _, receivedSummary, _ in
                 await calls.recordDeletion(summary: receivedSummary)
                 return USBFolderDeletionSummary(
                     deletedItemCount: receivedSummary.totalItemCount,
@@ -757,7 +757,7 @@ final class USBReceiverViewModelTests: XCTestCase {
         inspectUSBFolder: @escaping USBReceiverViewModel.InspectUSBFolder = { _ in
             throw CocoaError(.featureUnsupported)
         },
-        deleteUSBFolderContents: @escaping USBReceiverViewModel.DeleteUSBFolderContents = { _, _ in
+        deleteUSBFolderContents: @escaping USBReceiverViewModel.DeleteUSBFolderContents = { _, _, _ in
             throw CocoaError(.featureUnsupported)
         },
         export: @escaping USBReceiverViewModel.ExportFiles

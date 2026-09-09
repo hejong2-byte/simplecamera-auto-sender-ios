@@ -1,0 +1,8 @@
+--- deployed/src/index.js
++++ patched/src/index.js
+@@
+   if (row.state === "delivered") return new Response(null, { status: 204 });
++  if (row.state === "canceled" || row.state === "expired") {
++    return json({ error: `delivery ${row.state}` }, 410);
++  }
+   if (!["available", "leased", "ackDeleting"].includes(row.state)) return json({ error: "delivery cannot be acknowledged" }, 409);

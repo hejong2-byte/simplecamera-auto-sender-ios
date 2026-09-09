@@ -18,7 +18,7 @@ SOURCES = [
 def hash_method(name, method="hashFile"):
     source = (ROOT / "App" / "Receive" / name).read_text(encoding="utf-8")
     start = source.index("    private func " + method + "(")
-    opening = source.index("{", start)
+    opening = source.index("{", source.index(" throws", start))
     depth = 1
     end = opening + 1
     while depth:

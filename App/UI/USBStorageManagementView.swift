@@ -66,7 +66,7 @@ struct USBStorageManagementView: View {
                     .foregroundStyle(model.isUSBAvailable == false ? Color.orange : Color.secondary)
             }
             Label(
-                "파일시스템(참고): \(model.usbFileSystemDescription ?? "확인 불가")",
+                "파일시스템(참고): \(model.usbFileSystemDescription ?? "저장장치가 형식 정보를 제공하지 않음")",
                 systemImage: "info.circle"
             )
             .font(.subheadline)
@@ -107,8 +107,8 @@ struct USBStorageManagementView: View {
 
             if model.isInspectingUSBFolderContents {
                 ProgressView("삭제할 파일 확인 중")
-            } else if model.isDeletingUSBFolderContents {
-                ProgressView("SD/USB 파일 삭제 중")
+            } else if model.isDeletingUSBFolderContents || model.usbFolderDeletionProgress != nil {
+                FileDeletionProgressView(progress: model.usbFolderDeletionProgress, isRunning: model.isDeletingUSBFolderContents)
             }
             if let message = model.usbFolderDeletionMessage {
                 Label(message, systemImage: "checkmark.circle.fill")
