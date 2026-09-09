@@ -4,6 +4,20 @@ import XCTest
 
 @MainActor
 final class IPhoneIncomingFilesViewModelTests: XCTestCase {
+    func testMultipleArrivalsStayPendingUntilUserOpensSelectionAfterEachLaunch() async throws {
+        let context = try makeContext(count: 2)
+        for _ in 0..<2 {
+            await activate(context)
+            XCTAssertEqual(context.model.pendingFiles.count, 2)
+            XCTAssertNil(context.model.selectionBatch, "Startup must not automatically present the multi-file sheet")
+            XCTAssertNil(context.model.prompt)
+            context.model.showPendingFiles()
+            XCTAssertEqual(context.model.selectionBatch?.files.count, 2)
+            XCTAssertTrue(try context.store.destinations(receiverID: context.server.receiverID).isEmpty)
+            context.model.setActive(false)
+        }
+    }
+
     func testInactiveAppDoesNotPollOrPresent() async throws {
         let context = try makeContext(count: 1)
         await context.model.refresh()

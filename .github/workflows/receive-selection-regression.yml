@@ -30,6 +30,8 @@ jobs:
             -destination "platform=iOS Simulator,id=${DEVICE_ID}" \
             -resultBundlePath build/SelectionResults.xcresult \
             -parallel-testing-enabled NO \
+            -only-testing:SimpleCameraAutoSenderTests/IPhoneIncomingFilesViewModelTests/testMultipleArrivalsStayPendingUntilUserOpensSelectionAfterEachLaunch \
+            -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testMultipleArrivalsDoNotOpenSheetUntilTappedAfterColdLaunch \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testProductionLaunchRecoversCorruptLocalState \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testMultiplePendingFilesCanBeSelectedAndReceivedFirst \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testPendingSelectionSurvivesRotationAndRepeatedForegrounding \

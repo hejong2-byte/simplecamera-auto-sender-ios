@@ -1,6 +1,26 @@
 import XCTest
 
 final class ForegroundReceiveUITests: XCTestCase {
+    func testMultipleArrivalsDoNotOpenSheetUntilTappedAfterColdLaunch() {
+        let app = launchSimulation(withMultipleIncoming: true)
+        for launch in 0..<2 {
+            if launch > 0 { app.terminate(); app.launch() }
+            let pending = app.buttons["incoming-pending"]
+            XCTAssertTrue(pending.waitForExistence(timeout: 20))
+            for _ in 0..<6 {
+                RunLoop.current.run(until: Date().addingTimeInterval(1))
+                XCTAssertEqual(app.state, .runningForeground)
+                XCTAssertFalse(app.otherElements["pending-file-selection"].exists)
+            }
+            reveal(pending, in: app)
+            pending.tap()
+            XCTAssertTrue(app.otherElements["pending-file-selection"].waitForExistence(timeout: 10))
+            app.buttons["pending-file-10000000-0000-0000-0000-000000000002"].tap()
+            XCTAssertTrue(app.buttons["pending-confirm-selection"].isEnabled)
+        }
+        keepScreenshot("manual-pending-selection-after-cold-launch", app: app)
+    }
+
     func testPendingSelectionSurvivesRotationAndRepeatedForegrounding() {
         let app = launchSimulation(withMultipleIncoming: true)
         addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
