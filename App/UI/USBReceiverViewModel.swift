@@ -911,6 +911,23 @@ final class USBReceiverViewModel: ObservableObject {
         isVerifyingUSBCopies ? usbVerificationProgress : usbExportProgress
     }
 
+    var usbExportDisplayedPercent: Int {
+        guard let progress = visibleUSBExportProgress else { return 0 }
+        if progress.stage == .copyingToUSB || progress.stage == .finalizing {
+            return min(99, progress.percent)
+        }
+        return progress.percent
+    }
+
+    func usbExportSpeedText(at date: Date) -> String? {
+        guard let progress = visibleUSBExportProgress,
+              progress.stage == .copyingToUSB || progress.stage == .verifying,
+              let start = progress.startedAt,
+              date.timeIntervalSince(start) >= 1 else { return nil }
+        let rate = Double(progress.bytesReceived) / date.timeIntervalSince(start) / 1_000_000
+        return String(format: "현재 단계 평균 %.1f MB/s", locale: Locale(identifier: "en_US_POSIX"), rate)
+    }
+
     var receiveStageTitle: String {
         guard let progress = receiveProgress else { return "PC 파일 수신 대기" }
         let position = progress.totalCount > 0

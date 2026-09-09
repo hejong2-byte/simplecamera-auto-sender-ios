@@ -336,10 +336,10 @@ struct USBReceiverView: View {
             Text(model.usbExportStageTitle).font(.headline)
             if let progress = model.visibleUSBExportProgress {
                 if progress.stage != .failed, progress.totalBytes > 0 || progress.stage == .completed {
-                    ProgressView(value: Double(progress.percent), total: 100)
+                    ProgressView(value: Double(model.usbExportDisplayedPercent), total: 100)
                         .tint(.cyan)
                     HStack {
-                        Text("\(progress.percent)%")
+                        Text("\(model.usbExportDisplayedPercent)%")
                             .font(.title3.monospacedDigit().bold())
                         Spacer()
                         Text(model.usbExportByteText)
@@ -359,6 +359,9 @@ struct USBReceiverView: View {
                 }
                 if model.isExportingToUSB, let updatedAt = model.usbExportLastUpdatedAt {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
+                        if let speed = model.usbExportSpeedText(at: context.date) {
+                            Text(speed).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        }
                         let seconds = max(0, Int(context.date.timeIntervalSince(updatedAt)))
                         if seconds >= 3 {
                             Text("현재 작업의 진행 응답 대기 · 마지막 갱신 후 \(seconds)초")

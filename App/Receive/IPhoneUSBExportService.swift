@@ -466,10 +466,11 @@ actor IPhoneUSBExportService {
         completedCount: Int,
         startedAt: Date
     ) throws -> IPhoneUSBDeletionDecision {
+        var phaseStartedAt = startedAt
         func report(_ stage: USBReceiveStage, _ bytes: Int64, _ total: Int64, _ detail: String) {
             publish(file: file, currentIndex: currentIndex, totalCount: totalCount,
                     completedCount: completedCount, bytes: bytes, totalBytes: total,
-                    startedAt: startedAt, stage: stage, detail: detail)
+                    startedAt: phaseStartedAt, stage: stage, detail: detail)
         }
         let sourceModifiedAt = try modificationDate(file.url)
 
@@ -515,6 +516,7 @@ actor IPhoneUSBExportService {
         try fileManager.createDirectory(at: partialURL, withIntermediateDirectories: true)
         defer { try? fileManager.removeItem(at: partialURL) }
 
+        phaseStartedAt = now()
         report(.copyingToUSB, 0, extraction.totalBytes, "2/2 · USB 폴더 생성 준비")
         for (index, relativePath) in extraction.directories.enumerated() {
             report(.copyingToUSB, 0, extraction.totalBytes,
@@ -531,10 +533,7 @@ actor IPhoneUSBExportService {
             report(.copyingToUSB, copiedBytes, extraction.totalBytes,
                    "2/2 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\n\(extractedFile.relativePath)")
             let partialFile = partialURL.appendingPathComponent(extractedFile.relativePath)
-            try fileManager.createDirectory(
-                at: partialFile.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
+            // The full parent-directory inventory was created above, once.
             guard fileManager.createFile(atPath: partialFile.path, contents: nil) else {
                 throw IPhoneUSBExportError.destinationNotWritable
             }
@@ -549,7 +548,7 @@ actor IPhoneUSBExportService {
                         completedCount: completedCount,
                         bytes: copiedBytes + bytes,
                         totalBytes: extraction.totalBytes,
-                        startedAt: startedAt,
+                        startedAt: phaseStartedAt,
                         detail: "2/2 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\n\(extractedFile.relativePath)"
                     )
                 }

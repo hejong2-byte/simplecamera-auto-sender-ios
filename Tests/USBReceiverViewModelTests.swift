@@ -4,6 +4,52 @@ import XCTest
 
 @MainActor
 final class USBReceiverViewModelTests: XCTestCase {
+    func testCopyPercentStaysBelow100UntilCompletionAndReportsPhaseSpeed() async throws {
+        let store = USBReceiveProgressStore()
+        let model = try exportModel(files: [], exportProgressStore: store) { _, _, _ in
+            IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        let start = Date(timeIntervalSince1970: 100)
+        store.publish(USBReceiveProgress(stage: .copyingToUSB, deliveryID: nil, fileName: "file.bin",
+            currentIndex: 1, totalCount: 1, completedCount: 0, bytesReceived: 10_000_000,
+            totalBytes: 10_000_000, startedAt: start, expiresAt: nil, errorMessage: nil))
+        await waitUntil { model.usbExportProgress != nil }
+        XCTAssertEqual(model.usbExportDisplayedPercent, 99)
+        XCTAssertEqual(model.usbExportSpeedText(at: start.addingTimeInterval(2)), "현재 단계 평균 5.0 MB/s")
+        store.publish(USBReceiveProgress(stage: .completed, deliveryID: nil, fileName: nil,
+            currentIndex: 1, totalCount: 1, completedCount: 1, bytesReceived: 10_000_000,
+            totalBytes: 10_000_000, startedAt: nil, expiresAt: nil, errorMessage: nil))
+        await waitUntil { model.usbExportProgress?.stage == .completed }
+        XCTAssertEqual(model.usbExportDisplayedPercent, 100)
+    }
+
+    func testOptionalVerificationFailureDoesNotReplaceCopyOrReceiveResults() async throws {
+        let file = try storedFile()
+        let store = USBReceiveProgressStore()
+        let model = try exportModel(files: [file], exportProgressStore: store,
+            verifyCopies: { files, _, progress in
+                progress(USBReceiveProgress(stage: .verifying, deliveryID: nil, fileName: files[0].name,
+                    currentIndex: 1, totalCount: 1, completedCount: 0, bytesReceived: 1,
+                    totalBytes: 2, startedAt: Date(), expiresAt: nil, errorMessage: nil))
+                return IPhoneUSBExportSummary(verified: [], failed: [
+                    IPhoneUSBExportFailure(sourceID: files[0].id, error: .shaMismatch)
+                ])
+            }) { _, _, _ in IPhoneUSBExportSummary(verified: [], failed: []) }
+        await model.refresh()
+        store.publish(testProgress(stage: .completed, name: file.name, bytes: 100))
+        await waitUntil { model.usbExportProgress?.stage == .completed }
+        let originalProgress = model.usbExportProgress
+        let originalReceive = model.receiveStatus
+        model.toggleStoredFileSelection(file.id)
+        await model.verifySelectedUSBCopies()
+        XCTAssertTrue(model.usbVerificationFailed)
+        XCTAssertEqual(model.usbExportProgress, originalProgress)
+        XCTAssertEqual(model.receiveStatus, originalReceive)
+        XCTAssertNil(model.lastUSBExportError)
+        XCTAssertFalse(model.isExportingToUSB)
+        XCTAssertEqual(model.selectedStoredFileIDs, [file.id])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
     func testStartupBookmarkLookupLeavesMainQueueResponsive() async throws {
         let bookmarkStore = USBBookmarkStore(
             fileURL: temporaryDirectory().appendingPathComponent("destination.json"),
@@ -750,6 +796,7 @@ final class USBReceiverViewModelTests: XCTestCase {
         receiveProgressStore: USBReceiveProgressStore? = nil,
         exportProgressStore: USBReceiveProgressStore? = nil,
         pendingDeletionDecisions: @escaping USBReceiverViewModel.PendingDeletionDecisions = { [] },
+        verifyCopies: @escaping USBReceiverViewModel.VerifyCopies = { _, _, _ in IPhoneUSBExportSummary(verified: [], failed: []) },
         keepOriginals: @escaping USBReceiverViewModel.KeepOriginals = { _ in },
         deleteOriginals: @escaping USBReceiverViewModel.DeleteOriginals = { _ in
             IPhoneUSBDeletionSummary(deletedSourceIDs: [], failed: [])
@@ -780,6 +827,7 @@ final class USBReceiverViewModelTests: XCTestCase {
             storedFiles: { files.filter { FileManager.default.fileExists(atPath: $0.url.path) } },
             exportFiles: export,
             pendingDeletionDecisions: pendingDeletionDecisions,
+            verifyCopies: verifyCopies,
             keepOriginals: keepOriginals,
             deleteOriginals: deleteOriginals,
             inspectUSBFolder: inspectUSBFolder,
