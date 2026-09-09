@@ -7,7 +7,7 @@ final class ForegroundReceiveUITests: XCTestCase {
         XCTAssertTrue(settings.waitForExistence(timeout: 15))
         reveal(settings, in: app)
         settings.tap()
-        let storage = app.buttons["SD/USB 저장장치 관리"]
+        let storage = app.buttons["storage-management"]
         reveal(storage, in: app)
         storage.tap()
         XCTAssertTrue(app.staticTexts["USB 연결 확인됨"].waitForExistence(timeout: 10))

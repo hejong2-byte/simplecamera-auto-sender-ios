@@ -184,8 +184,8 @@ struct ContentView: View {
     }
 
     private var canPresentIncomingFiles: Bool {
-        let receiverIsBusy = navigationPath.last == .receiver
-            && (receiverModel.isReceivingFile || receiverModel.needsLocalFallbackDecision || receiverModel.needsDeletionDecision)
+        let receiverIsBusy = receiverModel.isReceivingFile
+            || receiverModel.needsLocalFallbackDecision || receiverModel.needsDeletionDecision
         return scenePhase == .active && pickerKind == nil && readinessMessage == nil
             && !filePickerModel.isPresenting
             && !receiverModel.isChoosingUSBFolder && !receiverModel.isShowingSettingsConfirmation
