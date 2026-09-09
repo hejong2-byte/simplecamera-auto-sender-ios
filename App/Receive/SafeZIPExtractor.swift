@@ -30,9 +30,10 @@ struct SafeZIPExtractor {
             throw SafeZIPExtractorError.extractionFailed
         }
 
-        let entries = Array(archive)
+        var entryCount = 0
         var totalBytes: Int64 = 0
-        for entry in entries {
+        for entry in archive {
+            entryCount += 1
             let entryURL = destination.appendingPathComponent(entry.path)
             guard entryURL.isContained(in: destination), entry.type != .symlink else {
                 throw SafeZIPExtractorError.unsafeArchive
@@ -49,15 +50,15 @@ struct SafeZIPExtractor {
                 withIntermediateDirectories: true
             )
             var completedBytes: Int64 = 0
-            for (index, entry) in entries.enumerated() {
+            for (index, entry) in archive.enumerated() {
                 try autoreleasepool {
                     let base = completedBytes
                     let entrySize = entry.type == .file ? Int64(entry.uncompressedSize) : 0
                     let entryProgress = Progress(totalUnitCount: entrySize)
-                    progress(base, totalBytes, entry.path, index, entries.count)
+                    progress(base, totalBytes, entry.path, index, entryCount)
                     let observation = entryProgress.observe(\.completedUnitCount, options: [.new]) { value, _ in
                         progress(base + min(entrySize, max(0, value.completedUnitCount)), totalBytes,
-                                 entry.path, index, entries.count)
+                                 entry.path, index, entryCount)
                     }
                     defer { observation.invalidate() }
                     let checksum = try archive.extract(entry, to: destination.appendingPathComponent(entry.path),
@@ -65,7 +66,7 @@ struct SafeZIPExtractor {
                                                        allowUncontainedSymlinks: false, progress: entryProgress)
                     guard checksum == entry.checksum else { throw SafeZIPExtractorError.extractionFailed }
                     completedBytes += entrySize
-                    progress(completedBytes, totalBytes, entry.path, index + 1, entries.count)
+                    progress(completedBytes, totalBytes, entry.path, index + 1, entryCount)
                 }
             }
         } catch {

@@ -66,6 +66,8 @@ final class USBBookmarkStore: @unchecked Sendable {
     private let fileURL: URL
     private let codec: any USBBookmarkCoding
     private let volumeFormatProvider: VolumeFormatProvider
+    private let startAccessing: @Sendable (URL) -> Bool
+    private let stopAccessing: @Sendable (URL) -> Void
     private let lock = NSLock()
 
     init(
@@ -75,11 +77,15 @@ final class USBBookmarkStore: @unchecked Sendable {
             try? url.resourceValues(
                 forKeys: [.volumeLocalizedFormatDescriptionKey]
             ).volumeLocalizedFormatDescription
-        }
+        },
+        startAccessing: @escaping @Sendable (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
+        stopAccessing: @escaping @Sendable (URL) -> Void = { $0.stopAccessingSecurityScopedResource() }
     ) {
         self.fileURL = fileURL
         self.codec = codec
         self.volumeFormatProvider = volumeFormatProvider
+        self.startAccessing = startAccessing
+        self.stopAccessing = stopAccessing
     }
 
     func save(folderURL: URL) throws {
@@ -127,8 +133,8 @@ final class USBBookmarkStore: @unchecked Sendable {
                 from: Data(contentsOf: fileURL)
             )
             let resolution = try codec.resolve(record.bookmark)
-            let scoped = resolution.url.startAccessingSecurityScopedResource()
-            defer { if scoped { resolution.url.stopAccessingSecurityScopedResource() } }
+            let scoped = startAccessing(resolution.url)
+            defer { if scoped { stopAccessing(resolution.url) } }
             return USBBookmarkDestination(
                 url: resolution.url,
                 volumeID: record.volumeID,

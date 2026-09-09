@@ -3,6 +3,18 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class USBBookmarkStoreTests: XCTestCase {
+    func testFormatLookupAcquiresAndReleasesBookmarkScope() throws {
+        let url = temporaryDirectory()
+        let scope = FormatScopeProbe()
+        let codec = FakeUSBBookmarkCodec(bookmark: Data("bookmark".utf8),
+                                         resolution: USBBookmarkResolution(url: url, isStale: false))
+        let store = USBBookmarkStore(fileURL: url.appendingPathComponent("bookmark.json"), codec: codec,
+                                     volumeFormatProvider: { _ in scope.format },
+                                     startAccessing: { _ in scope.start() }, stopAccessing: { _ in scope.stop() })
+        try store.save(folderURL: url, volumeID: "test-volume", displayName: "Test USB")
+        XCTAssertEqual(try store.resolve()?.formatDescription, "ExFAT")
+        XCTAssertNil(scope.format, "Scope must be balanced after resolving metadata")
+    }
     func testBookmarkRoundTripPreservesVolumeIdentityAndReportsStaleResolution() throws {
         let stateDirectory = temporaryDirectory()
         let folderURL = URL(fileURLWithPath: "/Volumes/WORK USB", isDirectory: true)
@@ -123,6 +135,14 @@ final class USBBookmarkStoreTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         return directory
     }
+}
+
+private final class FormatScopeProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var active = false
+    var format: String? { lock.withLock { active ? "ExFAT" : nil } }
+    func start() -> Bool { lock.withLock { active = true; return true } }
+    func stop() { lock.withLock { active = false } }
 }
 
 private final class ReplacingUSBBookmarkCodec: USBBookmarkCoding, @unchecked Sendable {

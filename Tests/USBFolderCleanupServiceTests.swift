@@ -33,6 +33,22 @@ final class USBFolderCleanupServiceTests: XCTestCase {
         XCTAssertTrue(result.failures.isEmpty, "Actual absence must reconcile a provider's late error")
     }
 
+    func testActuallyRemainingHiddenFileStillReportsFailure() async throws {
+        let root = temporaryDirectory()
+        let file = root.appendingPathComponent(".cannot-remove")
+        try Data("keep".utf8).write(to: file)
+        let service = USBFolderCleanupService(fileManager: RefusingRemovalFileManager(),
+                                            volumeIdentity: { _ in "volume-1" },
+                                            startAccessing: { _ in true }, stopAccessing: { _ in })
+        let target = destination(root, volumeID: "volume-1")
+        let before = try await service.inspect(target)
+        let result = try await service.deleteAllContents(of: target, matching: before)
+        XCTAssertEqual(result.remainingItemCount, 1)
+        XCTAssertEqual(result.deletedItemCount, 0)
+        XCTAssertEqual(result.failures.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+    }
+
     func testInspectAndDeleteAcquireScopeOnOriginalBookmarkURL() async throws {
         let parent = temporaryDirectory()
         let root = parent.appendingPathComponent("SD CARD", isDirectory: true)
@@ -220,6 +236,12 @@ private final class RemovedThenErrorFileManager: FileManager, @unchecked Sendabl
     override func removeItem(at URL: URL) throws {
         try super.removeItem(at: URL)
         throw CocoaError(.fileNoSuchFile)
+    }
+}
+
+private final class RefusingRemovalFileManager: FileManager, @unchecked Sendable {
+    override func removeItem(at URL: URL) throws {
+        throw CocoaError(.fileWriteNoPermission)
     }
 }
 

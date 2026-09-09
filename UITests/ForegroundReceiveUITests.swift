@@ -163,6 +163,11 @@ final class ForegroundReceiveUITests: XCTestCase {
         XCTAssertTrue(selected.isHittable)
         let delete = app.buttons["stored-files-delete"]
         XCTAssertTrue(delete.exists)
+        let copy = app.buttons["stored-files-export"]
+        XCTAssertTrue(copy.exists)
+        XCTAssertEqual(copy.frame.midY, delete.frame.midY, accuracy: 2,
+                       "Copy and delete must share a row")
+        XCTAssertLessThan(copy.frame.minX, delete.frame.minX)
         XCTAssertFalse(delete.isEnabled, "No selection must leave deletion disabled")
         selected.tap()
         XCTAssertTrue(delete.isEnabled)

@@ -5,4 +5,4 @@
 +  if (row.state === "canceled" || row.state === "expired") {
 +    return json({ error: `delivery ${row.state}` }, 410);
 +  }
-   if (!["available", "leased", "ackDeleting"].includes(row.state)) return json({ error: "delivery cannot be acknowledged" }, 409);
+   if (!["available", "leased", "ackDeleting"].includes(row.state)) {
