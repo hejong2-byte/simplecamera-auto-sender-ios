@@ -137,6 +137,8 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         }
         XCTAssertTrue(reported.contains { $0.stage == .extracting && $0.totalBytes > 0 })
         XCTAssertFalse(reported.contains { $0.stage == .verifying || $0.stage == .checkingSource }, "Default ZIP export must not perform full SHA passes")
+        XCTAssertEqual(reported.last(where: { $0.stage == .completed })?.bytesReceived, 20)
+        XCTAssertEqual(reported.last(where: { $0.stage == .completed })?.totalBytes, 20)
 
         XCTAssertEqual(summary.failed, [])
         let decision = try XCTUnwrap(summary.verified.first)

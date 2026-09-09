@@ -204,7 +204,9 @@ actor IPhoneUSBExportService {
         }
         let summary = IPhoneUSBExportSummary(verified: verified, failed: failed)
         if failed.isEmpty {
-            let copiedBytes = verified.reduce(Int64(0)) { $0 + $1.sourceSize }
+            let copiedBytes = verified.reduce(Int64(0)) { total, record in
+                total + (record.copiedFiles?.reduce(Int64(0)) { $0 + $1.size } ?? record.sourceSize)
+            }
             progressStore.publish(USBReceiveProgress(
                 stage: .completed,
                 destination: .usb,
