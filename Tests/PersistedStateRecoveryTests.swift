@@ -7,9 +7,11 @@ final class PersistedStateRecoveryTests: XCTestCase {
         let fixture = try corruptFile(named: "upload-ledger.json")
 
         let ledger = try UploadLedger(fileURL: fixture.url)
+        let baseline = try await ledger.baseline()
+        let records = await ledger.allRecords()
 
-        XCTAssertNil(try await ledger.baseline())
-        XCTAssertEqual(await ledger.allRecords(), [])
+        XCTAssertNil(baseline)
+        XCTAssertEqual(records, [])
         try assertQuarantined(fixture)
     }
 
