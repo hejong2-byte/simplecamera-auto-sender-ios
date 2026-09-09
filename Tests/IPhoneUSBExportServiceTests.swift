@@ -4,6 +4,47 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneUSBExportServiceTests: XCTestCase {
+    func testManualCleanupRemovesLegacyExportTempsOnlyAndCanBeRepeated() async throws {
+        let context = try makeContext()
+        let localTemp = context.zipWorkingDirectory.appendingPathComponent("extract-\(UUID().uuidString.lowercased())")
+        let partialRoot = context.usbDirectory.appendingPathComponent(IPhoneUSBExportService.partialDirectoryName)
+        let usbTemp = partialRoot.appendingPathComponent("export-\(UUID().uuidString.lowercased()).partial")
+        let unrelated = partialRoot.appendingPathComponent("network-download.partial")
+        let completed = context.usbDirectory.appendingPathComponent("completed.txt")
+        let original = try makeStoredFile(name: "original.zip", data: Data("source".utf8), in: context.sourceDirectory)
+        for folder in [localTemp, usbTemp] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data("temp".utf8).write(to: folder.appendingPathComponent("piece.bin"))
+        }
+        try Data("network".utf8).write(to: unrelated)
+        try Data("complete".utf8).write(to: completed)
+        let summary = await context.service.cleanupTemporaryFiles(to: context.destination)
+        XCTAssertEqual(summary.deletedCount, 2)
+        XCTAssertTrue(summary.failures.isEmpty)
+        XCTAssertTrue(summary.usbChecked)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: localTemp.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: usbTemp.path))
+        XCTAssertEqual(try Data(contentsOf: original.url), Data("source".utf8))
+        XCTAssertEqual(try Data(contentsOf: unrelated), Data("network".utf8))
+        XCTAssertEqual(try Data(contentsOf: completed), Data("complete".utf8))
+        let repeated = await context.service.cleanupTemporaryFiles(to: context.destination)
+        XCTAssertEqual(repeated.deletedCount, 0)
+        XCTAssertTrue(repeated.failures.isEmpty)
+    }
+
+    func testManualCleanupWithoutUSBStillCleansLocalTempsAndDoesNotFollowSymlink() async throws {
+        let context = try makeContext()
+        let localTemp = context.zipWorkingDirectory.appendingPathComponent("extract-\(UUID().uuidString.lowercased())")
+        try FileManager.default.createDirectory(at: localTemp, withIntermediateDirectories: true)
+        let outside = try makeStoredFile(name: "keep.zip", data: Data("keep".utf8), in: context.sourceDirectory)
+        let link = context.zipWorkingDirectory.appendingPathComponent("extract-\(UUID().uuidString.lowercased())")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: context.sourceDirectory)
+        let summary = await context.service.cleanupTemporaryFiles(to: nil)
+        XCTAssertFalse(summary.usbChecked)
+        XCTAssertEqual(summary.deletedCount, 1)
+        XCTAssertFalse(summary.failures.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: outside.url), Data("keep".utf8))
+    }
     func testCancelledExportDoesNotCopyOrOfferOriginalDeletion() async throws {
         let context = try makeContext()
         let file = try makeStoredFile(name: "keep.bin", data: Data("keep-original".utf8), in: context.sourceDirectory)

@@ -65,6 +65,12 @@ struct IPhoneUSBDeletionSummary: Equatable, Sendable {
     let failed: [IPhoneUSBExportFailure]
 }
 
+struct USBExportTemporaryCleanupSummary: Equatable, Sendable {
+    var deletedCount = 0
+    var failures: [String] = []
+    var usbChecked = false
+}
+
 final class IPhoneUSBDeletionDecisionStore: @unchecked Sendable {
     private struct State: Codable {
         let version: Int
@@ -171,6 +177,10 @@ actor IPhoneUSBExportService {
         self.progressStore = progressStore
         self.zipWorkingDirectory = zipWorkingDirectory
         self.now = now
+    }
+
+    func cleanupTemporaryFiles(to destination: USBBookmarkDestination?) -> USBExportTemporaryCleanupSummary {
+        USBExportTemporaryCleanupSummary()
     }
 
     func export(
