@@ -104,19 +104,96 @@ final class USBReceiveProgressStore: @unchecked Sendable {
     private let lock = NSLock()
     private var latest = USBReceiveProgress.idle
     private var continuations: [UUID: AsyncStream<USBReceiveProgress>.Continuation] = [:]
+    private let fileURL: URL?
+    private var lastSavedAt: Date?
+    private var interruption: USBReceiveProgress?
+
+    init(fileURL: URL? = nil) {
+        self.fileURL = fileURL
+        guard let fileURL, FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        do {
+            let saved = try JSONDecoder().decode(USBReceiveProgress.self, from: Data(contentsOf: fileURL))
+            latest = Self.isInFlight(saved.stage)
+                ? Self.paused(saved, message: "이전 USB 복사가 중단되었습니다. 마지막 기록이며 완료된 복사본이 아닙니다. USB를 확인하고 임시파일을 정리한 뒤 다시 복사해 주세요. 원본 ZIP은 유지됩니다.")
+                : saved
+        } catch {
+            latest = USBReceiveProgress(stage: .failed, deliveryID: nil, fileName: nil,
+                currentIndex: 0, totalCount: 0, completedCount: 0, bytesReceived: 0,
+                totalBytes: 0, startedAt: nil, expiresAt: nil,
+                errorMessage: "이전 USB 복사 기록을 읽지 못했습니다. USB 상태를 확인해 주세요. 원본 파일은 삭제하지 않았습니다.")
+        }
+    }
+
+    func beginExport(fileName: String?, totalCount: Int) {
+        lock.withLock { interruption = nil }
+        publish(USBReceiveProgress(stage: .checkingSource, deliveryID: nil, fileName: fileName,
+            currentIndex: 1, totalCount: totalCount, completedCount: 0, bytesReceived: 0,
+            totalBytes: 0, startedAt: Date(), expiresAt: nil, errorMessage: nil,
+            detail: "USB 복사 준비 중"))
+    }
+
+    func interruptExport() {
+        let paused = lock.withLock { () -> USBReceiveProgress in
+            let value = Self.paused(latest, message: "백그라운드 실행 시간이 끝나 USB 복사가 중단되었습니다. 마지막 진행 기록이며 복사 완료가 아닙니다. 원본 ZIP은 유지됩니다. 임시파일을 정리한 뒤 다시 복사해 주세요.")
+            interruption = value
+            return value
+        }
+        publish(paused)
+    }
+
+    private static func isInFlight(_ stage: USBReceiveStage) -> Bool {
+        [.checkingSource, .extracting, .copyingToUSB, .verifying, .finalizing].contains(stage)
+    }
+
+    private static func paused(_ value: USBReceiveProgress, message: String) -> USBReceiveProgress {
+        USBReceiveProgress(stage: .paused, destination: value.destination, deliveryID: value.deliveryID,
+            fileName: value.fileName, currentIndex: value.currentIndex, totalCount: value.totalCount,
+            completedCount: value.completedCount, bytesReceived: value.bytesReceived,
+            totalBytes: value.totalBytes, startedAt: nil, expiresAt: nil, errorMessage: nil,
+            detail: [value.detail, message].compactMap { $0 }.joined(separator: "\n"))
+    }
+
+    // Small local checkpoints, at most once a second while bytes advance. Stage
+    // changes and interruption are always flushed; no USB I/O is performed here.
+    private func persistLocked(force: Bool) {
+        guard let fileURL else { return }
+        let now = Date()
+        guard force || lastSavedAt.map({ now.timeIntervalSince($0) >= 1 }) != false else { return }
+        do {
+            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(latest).write(to: fileURL, options: .atomic)
+            lastSavedAt = now
+        } catch {
+            // Preserve the live progress, but don't silently claim restart recovery.
+            latest = USBReceiveProgress(stage: latest.stage, destination: latest.destination,
+                deliveryID: latest.deliveryID, fileName: latest.fileName,
+                currentIndex: latest.currentIndex, totalCount: latest.totalCount,
+                completedCount: latest.completedCount, bytesReceived: latest.bytesReceived,
+                totalBytes: latest.totalBytes, startedAt: latest.startedAt, expiresAt: latest.expiresAt,
+                errorMessage: latest.errorMessage,
+                detail: "USB 복사 진행 기록 저장 실패 · 앱을 종료하면 진행 표시를 복원하지 못할 수 있습니다.")
+        }
+    }
 
     func snapshot() -> USBReceiveProgress {
         lock.withLock { latest }
     }
 
     func publish(_ progress: USBReceiveProgress) {
+        var delivered = progress
         let current = lock.withLock { () -> [
             AsyncStream<USBReceiveProgress>.Continuation
         ] in
-            latest = progress
+            let oldStage = latest.stage
+            if let interruption, progress.stage != .completed && progress.stage != .failed {
+                delivered = interruption
+            }
+            latest = delivered
+            persistLocked(force: oldStage != latest.stage || latest.stage == .paused)
+            delivered = latest
             return Array(continuations.values)
         }
-        current.forEach { _ = $0.yield(progress) }
+        current.forEach { _ = $0.yield(delivered) }
     }
 
     func publishFailure(_ message: String) {
@@ -174,6 +251,7 @@ final class USBReceiveProgressStore: @unchecked Sendable {
         let current = lock.withLock { () -> [AsyncStream<USBReceiveProgress>.Continuation] in
             guard shouldClear(latest) else { return [] }
             latest = .idle
+            persistLocked(force: true)
             return Array(continuations.values)
         }
         current.forEach { _ = $0.yield(.idle) }

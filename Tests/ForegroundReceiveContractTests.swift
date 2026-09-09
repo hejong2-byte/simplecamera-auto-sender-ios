@@ -2,6 +2,23 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class ForegroundReceiveContractTests: XCTestCase {
+    func testStoredFileActionsShareCompactRowWithoutTallLabels() throws {
+        let receiver = try source("App/UI/USBReceiverView.swift")
+        let actions = try XCTUnwrap(receiver.components(separatedBy: "HStack(alignment: .center, spacing: 8) {").last)
+            .components(separatedBy: "if model.isDeletingStoredFiles").first ?? ""
+        XCTAssertTrue(actions.contains("stored-files-export"))
+        XCTAssertTrue(actions.contains("stored-files-delete"))
+        XCTAssertTrue(actions.contains("stored-files-clean-temp"))
+        XCTAssertFalse(actions.contains("minHeight: 44"))
+        XCTAssertTrue(actions.contains(".controlSize(.regular)"))
+    }
+
+    func testWaitingDescriptionIsHiddenWithoutHidingErrors() throws {
+        let status = try source("App/UI/PCReceiveStatusView.swift")
+        XCTAssertTrue(status.contains("if status.kind != .waiting"))
+        XCTAssertTrue(status.contains("Text(status.message)"))
+    }
+
     func testRootOwnsArrivalMonitoringAndStorageChoice() throws {
         let root = try source("App/UI/ContentView.swift")
         XCTAssertTrue(root.contains("incomingModel.setActive"), "Arrival monitoring must not require opening the receiver screen")

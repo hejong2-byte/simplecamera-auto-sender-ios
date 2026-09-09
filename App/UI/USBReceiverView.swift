@@ -277,32 +277,41 @@ struct USBReceiverView: View {
                 Button {
                     Task { await model.requestStoredFilesUSBExport() }
                 } label: {
-                    Text("선택 파일 USB로 복사")
-                        .frame(maxWidth: .infinity, minHeight: 44)
+                    Text("USB 복사")
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!model.hasStoredFileSelection || model.isExportingToUSB || model.isReceivingFile
                     || model.isDeletingStoredFiles || model.needsStoredZIPExportChoice)
                 .accessibilityIdentifier("stored-files-export")
+                .accessibilityLabel("선택 파일 USB로 복사")
 
                 Button(role: .destructive) {
                     model.requestStoredFileDeletion()
                 } label: {
-                    Text("선택 파일 삭제")
-                        .frame(minHeight: 44)
+                    Text("선택 삭제")
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
                 .disabled(!model.canDeleteStoredFiles)
                 .accessibilityIdentifier("stored-files-delete")
+                .accessibilityLabel("선택 파일 삭제")
+
+                Button { model.requestTemporaryCleanup() } label: {
+                    Text("임시파일 삭제").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!model.canCleanTemporaryFiles)
+                .accessibilityIdentifier("stored-files-clean-temp")
             }
+            .font(.subheadline)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .controlSize(.regular)
 
             if model.isDeletingStoredFiles || model.storedFileDeletionProgress != nil {
                 FileDeletionProgressView(progress: model.storedFileDeletionProgress, isRunning: model.isDeletingStoredFiles)
             }
-            Button("임시파일 정리") { model.requestTemporaryCleanup() }
-                .buttonStyle(.bordered)
-                .disabled(!model.canCleanTemporaryFiles)
-                .accessibilityIdentifier("stored-files-clean-temp")
             if model.isCleaningTemporaryFiles || model.temporaryCleanupProgress != nil {
                 FileDeletionProgressView(progress: model.temporaryCleanupProgress, isRunning: model.isCleaningTemporaryFiles)
             }

@@ -4,6 +4,79 @@ import XCTest
 
 @MainActor
 final class USBReceiverViewModelTests: XCTestCase {
+    func testBackgroundExpirationKeeps70PercentVisibleUntilWorkerCleanupFinishes() async throws {
+        let file = try storedFile()
+        let store = USBReceiveProgressStore()
+        let started = expectation(description: "copy started")
+        let model = try exportModel(files: [file], exportProgressStore: store) { _, _, _ in
+            store.publish(USBReceiveProgress(stage: .copyingToUSB, deliveryID: nil, fileName: file.name,
+                currentIndex: 1, totalCount: 1, completedCount: 0, bytesReceived: 70,
+                totalBytes: 100, startedAt: Date(), expiresAt: nil, errorMessage: nil))
+            started.fulfill()
+            try? await Task.sleep(for: .seconds(5))
+            let cancelled = Task.isCancelled
+            await Task.detached { try? await Task.sleep(for: .milliseconds(80)) }.value
+            return IPhoneUSBExportSummary(verified: [], failed: [], cancelled: cancelled)
+        }
+        await model.refresh()
+        model.toggleStoredFileSelection(file.id)
+        let task = Task { await model.exportSelectedFilesToUSB() }
+        await fulfillment(of: [started], timeout: 2)
+        await waitUntil { model.usbExportProgress?.percent == 70 }
+        model.expireUSBCopyBackgroundTime()
+        XCTAssertTrue(model.isExportingToUSB, "Don't allow cleanup while the worker still owns USB I/O")
+        await task.value
+        await waitUntil { model.usbExportProgress?.stage == .paused }
+        XCTAssertEqual(model.usbExportDisplayedPercent, 70)
+        XCTAssertTrue(model.usbExportStageTitle.contains("중단"))
+        XCTAssertFalse(model.isExportingToUSB)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
+
+    func testCleanupAvailabilityIgnoresDiscoveryButBlocksActualDownload() async throws {
+        let store = USBReceiveProgressStore()
+        let model = try exportModel(files: [], receiveProgressStore: store) { _, _, _ in
+            IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        func publish(_ stage: USBReceiveStage) {
+            store.publish(USBReceiveProgress(stage: stage, destination: .iphoneLocal,
+                deliveryID: nil, fileName: nil, currentIndex: 0, totalCount: 0,
+                completedCount: 0, bytesReceived: 0, totalBytes: 0,
+                startedAt: nil, expiresAt: nil, errorMessage: nil))
+        }
+        publish(.discovering)
+        await waitUntil { model.receiveProgress?.stage == .discovering }
+        XCTAssertTrue(model.canCleanTemporaryFiles)
+        publish(.downloading)
+        await waitUntil { model.receiveProgress?.stage == .downloading }
+        XCTAssertFalse(model.canCleanTemporaryFiles)
+    }
+
+    func testTemporaryCleanupButtonStaysEnabledDuringEmptyMailboxPolling() async throws {
+        let started = expectation(description: "poll started")
+        let preferences = isolatedPreferences()
+        preferences.selectedDestination = .iphoneLocal
+        let model = USBReceiverViewModel(
+            uploadCredentialStore: InMemoryCredentialStore(),
+            registrationStore: IPhoneReceiverRegistrationStore(identityStore: InMemoryCredentialStore(), secretStore: InMemoryCredentialStore()),
+            bookmarkStore: USBBookmarkStore(fileURL: temporaryDirectory().appendingPathComponent("bookmark.json")),
+            registrar: StubReceiverRegistrar(),
+            receiveOnce: { USBReceiveSummary(discovered: 0, completed: 0) },
+            receiveLocalOnce: {
+                started.fulfill()
+                try await Task.sleep(for: .milliseconds(250))
+            },
+            progressUpdates: { AsyncStream { $0.finish() } },
+            defaultDeviceName: "iPhone", preferences: preferences)
+        XCTAssertTrue(model.canCleanTemporaryFiles)
+        let poll = Task { await model.pollOnce() }
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertTrue(model.isPerformingReceive)
+        XCTAssertTrue(model.canCleanTemporaryFiles, "Empty mailbox polling must not flash the cleanup button")
+        await poll.value
+        XCTAssertTrue(model.canCleanTemporaryFiles)
+    }
+
     func testCopyCancellationKeepsBusyUntilWorkerReturnsAndPreservesOriginal() async throws {
         let file = try storedFile()
         let started = expectation(description: "copy started")
@@ -915,6 +988,8 @@ final class USBReceiverViewModelTests: XCTestCase {
             exportProgressUpdates: {
                 exportProgressStore?.updates() ?? AsyncStream { $0.finish() }
             },
+            beginExportProgress: { name, count in exportProgressStore?.beginExport(fileName: name, totalCount: count) },
+            interruptExportProgress: { exportProgressStore?.interruptExport() },
             defaultDeviceName: "iPhone",
             preferences: isolatedPreferences()
         )

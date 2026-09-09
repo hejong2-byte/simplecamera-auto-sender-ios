@@ -158,6 +158,15 @@ actor USBFolderCleanupService {
             if let inspectionError { throw inspectionError }
             if let coordinationError { throw coordinationError }
             guard didInspect, let remaining else { throw USBFolderCleanupError.destinationUnavailable }
+            // A detached or inaccessible root is not an empty, successfully deleted card.
+            guard try fileManager.attributesOfItem(atPath: root.path)[.type] as? FileAttributeType == .typeDirectory else {
+                throw USBFolderCleanupError.destinationUnavailable
+            }
+            if let currentVolumeID = try volumeIdentity(root) {
+                guard currentVolumeID == destination.volumeID else { throw USBFolderCleanupError.destinationChanged }
+            } else if destination.volumeID != root.path {
+                throw USBFolderCleanupError.destinationChanged
+            }
             // A provider can report a removal error after actually removing the item.
             // Reconcile against a fresh, successfully coordinated listing, including hidden items.
             failures.removeAll { !remainingNames.contains($0.name) }
@@ -263,21 +272,25 @@ actor USBFolderCleanupService {
             guard itemURL.path.hasPrefix(prefix) else {
                 throw USBFolderCleanupError.destinationChanged
             }
-            let values = try itemURL.resourceValues(forKeys: keys)
-            let isDirectory = values.isDirectory == true && values.isSymbolicLink != true
+            guard let values = try freshAttributes(itemURL) else {
+                enumerator.skipDescendants()
+                continue
+            }
+            let type = values[.type] as? FileAttributeType
+            let isDirectory = type == .typeDirectory
             let kind: String
             if isDirectory {
                 kind = "directory"
-            } else if values.isSymbolicLink == true {
+            } else if type == .typeSymbolicLink {
                 kind = "symlink"
             } else {
                 kind = "file"
             }
-            let modified = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+            let modified = (values[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
             items.append(Item(
                 relativePath: String(itemURL.path.dropFirst(prefix.count)),
                 kind: kind,
-                size: Int64(values.fileSize ?? 0),
+                size: (values[.size] as? NSNumber)?.int64Value ?? 0,
                 modifiedMilliseconds: Int64((modified * 1_000).rounded())
             ))
         }
@@ -292,7 +305,21 @@ actor USBFolderCleanupService {
             options: []
         )
         try children.forEach { try validateTopLevelItem($0, inside: root) }
-        return children
+        return try children.filter { try freshAttributes($0) != nil }
+    }
+
+    /// File-provider directory results can outlive removal. Only ENOENT means
+    /// gone; permission errors and disconnected volumes must remain errors.
+    private func freshAttributes(_ item: URL) throws -> [FileAttributeKey: Any]? {
+        do {
+            return try fileManager.attributesOfItem(atPath: item.path)
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == NSCocoaErrorDomain,
+               [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(nsError.code) { return nil }
+            if nsError.domain == NSPOSIXErrorDomain, nsError.code == 2 { return nil }
+            throw error
+        }
     }
 
     private func validateTopLevelItem(_ item: URL, inside root: URL) throws {

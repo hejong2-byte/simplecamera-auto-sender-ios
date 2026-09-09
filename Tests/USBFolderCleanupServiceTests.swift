@@ -3,6 +3,24 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class USBFolderCleanupServiceTests: XCTestCase {
+    func testStaleDeletedDirectoryEntriesAreNotCountedAs65Or8RemainingFiles() async throws {
+        for count in [65, 8] {
+            let root = temporaryDirectory()
+            for index in 0..<count {
+                try Data([1]).write(to: root.appendingPathComponent("file-\(index).bin"))
+            }
+            let manager = StaleDeletedListingFileManager()
+            let service = USBFolderCleanupService(fileManager: manager,
+                volumeIdentity: { _ in "volume-1" }, startAccessing: { _ in true }, stopAccessing: { _ in })
+            let target = destination(root, volumeID: "volume-1")
+            let before = try await service.inspect(target)
+            let result = try await service.deleteAllContents(of: target, matching: before)
+            XCTAssertEqual(result.remainingItemCount, 0)
+            XCTAssertTrue(result.failures.isEmpty, "Deleted entries must not survive a fresh stat check")
+            XCTAssertEqual(result.deletedItemCount, count)
+        }
+    }
+
     func testDelayedProviderRemovalIsRecheckedBeforeReporting65Remaining() async throws {
         let root = temporaryDirectory()
         for index in 0..<65 {
@@ -275,6 +293,21 @@ private final class DelayedRemovalFileManager: FileManager, @unchecked Sendable 
 private final class RefusingRemovalFileManager: FileManager, @unchecked Sendable {
     override func removeItem(at URL: URL) throws {
         throw CocoaError(.fileWriteNoPermission)
+    }
+}
+
+private final class StaleDeletedListingFileManager: FileManager, @unchecked Sendable {
+    private var oldChildren: [URL] = []
+    private var deleted = false
+    override func removeItem(at URL: URL) throws {
+        try super.removeItem(at: URL)
+        deleted = true
+    }
+    override func contentsOfDirectory(at url: URL, includingPropertiesForKeys keys: [URLResourceKey]?,
+                                     options mask: FileManager.DirectoryEnumerationOptions = []) throws -> [URL] {
+        if deleted { return oldChildren }
+        oldChildren = try super.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: mask)
+        return oldChildren
     }
 }
 

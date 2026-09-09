@@ -35,10 +35,12 @@ struct PCReceiveStatusView: View {
                     .lineLimit(compact ? 1 : 2)
             }
 
-            Text(status.message)
-                .font(compact ? .caption : .subheadline)
-                .foregroundStyle(status.kind == .failed ? tint : .secondary)
-                .lineLimit(compact ? 2 : nil)
+            if status.kind != .waiting {
+                Text(status.message)
+                    .font(compact ? .caption : .subheadline)
+                    .foregroundStyle(status.kind == .failed ? tint : .secondary)
+                    .lineLimit(compact ? 2 : nil)
+            }
 
             HStack {
                 if let occurredAt = status.occurredAt {

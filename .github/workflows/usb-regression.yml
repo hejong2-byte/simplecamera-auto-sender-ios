@@ -22,6 +22,7 @@ jobs:
             -parallel-testing-enabled NO \
             -only-testing:SimpleCameraAutoSenderTests/IPhoneUSBExportServiceTests \
             -only-testing:SimpleCameraAutoSenderTests/USBReceiverViewModelTests \
+            -only-testing:SimpleCameraAutoSenderTests/USBExportProgressRecoveryTests \
             -only-testing:SimpleCameraAutoSenderTests/USBFolderCleanupServiceTests \
             -only-testing:SimpleCameraAutoSenderTests/IPhoneReceiveErrorMessageTests \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/usb-regression.log

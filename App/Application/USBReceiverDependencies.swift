@@ -81,7 +81,9 @@ final class USBReceiverDependencies: @unchecked Sendable {
             }
         )
         let progressStore = USBReceiveProgressStore()
-        let exportProgressStore = USBReceiveProgressStore()
+        let exportProgressStore = USBReceiveProgressStore(
+            fileURL: stateDirectory.appendingPathComponent("usb-export-progress.json")
+        )
         let directUSBService = USBReceiveService(
             client: usbClient,
             ledger: ledger,
@@ -266,6 +268,11 @@ final class USBReceiverDependencies: @unchecked Sendable {
             },
             progressUpdates: { [progressStore] in progressStore.updates() },
             exportProgressUpdates: { [exportProgressStore] in exportProgressStore.updates() },
+            beginExportProgress: { [exportProgressStore] name, count in
+                exportProgressStore.beginExport(fileName: name, totalCount: count)
+            },
+            interruptExportProgress: { [exportProgressStore] in exportProgressStore.interruptExport() },
+            failExportProgress: { [exportProgressStore] message in exportProgressStore.publishFailure(message) },
             loadOutcome: { [outcomeStore] receiverID in
                 outcomeStore.load(receiverID: receiverID)
             },
