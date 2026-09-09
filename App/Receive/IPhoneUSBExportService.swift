@@ -383,7 +383,9 @@ actor IPhoneUSBExportService {
                 let root = destination.url.resolvingSymlinksInPath().standardizedFileURL
                 let target = root.appendingPathComponent(record.usbStoredName)
                     .resolvingSymlinksInPath().standardizedFileURL
-                guard target.path.hasPrefix(root.path + "/"), fileManager.fileExists(atPath: target.path) else {
+                let isRootCopy = record.usbStoredName.isEmpty && target.path == root.path
+                guard (isRootCopy || target.path.hasPrefix(root.path + "/")),
+                      fileManager.fileExists(atPath: target.path) else {
                     throw IPhoneUSBExportError.destinationNotWritable
                 }
                 let total = entries.reduce(Int64(0)) { $0 + $1.size }
@@ -603,7 +605,7 @@ actor IPhoneUSBExportService {
         )
         defer { removeExportTemporaryItem(extractionRoot) }
 
-        let extraction: SafeZIPExtraction
+        var extraction: SafeZIPExtraction
         do {
             extraction = try SafeZIPExtractor(fileManager: fileManager)
                 .extract(file.url, to: extractionRoot) { bytes, total, name, done, count in
@@ -615,12 +617,41 @@ actor IPhoneUSBExportService {
             throw IPhoneUSBExportError.zipExtractionFailed
         }
 
+        // Keep the iPhone staging paths intact; change only the USB layout.
+        let wrapper = "SD_CARD_ROOT"
+        let prefix = wrapper + "/"
+        let archivePaths = extraction.directories + extraction.files.map(\.relativePath)
+        if !archivePaths.isEmpty,
+           archivePaths.allSatisfy({ $0 == wrapper || $0.hasPrefix(prefix) }),
+           extraction.directories.contains(wrapper) {
+            extraction = SafeZIPExtraction(
+                files: extraction.files.map {
+                    SafeZIPExtractedFile(relativePath: String($0.relativePath.dropFirst(prefix.count)),
+                                         url: $0.url, size: $0.size)
+                },
+                directories: extraction.directories.filter { $0 != wrapper }
+                    .map { String($0.dropFirst(prefix.count)) },
+                totalBytes: extraction.totalBytes
+            )
+        }
+
         guard try fileSize(file.url) == sourceSize,
               try modificationDate(file.url) == sourceModifiedAt else {
             throw IPhoneUSBExportError.sourceChanged
         }
 
         return try withCoordinatedDestination(destination) {
+        let topLevelNames = Set((extraction.directories + extraction.files.map(\.relativePath))
+            .compactMap { $0.split(separator: "/").first.map(String.init) }).sorted()
+        func checkRootConflicts() throws {
+            for name in topLevelNames {
+                let target = destination.url.appendingPathComponent(name)
+                if name == Self.partialDirectoryName || fileManager.fileExists(atPath: target.path) {
+                    throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
+                }
+            }
+        }
+        try checkRootConflicts()
         let partialDirectory = destination.url.appendingPathComponent(
             Self.partialDirectoryName,
             isDirectory: true
@@ -688,17 +719,21 @@ actor IPhoneUSBExportService {
                    "2/2 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\n\(extractedFile.relativePath)")
         }
 
-        let requestedFolderName = (file.name as NSString)
-            .deletingPathExtension
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let storedName = try IPhoneLocalFileNaming.availableName(
-            requestedName: requestedFolderName.isEmpty ? "압축해제" : requestedFolderName,
-            in: destination.url,
-            fileManager: fileManager
-        )
-        let finalURL = destination.url.appendingPathComponent(storedName, isDirectory: true)
         try Task.checkCancellation()
-        try fileManager.moveItem(at: partialURL, to: finalURL)
+        try checkRootConflicts()
+        // All bytes are written and sized before publishing the exact top-level
+        // names. Never add a ZIP-name wrapper or rename navigation directories.
+        for (index, name) in topLevelNames.enumerated() {
+            report(.finalizing, copiedBytes, extraction.totalBytes,
+                   "USB 루트에 저장 확정 \(index)/\(topLevelNames.count)개\n\(name)")
+            try fileManager.moveItem(at: partialURL.appendingPathComponent(name),
+                                     to: destination.url.appendingPathComponent(name))
+        }
+        // Empty staging directories are not part of the exported USB layout.
+        try fileManager.removeItem(at: partialURL)
+        if (try? fileManager.contentsOfDirectory(atPath: partialDirectory.path).isEmpty) == true {
+            try? fileManager.removeItem(at: partialDirectory)
+        }
         publish(
             file: file,
             currentIndex: currentIndex,
@@ -717,7 +752,7 @@ actor IPhoneUSBExportService {
             sourceURL: file.url,
             sourceSize: sourceSize,
             sourceSHA256: file.receivedRecord?.sha256 ?? "",
-            usbStoredName: storedName,
+            usbStoredName: "",
             verifiedAt: now(),
             copiedFiles: copiedFiles,
             usbVolumeID: destination.volumeID,
@@ -904,9 +939,14 @@ actor IPhoneUSBExportService {
         if let debug = systemError.userInfo["NSDebugDescription"] as? String {
             diagnostics += " · \(debug.prefix(512))"
         }
-        let message = systemError.domain == NSCocoaErrorDomain && systemError.code == CocoaError.Code.fileReadUnknown.rawValue
-            ? "파일을 읽지 못했습니다. 파일 손상으로 판정한 것은 아닙니다."
-            : IPhoneReceiveErrorMessage.message(normalized)
+        let message: String
+        if systemError.domain == NSCocoaErrorDomain && systemError.code == CocoaError.Code.fileWriteFileExists.rawValue {
+            message = "USB 루트에 같은 이름의 파일 또는 폴더가 이미 있습니다. 기존 내용은 덮어쓰거나 이름을 바꾸지 않았습니다."
+        } else if systemError.domain == NSCocoaErrorDomain && systemError.code == CocoaError.Code.fileReadUnknown.rawValue {
+            message = "파일을 읽지 못했습니다. 파일 손상으로 판정한 것은 아닙니다."
+        } else {
+            message = IPhoneReceiveErrorMessage.message(normalized)
+        }
         return IPhoneUSBExportFailure(
             sourceID: sourceID,
             error: normalized,
