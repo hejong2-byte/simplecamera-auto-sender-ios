@@ -4,6 +4,26 @@ import XCTest
 
 @MainActor
 final class USBReceiverViewModelTests: XCTestCase {
+    func testCopyAndOptionalVerificationResolveUSBOffTheMainThread() async throws {
+        let file = try storedFile()
+        let bookmark = USBBookmarkStore(fileURL: temporaryDirectory().appendingPathComponent("probe.json"),
+                                        codec: MainQueueProbeBookmarkCodec())
+        try bookmark.save(folderURL: temporaryDirectory())
+        let model = USBReceiverViewModel(
+            uploadCredentialStore: InMemoryCredentialStore(),
+            registrationStore: IPhoneReceiverRegistrationStore(identityStore: InMemoryCredentialStore(), secretStore: InMemoryCredentialStore()),
+            bookmarkStore: bookmark, registrar: StubReceiverRegistrar(),
+            receiveOnce: { USBReceiveSummary(discovered: 0, completed: 0) },
+            storedFiles: { [file] }, progressUpdates: { AsyncStream { $0.finish() } },
+            defaultDeviceName: "iPhone", preferences: isolatedPreferences())
+        await model.refresh()
+        model.toggleStoredFileSelection(file.id)
+        await model.exportSelectedFilesToUSB()
+        XCTAssertNotNil(model.lastUSBExportError)
+        await model.verifySelectedUSBCopies()
+        XCTAssertTrue(model.usbVerificationFailed)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
     func testCopyPercentStaysBelow100UntilCompletionAndReportsPhaseSpeed() async throws {
         let store = USBReceiveProgressStore()
         let model = try exportModel(files: [], exportProgressStore: store) { _, _, _ in

@@ -693,7 +693,9 @@ final class USBReceiverViewModel: ObservableObject {
         lastOriginalCleanupError = nil
         defer { isExportingToUSB = false }
         do {
-            guard let destination = try bookmarkStore.resolve() else {
+            guard let destination = try await Task.detached(priority: .userInitiated, operation: { [bookmarkStore] in
+                try bookmarkStore.resolve()
+            }).value else {
                 throw USBReceiveServiceError.missingDestination
             }
             guard !destination.isStale else {
@@ -730,7 +732,9 @@ final class USBReceiverViewModel: ObservableObject {
             isVerifyingUSBCopies = false
         }
         do {
-            guard let destination = try bookmarkStore.resolve() else {
+            guard let destination = try await Task.detached(priority: .userInitiated, operation: { [bookmarkStore] in
+                try bookmarkStore.resolve()
+            }).value else {
                 throw USBReceiveServiceError.missingDestination
             }
             let (updates, continuation) = AsyncStream<USBReceiveProgress>.makeStream(bufferingPolicy: .bufferingNewest(1))
