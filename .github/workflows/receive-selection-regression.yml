@@ -33,7 +33,7 @@ jobs:
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testProductionLaunchRecoversCorruptLocalState \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testMultiplePendingFilesCanBeSelectedAndReceivedFirst \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testPendingSelectionSurvivesRotationAndRepeatedForegrounding \
-            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/selection-test.log
+            ENABLE_TESTABILITY=YES CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/selection-test.log
           if grep -q 'Restarting after unexpected exit' build/selection-test.log; then
             echo 'Test runner restarted unexpectedly; do not treat this run as clean.' >&2
             exit 1
