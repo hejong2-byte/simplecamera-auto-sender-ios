@@ -82,7 +82,7 @@ struct USBReceiverView: View {
                 Task { await model.deleteOriginals() }
             }
         } message: {
-            Text("USB에서 크기와 SHA-256 검증을 마친 파일만 대상입니다.")
+            Text("USB 복사와 파일 크기 확인을 마쳤습니다. 정밀 SHA 검증은 선택 사항입니다. iPhone 원본을 삭제할까요? USB 복사본은 유지됩니다.")
         }
         .alert(
             "선택한 iPhone 파일 \(model.storedFilesPendingDeletion.count)개를 삭제할까요?",
@@ -287,6 +287,21 @@ struct USBReceiverView: View {
             if model.isDeletingStoredFiles || model.storedFileDeletionProgress != nil {
                 FileDeletionProgressView(progress: model.storedFileDeletionProgress, isRunning: model.isDeletingStoredFiles)
             }
+            Button {
+                Task { await model.verifySelectedUSBCopies() }
+            } label: {
+                Label("선택 파일의 USB 복사본 정밀 SHA 검증", systemImage: "checkmark.shield")
+            }
+            .buttonStyle(.bordered)
+            .disabled(!model.hasStoredFileSelection || model.isExportingToUSB || model.isReceivingFile
+                || model.isDeletingStoredFiles || model.isCleaningUSBFolder || model.needsStoredZIPExportChoice
+                || model.needsDeletionDecision)
+            .accessibilityIdentifier("stored-files-verify-usb")
+            if let message = model.usbVerificationMessage {
+                Label(message, systemImage: model.usbVerificationFailed ? "exclamationmark.triangle" : "checkmark.shield")
+                    .font(.subheadline)
+                    .foregroundStyle(model.usbVerificationFailed ? .orange : .green)
+            }
             if let message = model.storedFileDeletionMessage {
                 Label(message, systemImage: "checkmark.circle.fill")
                     .font(.subheadline)
@@ -319,7 +334,7 @@ struct USBReceiverView: View {
         VStack(alignment: .leading, spacing: 10) {
             Divider()
             Text(model.usbExportStageTitle).font(.headline)
-            if let progress = model.usbExportProgress {
+            if let progress = model.visibleUSBExportProgress {
                 if progress.stage != .failed, progress.totalBytes > 0 || progress.stage == .completed {
                     ProgressView(value: Double(progress.percent), total: 100)
                         .tint(.cyan)
@@ -339,7 +354,7 @@ struct USBReceiverView: View {
                     Text(detail).font(.subheadline).fixedSize(horizontal: false, vertical: true)
                 }
                 if model.isExportingToUSB, progress.stage == .copyingToUSB {
-                    Text("진행률은 용량 기준입니다. 작은 파일이 많으면 폴더 생성·파일 기록·동기화 때문에 %가 천천히 오를 수 있습니다. 위의 처리 개수와 파일명도 확인하세요.")
+                    Text("진행률은 용량 기준입니다. 작은 파일이 많으면 폴더 생성·파일 기록 때문에 %가 천천히 오를 수 있습니다. 위의 처리 개수와 파일명도 확인하세요.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if model.isExportingToUSB, let updatedAt = model.usbExportLastUpdatedAt {

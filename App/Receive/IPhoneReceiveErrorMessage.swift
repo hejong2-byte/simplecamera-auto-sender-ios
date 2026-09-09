@@ -65,6 +65,8 @@ enum IPhoneReceiveErrorMessage {
         case IPhoneUSBExportError.copyFailed,
              USBZIPReceivePipelineError.copyFailed:
             return "USB 복사에 실패했습니다. 원본 파일과 USB 연결·폴더 권한을 확인해 주세요."
+        case IPhoneUSBExportError.verificationRecordMissing:
+            return "이 USB에 대한 복사 기록이 없습니다. 복사한 USB를 연결해 주세요. 이전 버전으로 복사한 파일은 정밀 검증 기록이 없습니다."
         case IPhoneUSBExportError.unsafeZIPArchive,
              USBZIPReceivePipelineError.unsafeArchive:
             return "안전하지 않은 ZIP입니다. 압축을 풀거나 USB에 복사하지 않았습니다."

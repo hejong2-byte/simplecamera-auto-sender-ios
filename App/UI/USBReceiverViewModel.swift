@@ -33,6 +33,7 @@ final class USBReceiverViewModel: ObservableObject {
         IPhoneReceiveArchiveMode
     ) async -> IPhoneUSBExportSummary
     typealias PendingDeletionDecisions = @Sendable () -> [IPhoneUSBDeletionDecision]
+    typealias VerifyCopies = @Sendable ([IPhoneStoredFile], USBBookmarkDestination, @Sendable (USBReceiveProgress) -> Void) async -> IPhoneUSBExportSummary
     typealias KeepOriginals = @Sendable (Set<UUID>) async throws -> Void
     typealias DeleteOriginals = @Sendable (Set<UUID>) async -> IPhoneUSBDeletionSummary
     typealias InspectUSBFolder = @Sendable (
@@ -64,6 +65,10 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var usbExportCompletionMessage: String?
     @Published private(set) var lastOriginalCleanupError: String?
     @Published private(set) var isExportingToUSB = false
+    @Published private(set) var isVerifyingUSBCopies = false
+    @Published private(set) var usbVerificationMessage: String?
+    @Published private(set) var usbVerificationFailed = false
+    @Published private(set) var usbVerificationProgress: USBReceiveProgress?
     @Published private(set) var isPolling = false
     @Published private(set) var lastError: String?
     @Published private(set) var allowsCellular: Bool
@@ -110,6 +115,7 @@ final class USBReceiverViewModel: ObservableObject {
     private let canPreviewFile: @MainActor (URL) -> Bool
     private let deleteStoredFiles: DeleteStoredFiles
     private let exportFiles: ExportFiles
+    private let verifyCopies: VerifyCopies
     private let pendingDeletionDecisions: PendingDeletionDecisions
     private let keepOriginalFiles: KeepOriginals
     private let deleteOriginalFiles: DeleteOriginals
@@ -153,6 +159,11 @@ final class USBReceiverViewModel: ObservableObject {
             IPhoneUSBExportSummary(verified: [], failed: [])
         },
         pendingDeletionDecisions: @escaping PendingDeletionDecisions = { [] },
+        verifyCopies: @escaping VerifyCopies = { files, _, _ in
+            IPhoneUSBExportSummary(verified: [], failed: files.map {
+                IPhoneUSBExportFailure(sourceID: $0.id, error: .verificationRecordMissing)
+            })
+        },
         keepOriginals: @escaping KeepOriginals = { _ in },
         deleteOriginals: @escaping DeleteOriginals = { _ in
             IPhoneUSBDeletionSummary(deletedSourceIDs: [], failed: [])
@@ -188,6 +199,7 @@ final class USBReceiverViewModel: ObservableObject {
         self.canPreviewFile = canPreviewFile
         self.deleteStoredFiles = deleteStoredFiles
         self.exportFiles = exportFiles
+        self.verifyCopies = verifyCopies
         self.pendingDeletionDecisions = pendingDeletionDecisions
         self.keepOriginalFiles = keepOriginals
         self.deleteOriginalFiles = deleteOriginals
@@ -677,6 +689,7 @@ final class USBReceiverViewModel: ObservableObject {
         usbExportProgress = nil
         lastUSBExportError = nil
         usbExportCompletionMessage = nil
+        usbVerificationMessage = nil
         lastOriginalCleanupError = nil
         defer { isExportingToUSB = false }
         do {
@@ -698,6 +711,46 @@ final class USBReceiverViewModel: ObservableObject {
 
     private static func isZIP(_ file: IPhoneStoredFile) -> Bool {
         file.url.pathExtension.caseInsensitiveCompare("zip") == .orderedSame
+    }
+
+    func verifySelectedUSBCopies() async {
+        guard !isExportingToUSB, !isReceivingFile, !isPerformingReceive,
+              !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation,
+              !isCleaningUSBFolder, !isChoosingUSBFolder, !needsDeletionDecision,
+              !needsStoredZIPExportChoice else { return }
+        let selected = storedFiles.filter { selectedStoredFileIDs.contains($0.id) }
+        guard !selected.isEmpty else { return }
+        isExportingToUSB = true
+        isVerifyingUSBCopies = true
+        usbVerificationProgress = nil
+        usbVerificationMessage = nil
+        usbVerificationFailed = false
+        defer {
+            isExportingToUSB = false
+            isVerifyingUSBCopies = false
+        }
+        do {
+            guard let destination = try bookmarkStore.resolve() else {
+                throw USBReceiveServiceError.missingDestination
+            }
+            let (updates, continuation) = AsyncStream<USBReceiveProgress>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let collector = Task { @MainActor in
+                for await value in updates {
+                    self.usbVerificationProgress = value
+                    self.usbExportLastUpdatedAt = Date()
+                }
+            }
+            let result = await verifyCopies(selected, destination) { continuation.yield($0) }
+            continuation.finish()
+            await collector.value
+            usbVerificationFailed = !result.failed.isEmpty
+            usbVerificationMessage = result.failed.isEmpty
+                ? "정밀 SHA 검증 완료 · \(result.verified.count)개"
+                : "정밀 SHA 검증 실패 · \(result.failed.count)개\n\(result.failed.first?.message ?? "")"
+        } catch {
+            usbVerificationFailed = true
+            usbVerificationMessage = "정밀 검증을 시작하지 못했습니다. \(Self.message(for: error))"
+        }
     }
 
     func keepOriginals() async {
@@ -828,6 +881,7 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     var usbExportStageTitle: String {
+        if isVerifyingUSBCopies { return "선택한 USB 복사본 정밀 SHA 검증 중" }
         if lastUSBExportError != nil { return "USB 복사 실패" }
         if let usbExportCompletionMessage { return usbExportCompletionMessage }
         guard let progress = usbExportProgress else {
@@ -841,6 +895,7 @@ final class USBReceiverViewModel: ObservableObject {
         case .extracting: return "ZIP 압축 해제 중\(position)"
         case .copyingToUSB: return "USB로 복사 중\(position)"
         case .verifying: return "USB 복사 검증 중\(position)"
+        case .finalizing: return "복사 결과 정리 중\(position)"
         case .completed: return "USB 복사 완료"
         case .failed: return "USB 복사 실패"
         default: return "USB 복사 준비 중\(position)"
@@ -848,8 +903,12 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     var usbExportByteText: String {
-        guard let progress = usbExportProgress else { return "" }
+        guard let progress = visibleUSBExportProgress else { return "" }
         return "\(Self.byteText(progress.bytesReceived)) / \(Self.byteText(progress.totalBytes))"
+    }
+
+    var visibleUSBExportProgress: USBReceiveProgress? {
+        isVerifyingUSBCopies ? usbVerificationProgress : usbExportProgress
     }
 
     var receiveStageTitle: String {

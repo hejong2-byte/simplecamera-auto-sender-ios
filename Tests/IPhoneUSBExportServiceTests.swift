@@ -4,6 +4,59 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneUSBExportServiceTests: XCTestCase {
+    func testOptionalVerificationDetectsTamperingWithoutDeletingEitherCopy() async throws {
+        let context = try makeContext()
+        let file = try makeStoredFile(name: "optional.bin", data: Data("original".utf8), in: context.sourceDirectory)
+        let copied = await context.service.export([file], to: context.destination)
+        let decision = try XCTUnwrap(copied.verified.first)
+        let target = context.usbDirectory.appendingPathComponent(decision.usbStoredName)
+        try await context.service.keep(decisionIDs: [decision.id])
+        let checked = await context.service.verifyCopies([file], to: context.destination)
+        XCTAssertEqual(checked.failed, [])
+        XCTAssertEqual(checked.verified.count, 1)
+        try Data("tampered".utf8).write(to: target)
+        let failed = await context.service.verifyCopies([file], to: context.destination)
+        XCTAssertEqual(failed.failed.map(\.error), [.shaMismatch])
+        XCTAssertEqual(try Data(contentsOf: target), Data("tampered".utf8))
+        XCTAssertEqual(try Data(contentsOf: file.url), Data("original".utf8))
+    }
+
+    func testOptionalVerificationReadFailureDoesNotDeleteCopiedFolderOrOriginal() async throws {
+        let context = try makeContext()
+        let file = try makeStoredFile(name: "read-error.bin", data: Data("original".utf8), in: context.sourceDirectory)
+        let copied = await context.service.export([file], to: context.destination)
+        let decision = try XCTUnwrap(copied.verified.first)
+        let target = context.usbDirectory.appendingPathComponent(decision.usbStoredName)
+        // Replace with a directory: the read/type check must fail, without cleanup of user data.
+        try FileManager.default.removeItem(at: target)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let result = await context.service.verifyCopies([file], to: context.destination)
+        XCTAssertEqual(result.failed.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
+
+    func testVerificationManifestSurvivesStoreReopenAndKeepOriginalDecision() async throws {
+        let context = try makeContext()
+        let file = try makeStoredFile(name: "retained.txt", data: Data("data".utf8), in: context.sourceDirectory)
+        let copied = await context.service.export([file], to: context.destination)
+        let decision = try XCTUnwrap(copied.verified.first)
+        try await context.service.keep(decisionIDs: [decision.id])
+        let reopened = try IPhoneUSBDeletionDecisionStore(fileURL: context.sourceDirectory.deletingLastPathComponent().appendingPathComponent("decisions.json"))
+        XCTAssertTrue(reopened.pending().isEmpty)
+        XCTAssertEqual(reopened.copies().first?.copiedFiles?.first?.size, 4)
+    }
+
+    func testOptionalVerificationRejectsWrongUSBWithoutTouchingOriginal() async throws {
+        let context = try makeContext()
+        let file = try makeStoredFile(name: "guard.txt", data: Data("data".utf8), in: context.sourceDirectory)
+        _ = await context.service.export([file], to: context.destination)
+        let wrong = USBBookmarkDestination(url: context.usbDirectory, volumeID: "other", displayName: "wrong", isStale: false)
+        let result = await context.service.verifyCopies([file], to: wrong)
+        XCTAssertEqual(result.failed.map(\.error), [.destinationChanged])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
+
     func testVerifiedCompletionShowsCopiedBytesInsteadOfZeroOfZero() async throws {
         let context = try makeContext()
         let payload = Data(repeating: 0x5a, count: 2 * 1_024 * 1_024 + 17)
@@ -244,9 +297,9 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         let bad = try makeStoredFile(
             name: "변경됨.pdf",
             data: Data("changed-data".utf8),
-            expectedSHA256: String(repeating: "0", count: 64),
             in: context.sourceDirectory
         )
+        try Data("changed-size-after-selection".utf8).write(to: bad.url)
         try Data("existing".utf8).write(
             to: context.usbDirectory.appendingPathComponent(good.name)
         )

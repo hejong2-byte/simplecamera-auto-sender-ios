@@ -13,6 +13,7 @@ enum IPhoneUSBExportError: String, Error, Codable, Equatable, Sendable {
     case unsafeZIPArchive
     case zipExtractionFailed
     case copyFailed
+    case verificationRecordMissing
 }
 
 struct IPhoneUSBExportFailure: Equatable, Sendable {
@@ -29,6 +30,12 @@ struct IPhoneUSBExportFailure: Equatable, Sendable {
     var message: String { detail ?? IPhoneReceiveErrorMessage.message(error) }
 }
 
+struct USBCopyFileDigest: Codable, Equatable, Sendable {
+    let path: String
+    let size: Int64
+    let sha256: String
+}
+
 struct IPhoneUSBDeletionDecision: Codable, Equatable, Sendable, Identifiable {
     let id: UUID
     let sourceID: String
@@ -37,6 +44,10 @@ struct IPhoneUSBDeletionDecision: Codable, Equatable, Sendable, Identifiable {
     let sourceSHA256: String
     let usbStoredName: String
     let verifiedAt: Date
+    // Absent for legacy SHA-verified deletion decisions.
+    var copiedFiles: [USBCopyFileDigest]? = nil
+    var usbVolumeID: String? = nil
+    var sourceModifiedAt: Date? = nil
 }
 
 struct IPhoneUSBExportSummary: Equatable, Sendable {
@@ -58,6 +69,7 @@ final class IPhoneUSBDeletionDecisionStore: @unchecked Sendable {
     private struct State: Codable {
         let version: Int
         var decisions: [IPhoneUSBDeletionDecision]
+        var copies: [IPhoneUSBDeletionDecision]? = nil
     }
 
     private let fileURL: URL
@@ -80,6 +92,10 @@ final class IPhoneUSBDeletionDecisionStore: @unchecked Sendable {
         lock.withLock { state.decisions }
     }
 
+    func copies() -> [IPhoneUSBDeletionDecision] {
+        lock.withLock { state.copies ?? [] }
+    }
+
     func save(_ decision: IPhoneUSBDeletionDecision) throws {
         try lock.withLock {
             var next = state
@@ -87,6 +103,12 @@ final class IPhoneUSBDeletionDecisionStore: @unchecked Sendable {
                 $0.id == decision.id || $0.sourceID == decision.sourceID
             }
             next.decisions.append(decision)
+            if decision.copiedFiles != nil {
+                var copies = next.copies ?? []
+                copies.removeAll { $0.sourceID == decision.sourceID && $0.usbVolumeID == decision.usbVolumeID }
+                copies.append(decision)
+                next.copies = copies
+            }
             try persist(next)
             state = next
         }
@@ -219,14 +241,83 @@ actor IPhoneUSBExportService {
         if deletionStore.pending().isEmpty { progressStore.clearCompleted() }
     }
 
+    /// Read-only, explicit verification. A failure never removes the USB copy
+    /// or the iPhone original and never changes copy/deletion decisions.
+    func verifyCopies(
+        _ files: [IPhoneStoredFile],
+        to destination: USBBookmarkDestination,
+        progress: @Sendable (USBReceiveProgress) -> Void = { _ in }
+    ) -> IPhoneUSBExportSummary {
+        var verified: [IPhoneUSBDeletionDecision] = []
+        var failures: [IPhoneUSBExportFailure] = []
+        let records = deletionStore.copies()
+        for (index, file) in files.enumerated() {
+            var currentName = file.name
+            do {
+                guard !destination.isStale else { throw IPhoneUSBExportError.staleDestination }
+                guard startAccessing(destination.url) else { throw IPhoneUSBExportError.destinationAccessDenied }
+                defer { stopAccessing(destination.url) }
+                let volume = try volumeIdentity(destination.url) ?? destination.url.path
+                guard volume == destination.volumeID else { throw IPhoneUSBExportError.destinationChanged }
+                guard let record = records.last(where: {
+                    $0.sourceID == file.id && $0.usbVolumeID == volume
+                }), let entries = record.copiedFiles else {
+                    throw IPhoneUSBExportError.verificationRecordMissing
+                }
+                let root = destination.url.resolvingSymlinksInPath().standardizedFileURL
+                let target = root.appendingPathComponent(record.usbStoredName)
+                    .resolvingSymlinksInPath().standardizedFileURL
+                guard target.path.hasPrefix(root.path + "/"), fileManager.fileExists(atPath: target.path) else {
+                    throw IPhoneUSBExportError.destinationNotWritable
+                }
+                let total = entries.reduce(Int64(0)) { $0 + $1.size }
+                var done: Int64 = 0
+                let startedAt = now()
+                for (entryIndex, entry) in entries.enumerated() {
+                    currentName = entry.path.isEmpty ? record.usbStoredName : entry.path
+                    let url = (entry.path.isEmpty ? target : target.appendingPathComponent(entry.path))
+                        .resolvingSymlinksInPath().standardizedFileURL
+                    guard url == target || url.path.hasPrefix(target.path + "/") else {
+                        throw IPhoneUSBExportError.destinationChanged
+                    }
+                    guard try fileSize(url) == entry.size else { throw IPhoneUSBExportError.sizeMismatch }
+                    let digest = try hashFile(url) { bytes in
+                        progress(USBReceiveProgress(stage: .verifying, deliveryID: nil,
+                            fileName: file.name, currentIndex: index + 1,
+                            totalCount: files.count, completedCount: verified.count,
+                            bytesReceived: done + bytes, totalBytes: total, startedAt: startedAt,
+                            expiresAt: nil, errorMessage: nil,
+                            detail: "선택 SHA 검증 \(entryIndex + 1)/\(entries.count)개\n\(currentName)"))
+                    }
+                    guard digest == entry.sha256 else { throw IPhoneUSBExportError.shaMismatch }
+                    done += entry.size
+                }
+                verified.append(record)
+            } catch {
+                let failure = Self.failure(sourceID: file.id, error: error)
+                failures.append(IPhoneUSBExportFailure(sourceID: file.id, error: failure.error,
+                    detail: "정밀 검증 · \(currentName)\n\(failure.message)\nUSB 복사본과 iPhone 원본은 삭제하지 않았습니다."))
+            }
+        }
+        // The caller presents verification separately from the saved copy result.
+        return IPhoneUSBExportSummary(verified: verified, failed: failures)
+    }
+
     func delete(decisionIDs: Set<UUID>) -> IPhoneUSBDeletionSummary {
         let selected = deletionStore.pending().filter { decisionIDs.contains($0.id) }
         var deleted: [String] = []
         var failed: [IPhoneUSBExportFailure] = []
         for decision in selected {
             do {
-                guard try fileSize(decision.sourceURL) == decision.sourceSize,
-                      try hashFile(decision.sourceURL) == decision.sourceSHA256 else {
+                guard try fileSize(decision.sourceURL) == decision.sourceSize else {
+                    throw IPhoneUSBExportError.sourceChanged
+                }
+                if decision.copiedFiles != nil {
+                    guard let savedDate = decision.sourceModifiedAt,
+                          try modificationDate(decision.sourceURL) == savedDate else {
+                        throw IPhoneUSBExportError.sourceChanged
+                    }
+                } else if try hashFile(decision.sourceURL) != decision.sourceSHA256 {
                     throw IPhoneUSBExportError.sourceChanged
                 }
                 try fileManager.removeItem(at: decision.sourceURL)
@@ -272,6 +363,7 @@ actor IPhoneUSBExportService {
         try validateDestination(destination)
 
         let sourceSize = try fileSize(file.url)
+        let sourceModifiedAt = try modificationDate(file.url)
         if let record = file.receivedRecord, record.size != sourceSize {
             throw IPhoneUSBExportError.sourceChanged
         }
@@ -287,8 +379,8 @@ actor IPhoneUSBExportService {
                 startedAt: startedAt
             )
         }
-        // Do not reject USB exports based on a capacity estimate. Actual write errors
-        // stop the copy, and size/hash verification below gates completion.
+        // Actual writes, close errors and size checks gate completion. Full USB
+        // readback is a separate user action, never part of default copying.
 
         let partialDirectory = destination.url.appendingPathComponent(
             Self.partialDirectoryName,
@@ -323,8 +415,9 @@ actor IPhoneUSBExportService {
         guard try fileSize(partialURL) == sourceSize else {
             throw IPhoneUSBExportError.sizeMismatch
         }
-        if let expected = file.receivedRecord?.sha256.lowercased(), expected != sourceSHA {
-            throw IPhoneUSBExportError.shaMismatch
+        guard try fileSize(file.url) == sourceSize,
+              try modificationDate(file.url) == sourceModifiedAt else {
+            throw IPhoneUSBExportError.sourceChanged
         }
 
         let storedName = try IPhoneLocalFileNaming.availableName(
@@ -341,18 +434,11 @@ actor IPhoneUSBExportService {
             completedCount: completedCount,
             bytes: sourceSize,
             startedAt: startedAt,
-            stage: .verifying
+            stage: .finalizing,
+            detail: "복사 결과 파일 크기 확인 중"
         )
-        do {
-            guard try fileSize(finalURL) == sourceSize else {
-                throw IPhoneUSBExportError.sizeMismatch
-            }
-            guard try hashFile(finalURL) == sourceSHA else {
-                throw IPhoneUSBExportError.shaMismatch
-            }
-        } catch {
-            try? fileManager.removeItem(at: finalURL)
-            throw error
+        guard try fileSize(finalURL) == sourceSize else {
+            throw IPhoneUSBExportError.sizeMismatch
         }
 
         let decision = IPhoneUSBDeletionDecision(
@@ -362,7 +448,10 @@ actor IPhoneUSBExportService {
             sourceSize: sourceSize,
             sourceSHA256: sourceSHA,
             usbStoredName: storedName,
-            verifiedAt: now()
+            verifiedAt: now(),
+            copiedFiles: [USBCopyFileDigest(path: "", size: sourceSize, sha256: sourceSHA)],
+            usbVolumeID: destination.volumeID,
+            sourceModifiedAt: sourceModifiedAt
         )
         try deletionStore.save(decision)
         return decision
@@ -382,12 +471,7 @@ actor IPhoneUSBExportService {
                     completedCount: completedCount, bytes: bytes, totalBytes: total,
                     startedAt: startedAt, stage: stage, detail: detail)
         }
-        let sourceSHA = try hashFile(file.url) { bytes in
-            report(.checkingSource, bytes, sourceSize, "1/4 · ZIP 원본 SHA 검사")
-        }
-        if let expected = file.receivedRecord?.sha256.lowercased(), expected != sourceSHA {
-            throw IPhoneUSBExportError.shaMismatch
-        }
+        let sourceModifiedAt = try modificationDate(file.url)
 
         try fileManager.createDirectory(
             at: zipWorkingDirectory,
@@ -403,7 +487,7 @@ actor IPhoneUSBExportService {
         do {
             extraction = try SafeZIPExtractor(fileManager: fileManager)
                 .extract(file.url, to: extractionRoot) { bytes, total, name, done, count in
-                    report(.extracting, bytes, total, "2/4 · 압축 해제 \(done)/\(count)개\n\(name)")
+                    report(.extracting, bytes, total, "1/2 · 압축 해제·손상 검사 \(done)/\(count)개\n\(name)")
                 }
         } catch SafeZIPExtractorError.unsafeArchive {
             throw IPhoneUSBExportError.unsafeZIPArchive
@@ -412,9 +496,7 @@ actor IPhoneUSBExportService {
         }
 
         guard try fileSize(file.url) == sourceSize,
-              try hashFile(file.url, progress: { bytes in
-                  report(.checkingSource, bytes, sourceSize, "2/4 · 압축 해제 후 ZIP 원본 변경 여부 검사")
-              }) == sourceSHA else {
+              try modificationDate(file.url) == sourceModifiedAt else {
             throw IPhoneUSBExportError.sourceChanged
         }
 
@@ -433,10 +515,10 @@ actor IPhoneUSBExportService {
         try fileManager.createDirectory(at: partialURL, withIntermediateDirectories: true)
         defer { try? fileManager.removeItem(at: partialURL) }
 
-        report(.copyingToUSB, 0, extraction.totalBytes, "3/4 · USB 폴더 생성 준비")
+        report(.copyingToUSB, 0, extraction.totalBytes, "2/2 · USB 폴더 생성 준비")
         for (index, relativePath) in extraction.directories.enumerated() {
             report(.copyingToUSB, 0, extraction.totalBytes,
-                   "3/4 · USB 폴더 생성 \(index)/\(extraction.directories.count)개\n\(relativePath)")
+                   "2/2 · USB 폴더 생성 \(index)/\(extraction.directories.count)개\n\(relativePath)")
             try fileManager.createDirectory(
                 at: partialURL.appendingPathComponent(relativePath, isDirectory: true),
                 withIntermediateDirectories: true
@@ -444,10 +526,10 @@ actor IPhoneUSBExportService {
         }
 
         var copiedBytes: Int64 = 0
-        var copiedFiles: [(path: String, size: Int64, sha256: String)] = []
+        var copiedFiles: [USBCopyFileDigest] = []
         for extractedFile in extraction.files {
             report(.copyingToUSB, copiedBytes, extraction.totalBytes,
-                   "3/4 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\n\(extractedFile.relativePath)")
+                   "2/2 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\n\(extractedFile.relativePath)")
             let partialFile = partialURL.appendingPathComponent(extractedFile.relativePath)
             try fileManager.createDirectory(
                 at: partialFile.deletingLastPathComponent(),
@@ -468,7 +550,7 @@ actor IPhoneUSBExportService {
                         bytes: copiedBytes + bytes,
                         totalBytes: extraction.totalBytes,
                         startedAt: startedAt,
-                        detail: "3/4 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\n\(extractedFile.relativePath)"
+                        detail: "2/2 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\n\(extractedFile.relativePath)"
                     )
                 }
             )
@@ -476,13 +558,13 @@ actor IPhoneUSBExportService {
                 throw IPhoneUSBExportError.sizeMismatch
             }
             copiedBytes += extractedFile.size
-            copiedFiles.append((
+            copiedFiles.append(USBCopyFileDigest(
                 path: extractedFile.relativePath,
                 size: extractedFile.size,
                 sha256: copiedSHA
             ))
             report(.copyingToUSB, copiedBytes, extraction.totalBytes,
-                   "3/4 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\n\(extractedFile.relativePath)")
+                   "2/2 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\n\(extractedFile.relativePath)")
         }
 
         let requestedFolderName = (file.name as NSString)
@@ -500,39 +582,24 @@ actor IPhoneUSBExportService {
             currentIndex: currentIndex,
             totalCount: totalCount,
             completedCount: completedCount,
-            bytes: 0,
+            bytes: copiedBytes,
             totalBytes: extraction.totalBytes,
             startedAt: startedAt,
-            stage: .verifying
+            stage: .finalizing,
+            detail: "복사 결과 저장·임시 압축해제 파일 정리 중"
         )
-        do {
-            var verifiedBytes: Int64 = 0
-            for (index, copiedFile) in copiedFiles.enumerated() {
-                let finalFile = finalURL.appendingPathComponent(copiedFile.path)
-                guard try fileSize(finalFile) == copiedFile.size else {
-                    throw IPhoneUSBExportError.sizeMismatch
-                }
-                guard try hashFile(finalFile, progress: { bytes in
-                    report(.verifying, verifiedBytes + bytes, extraction.totalBytes,
-                           "4/4 · USB 검증 \(index)/\(copiedFiles.count)개\n\(copiedFile.path)")
-                }) == copiedFile.sha256 else {
-                    throw IPhoneUSBExportError.shaMismatch
-                }
-                verifiedBytes += copiedFile.size
-            }
-        } catch {
-            try? fileManager.removeItem(at: finalURL)
-            throw error
-        }
 
         let decision = IPhoneUSBDeletionDecision(
             id: UUID(),
             sourceID: file.id,
             sourceURL: file.url,
             sourceSize: sourceSize,
-            sourceSHA256: sourceSHA,
+            sourceSHA256: file.receivedRecord?.sha256 ?? "",
             usbStoredName: storedName,
-            verifiedAt: now()
+            verifiedAt: now(),
+            copiedFiles: copiedFiles,
+            usbVolumeID: destination.volumeID,
+            sourceModifiedAt: sourceModifiedAt
         )
         try deletionStore.save(decision)
         return decision
@@ -582,7 +649,8 @@ actor IPhoneUSBExportService {
                 return true
             }) {
             }
-            try output.synchronize()
+            // FileHandle writes are unbuffered at the application layer. Close
+            // and propagate write/close errors without fsync on every tiny file.
             try input.close()
             try output.close()
         } catch {
@@ -599,6 +667,10 @@ actor IPhoneUSBExportService {
             throw IPhoneUSBExportError.sourceChanged
         }
         return Int64(values.fileSize ?? 0)
+    }
+
+    private func modificationDate(_ url: URL) throws -> Date? {
+        try fileManager.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
     }
 
     private func hashFile(_ url: URL, progress: (Int64) -> Void = { _ in }) throws -> String {
@@ -676,10 +748,23 @@ actor IPhoneUSBExportService {
             || (systemError.domain == NSPOSIXErrorDomain
                 && systemError.code == Int(POSIXErrorCode.ENOSPC.rawValue))
         let normalized: IPhoneUSBExportError = outOfSpace ? .insufficientSpace : .copyFailed
+        var diagnostics = "\(systemError.domain) · \(systemError.code)"
+        var underlying = systemError.userInfo[NSUnderlyingErrorKey] as? NSError
+        for _ in 0..<4 {
+            guard let cause = underlying else { break }
+            diagnostics += " → \(cause.domain) · \(cause.code)"
+            underlying = cause.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        if let path = systemError.userInfo[NSFilePathErrorKey] as? String {
+            diagnostics += " · \((path as NSString).lastPathComponent)"
+        }
+        let message = systemError.domain == NSCocoaErrorDomain && systemError.code == CocoaError.Code.fileReadUnknown.rawValue
+            ? "파일을 읽지 못했습니다. 파일 손상으로 판정한 것은 아닙니다."
+            : IPhoneReceiveErrorMessage.message(normalized)
         return IPhoneUSBExportFailure(
             sourceID: sourceID,
             error: normalized,
-            detail: "\(IPhoneReceiveErrorMessage.message(normalized)) (\(systemError.domain) · \(systemError.code))"
+            detail: "\(message) (\(diagnostics))"
         )
     }
 
