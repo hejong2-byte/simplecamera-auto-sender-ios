@@ -5,6 +5,16 @@ import ZIPFoundation
 @testable import SimpleCameraAutoSender
 
 final class IPhoneUSBExportServiceTests: XCTestCase {
+    func testCancelAfterUSBDisappearsReportsUnconfirmedCleanupAndPreservesSource() async throws {
+        let context = try makeContext(fileManager: DisconnectDuringCopyFileManager())
+        let file = try makeStoredFile(name: "keep.bin", data: Data("original".utf8), in: context.sourceDirectory)
+        let task = Task { await context.service.export([file], to: context.destination) }
+        let result = await task.value
+        XCTAssertTrue(result.cancelled)
+        XCTAssertNotNil(result.cleanupWarning, "An unavailable SD must not be reported as successfully cleaned")
+        XCTAssertEqual(try Data(contentsOf: file.url), Data("original".utf8))
+    }
+
     func testZIPCopyAfterSDDeletionCoordinatesProviderWrites() async throws {
         let provider = CoordinationRequiredFileManager()
         let context = try makeContext(fileManager: provider, coordinateWrite: { url, body in
@@ -733,6 +743,20 @@ private final class CoordinationRequiredFileManager: FileManager, @unchecked Sen
     override func createFile(atPath path: String, contents data: Data?, attributes attr: [FileAttributeKey: Any]? = nil) -> Bool {
         if path.contains("/usb/"), !coordinating { return false }
         return super.createFile(atPath: path, contents: data, attributes: attr)
+    }
+}
+
+private final class DisconnectDuringCopyFileManager: FileManager, @unchecked Sendable {
+    override func createFile(atPath path: String, contents data: Data?, attributes attr: [FileAttributeKey: Any]? = nil) -> Bool {
+        let created = super.createFile(atPath: path, contents: data, attributes: attr)
+        if path.contains("/usb/"), path.hasSuffix(".partial") {
+            let root = URL(fileURLWithPath: path).deletingLastPathComponent().deletingLastPathComponent()
+            if root.lastPathComponent == "usb" {
+                try? FileManager.default.removeItem(at: root)
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+        }
+        return created
     }
 }
 

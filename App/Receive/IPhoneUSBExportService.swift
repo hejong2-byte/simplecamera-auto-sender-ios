@@ -187,7 +187,13 @@ actor IPhoneUSBExportService {
     }
 
     static func coordinateWriteSystem(_ url: URL, operation: (URL) throws -> Void) throws {
-        try operation(url)
+        var coordinationError: NSError?
+        var operationError: Error?
+        NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: url, options: [], error: &coordinationError) { coordinatedURL in
+            do { try operation(coordinatedURL) } catch { operationError = error }
+        }
+        if let operationError { throw operationError }
+        if let coordinationError { throw coordinationError }
     }
 
     func cleanupTemporaryFiles(to destination: USBBookmarkDestination?,
@@ -225,7 +231,7 @@ actor IPhoneUSBExportService {
                     throw IPhoneUSBExportError.destinationAccessDenied
                 }
                 scopedURL = destination.url
-                try validateDestination(destination)
+                try withCoordinatedDestination(destination) { try validateDestination(destination) }
                 let rootType = try fileManager.attributesOfItem(atPath: destination.url.path)[.type] as? FileAttributeType
                 guard rootType == .typeDirectory else { throw IPhoneUSBExportError.destinationAccessDenied }
                 collect(in: destination.url.appendingPathComponent(Self.partialDirectoryName, isDirectory: true),
@@ -239,7 +245,18 @@ actor IPhoneUSBExportService {
             progress(FileDeletionProgress(totalCount: candidates.count, processedCount: index,
                 failedCount: result.failures.count, currentName: item.lastPathComponent))
             do {
-                try fileManager.removeItem(at: item)
+                var coordinationError: NSError?
+                var removalError: Error?
+                NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: item, options: .forDeleting, error: &coordinationError) { coordinatedItem in
+                    do {
+                        guard coordinatedItem.standardizedFileURL.path == item.standardizedFileURL.path else {
+                            throw IPhoneUSBExportError.destinationChanged
+                        }
+                        try fileManager.removeItem(at: coordinatedItem)
+                    } catch { removalError = error }
+                }
+                if let removalError { throw removalError }
+                if let coordinationError { throw coordinationError }
                 guard !fileManager.fileExists(atPath: item.path) else { throw IPhoneUSBExportError.copyFailed }
                 result.deletedCount += 1
             } catch {
@@ -457,7 +474,7 @@ actor IPhoneUSBExportService {
             throw IPhoneUSBExportError.destinationAccessDenied
         }
         defer { stopAccessing(destination.url) }
-        try validateDestination(destination)
+        try withCoordinatedDestination(destination) { try validateDestination(destination) }
 
         let sourceSize = try fileSize(file.url)
         let sourceModifiedAt = try modificationDate(file.url)
@@ -479,6 +496,7 @@ actor IPhoneUSBExportService {
         // Actual writes, close errors and size checks gate completion. Full USB
         // readback is a separate user action, never part of default copying.
 
+        return try withCoordinatedDestination(destination) {
         let partialDirectory = destination.url.appendingPathComponent(
             Self.partialDirectoryName,
             isDirectory: true
@@ -524,7 +542,7 @@ actor IPhoneUSBExportService {
         )
         let finalURL = destination.url.appendingPathComponent(storedName)
         try Task.checkCancellation()
-        try coordinatedMove(from: partialURL, to: finalURL)
+        try fileManager.moveItem(at: partialURL, to: finalURL)
         publish(
             file: file,
             currentIndex: currentIndex,
@@ -553,6 +571,7 @@ actor IPhoneUSBExportService {
         )
         try deletionStore.save(decision)
         return decision
+        }
     }
 
     private func exportZIP(
@@ -599,6 +618,7 @@ actor IPhoneUSBExportService {
             throw IPhoneUSBExportError.sourceChanged
         }
 
+        return try withCoordinatedDestination(destination) {
         let partialDirectory = destination.url.appendingPathComponent(
             Self.partialDirectoryName,
             isDirectory: true
@@ -676,7 +696,7 @@ actor IPhoneUSBExportService {
         )
         let finalURL = destination.url.appendingPathComponent(storedName, isDirectory: true)
         try Task.checkCancellation()
-        try coordinatedMove(from: partialURL, to: finalURL)
+        try fileManager.moveItem(at: partialURL, to: finalURL)
         publish(
             file: file,
             currentIndex: currentIndex,
@@ -703,6 +723,7 @@ actor IPhoneUSBExportService {
         )
         try deletionStore.save(decision)
         return decision
+        }
     }
 
     private func removeExportTemporaryItem(_ url: URL) {
@@ -744,6 +765,7 @@ actor IPhoneUSBExportService {
         destination: URL,
         progress: (Int64) -> Void
     ) throws -> String {
+        try Task.checkCancellation()
         let input = try FileHandle(forReadingFrom: source)
         let output = try FileHandle(forWritingTo: destination)
         var hasher = SHA256()
@@ -804,22 +826,19 @@ actor IPhoneUSBExportService {
         return Self.hex(hasher.finalize())
     }
 
-    private func coordinatedMove(from source: URL, to destination: URL) throws {
-        var coordinationError: NSError?
-        var operationError: Error?
-        NSFileCoordinator(filePresenter: nil).coordinate(
-            writingItemAt: source,
-            options: .forMoving,
-            error: &coordinationError
-        ) { coordinatedSource in
-            do {
-                try fileManager.moveItem(at: coordinatedSource, to: destination)
-            } catch {
-                operationError = error
+    private func withCoordinatedDestination<T>(_ destination: USBBookmarkDestination,
+                                               operation: () throws -> T) throws -> T {
+        try Task.checkCancellation()
+        var result: Result<T, Error>?
+        try coordinateWrite(destination.url) { coordinatedURL in
+            guard coordinatedURL.standardizedFileURL.path == destination.url.standardizedFileURL.path else {
+                throw IPhoneUSBExportError.destinationChanged
             }
+            try Task.checkCancellation()
+            result = Result { try operation() }
         }
-        if let operationError { throw operationError }
-        if let coordinationError { throw coordinationError }
+        guard let result else { throw IPhoneUSBExportError.destinationAccessDenied }
+        return try result.get()
     }
 
     private func publish(
