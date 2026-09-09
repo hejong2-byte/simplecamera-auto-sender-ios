@@ -729,8 +729,9 @@ actor IPhoneUSBExportService {
             try fileManager.moveItem(at: partialURL.appendingPathComponent(name),
                                      to: destination.url.appendingPathComponent(name))
         }
-        // Empty staging directories are not part of the exported USB layout.
-        try fileManager.removeItem(at: partialURL)
+        // Cleanup trouble must not turn successfully placed data into a copy
+        // failure. Report it separately and retain the original ZIP.
+        removeExportTemporaryItem(partialURL, destination: destination)
         if (try? fileManager.contentsOfDirectory(atPath: partialDirectory.path).isEmpty) == true {
             try? fileManager.removeItem(at: partialDirectory)
         }
