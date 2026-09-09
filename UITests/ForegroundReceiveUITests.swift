@@ -1,6 +1,36 @@
 import XCTest
 
 final class ForegroundReceiveUITests: XCTestCase {
+    func testPendingSelectionSurvivesRotationAndRepeatedForegrounding() {
+        let app = launchSimulation(withMultipleIncoming: true)
+        addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        let selection = app.otherElements["pending-file-selection"]
+        let second = app.buttons["pending-file-10000000-0000-0000-0000-000000000002"]
+        XCTAssertTrue(selection.waitForExistence(timeout: 20))
+
+        for orientation in [UIDeviceOrientation.landscapeLeft, .portrait] {
+            XCUIDevice.shared.orientation = orientation
+            for _ in 0..<6 {
+                RunLoop.current.run(until: Date().addingTimeInterval(1))
+                XCTAssertEqual(app.state, .runningForeground)
+                XCTAssertTrue(selection.exists)
+            }
+            second.tap()
+            XCTAssertTrue(app.buttons["pending-confirm-selection"].isEnabled)
+            app.buttons["pending-clear-selection"].tap()
+            XCTAssertFalse(app.buttons["pending-confirm-selection"].isEnabled)
+        }
+
+        for _ in 0..<2 {
+            XCUIDevice.shared.press(.home)
+            app.activate()
+            XCTAssertTrue(selection.waitForExistence(timeout: 10))
+            second.tap()
+            XCTAssertTrue(app.buttons["pending-confirm-selection"].isEnabled)
+        }
+        keepScreenshot("pending-selection-after-rotation-and-return", app: app)
+    }
+
     func testProductionLaunchRecoversCorruptLocalState() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-corrupt-live-state"]

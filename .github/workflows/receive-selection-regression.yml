@@ -1,0 +1,53 @@
+name: Receive selection regression - iOS 26
+
+on:
+  push:
+    branches: ["codex/foreground-receive-alert"]
+
+permissions:
+  contents: read
+
+jobs:
+  selection:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Exercise pending selection on iOS 26
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcodegen generate
+          DEVICE_ID="$(xcrun simctl list devices available -j | /usr/bin/python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for r,ds in data["devices"].items() if "iOS-26-2" in r for d in ds if d["name"] == "iPhone 16"))')"
+          xcodebuild test -project SimpleCameraAutoSender.xcodeproj \
+            -scheme SimpleCameraAutoSender \
+            -destination "platform=iOS Simulator,id=${DEVICE_ID}" \
+            -resultBundlePath build/SelectionResults.xcresult \
+            -parallel-testing-enabled NO \
+            -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testMultiplePendingFilesCanBeSelectedAndReceivedFirst \
+            -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testPendingSelectionSurvivesRotationAndRepeatedForegrounding \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/selection-test.log
+          if grep -q 'Restarting after unexpected exit' build/selection-test.log; then
+            echo 'Test runner restarted unexpectedly; do not treat this run as clean.' >&2
+            exit 1
+          fi
+      - name: Export diagnostics
+        if: always()
+        run: |
+          if [ -d build/SelectionResults.xcresult ]; then
+            xcrun xcresulttool export attachments --path build/SelectionResults.xcresult --output-path build/selection-attachments
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iOS26-selection-diagnostics
+          path: |
+            build/SelectionResults.xcresult
+            build/selection-test.log
+            build/selection-attachments
+          retention-days: 3
