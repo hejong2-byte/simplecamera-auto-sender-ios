@@ -53,6 +53,7 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var deviceName: String?
     @Published private(set) var usbDisplayName: String?
     @Published private(set) var usbFileSystemDescription: String?
+    @Published private(set) var isUSBAvailable: Bool?
     @Published private(set) var receiveProgress: USBReceiveProgress?
     @Published private(set) var receiveOutcome: IPhoneReceiveOutcome?
     @Published private(set) var usbExportProgress: USBReceiveProgress?
@@ -92,6 +93,8 @@ final class USBReceiverViewModel: ObservableObject {
     private let uploadCredentialStore: CredentialStore
     private let registrationStore: IPhoneReceiverRegistrationStore
     private let bookmarkStore: USBBookmarkStore
+    private let checkUSBAvailability: @Sendable (USBBookmarkDestination) -> Bool
+    private var cachedUSBDestination: USBBookmarkDestination?
     private let registrar: any IPhoneReceiverRegistering
     private let receiveOnce: ReceiveOnce
     private let receiveLocalOnce: ReceiveLocalOnce
@@ -127,6 +130,7 @@ final class USBReceiverViewModel: ObservableObject {
         uploadCredentialStore: CredentialStore,
         registrationStore: IPhoneReceiverRegistrationStore,
         bookmarkStore: USBBookmarkStore,
+        checkUSBAvailability: @escaping @Sendable (USBBookmarkDestination) -> Bool = { USBFolderAvailability.check($0) },
         registrar: any IPhoneReceiverRegistering,
         receiveOnce: @escaping ReceiveOnce,
         receiveLocalOnce: @escaping ReceiveLocalOnce = {},
@@ -168,6 +172,7 @@ final class USBReceiverViewModel: ObservableObject {
         self.uploadCredentialStore = uploadCredentialStore
         self.registrationStore = registrationStore
         self.bookmarkStore = bookmarkStore
+        self.checkUSBAvailability = checkUSBAvailability
         self.registrar = registrar
         self.receiveOnce = receiveOnce
         self.receiveLocalOnce = receiveLocalOnce
@@ -218,6 +223,39 @@ final class USBReceiverViewModel: ObservableObject {
 
     var isRegistered: Bool { registrationCode != nil }
     var hasUSBDestination: Bool { usbDisplayName != nil }
+
+    var usbConnectionMessage: String? {
+        guard hasUSBDestination else { return nil }
+        guard let isUSBAvailable else { return "USB 연결 확인 중" }
+        return isUSBAvailable ? "USB 연결 확인됨"
+            : "USB 연결이 끊겼거나 폴더에 접근할 수 없습니다. 다시 연결하거나 폴더를 선택해 주세요."
+    }
+
+    func monitorUSBAvailability() async {
+        if cachedUSBDestination == nil {
+            do {
+                let destination = try await Task.detached { [bookmarkStore] in
+                    try bookmarkStore.resolve()
+                }.value
+                guard !Task.isCancelled else { return }
+                cachedUSBDestination = destination
+                usbDisplayName = destination?.displayName
+                usbFileSystemDescription = destination?.formatDescription
+            } catch { isUSBAvailable = false }
+        }
+        while !Task.isCancelled {
+            if let destination = cachedUSBDestination {
+                let available = await Task.detached { [checkUSBAvailability] in
+                    checkUSBAvailability(destination)
+                }.value
+                guard !Task.isCancelled else { return }
+                if cachedUSBDestination == destination, isUSBAvailable != available {
+                    isUSBAvailable = available
+                }
+            }
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+        }
+    }
     var hasStoredFileSelection: Bool { !selectedStoredFileIDs.isEmpty }
     var needsStoredFileDeletionConfirmation: Bool { !storedFilesPendingDeletion.isEmpty }
     var needsStoredZIPExportChoice: Bool { !storedZIPExportFilesPendingChoice.isEmpty }
@@ -355,6 +393,7 @@ final class USBReceiverViewModel: ObservableObject {
             }.value
             usbDisplayName = destination?.displayName
             usbFileSystemDescription = destination?.formatDescription
+            cachedUSBDestination = destination
             if selectedDestination == .usb, destination?.isStale == true {
                 lastError = "USB 폴더 권한이 만료되었습니다. 폴더를 다시 선택해 주세요."
             }
@@ -403,6 +442,8 @@ final class USBReceiverViewModel: ObservableObject {
             let destination = try bookmarkStore.resolve()
             usbDisplayName = destination?.displayName
             usbFileSystemDescription = destination?.formatDescription
+            cachedUSBDestination = destination
+            isUSBAvailable = nil
             lastError = destination?.isStale == true
                 ? "USB 폴더 권한이 만료되었습니다. 다시 선택해 주세요."
                 : nil
@@ -417,6 +458,8 @@ final class USBReceiverViewModel: ObservableObject {
             try bookmarkStore.clear()
             usbDisplayName = nil
             usbFileSystemDescription = nil
+            cachedUSBDestination = nil
+            isUSBAvailable = nil
             cancelUSBFolderDeletion()
             usbFolderDeletionMessage = nil
             usbFolderDeletionError = nil

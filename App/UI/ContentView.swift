@@ -129,6 +129,9 @@ struct ContentView: View {
             incomingModel.setActive(active)
             textModel.setActive(active)
         }
+        .task(id: scenePhase) {
+            if scenePhase == .active { await receiverModel.monitorUSBAvailability() }
+        }
         .sheet(
             isPresented: Binding(
                 get: {

@@ -14,7 +14,7 @@ final class ForegroundReceiveUITests: XCTestCase {
         let unavailable = app.staticTexts.matching(NSPredicate(
             format: "label CONTAINS %@", "USB 연결이 끊겼거나"
         )).firstMatch
-        XCTAssertTrue(unavailable.waitForExistence(timeout: 35))
+        XCTAssertTrue(unavailable.waitForExistence(timeout: 60))
         XCTAssertFalse(app.staticTexts["USB 연결 확인됨"].exists)
     }
 

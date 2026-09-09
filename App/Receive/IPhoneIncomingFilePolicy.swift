@@ -6,6 +6,8 @@ enum IPhoneIncomingFilePolicy {
         usbState: USBReceiveState?,
         hasStoredRecord: Bool
     ) -> Bool {
-        true
+        if hasStoredRecord { return false }
+        if let localStage, localStage != .failed { return false }
+        return usbState != .ackPending && usbState != .completed
     }
 }

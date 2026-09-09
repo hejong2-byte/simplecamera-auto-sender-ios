@@ -56,10 +56,15 @@ struct USBStorageManagementView: View {
                 .font(.headline)
             Label(
                 model.usbDisplayName ?? "USB 폴더 미선택",
-                systemImage: model.hasUSBDestination
+                systemImage: model.isUSBAvailable == true
                     ? "externaldrive.fill.badge.checkmark"
                     : "externaldrive.badge.questionmark"
             )
+            if let message = model.usbConnectionMessage {
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(model.isUSBAvailable == false ? Color.orange : Color.secondary)
+            }
             Label(
                 "파일시스템(참고): \(model.usbFileSystemDescription ?? "확인 불가")",
                 systemImage: "info.circle"

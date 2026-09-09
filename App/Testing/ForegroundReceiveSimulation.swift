@@ -189,7 +189,7 @@ final class ForegroundReceiveSimulation {
             if outcome == "usb-disconnect" {
                 // Only this simulator fixture owns this temporary mock volume.
                 Task.detached {
-                    try? await Task.sleep(for: .seconds(20))
+                    try? await Task.sleep(for: .seconds(45))
                     try? FileManager.default.removeItem(at: usbRoot)
                 }
             }
@@ -203,6 +203,9 @@ final class ForegroundReceiveSimulation {
             uploadCredentialStore: InMemoryCredentialStore(),
             registrationStore: registration,
             bookmarkStore: bookmarkStore,
+            checkUSBAvailability: { destination in
+                USBFolderAvailability.check(destination, startAccessing: { _ in true }, stopAccessing: { _ in })
+            },
             registrar: SimulationRegistrar(),
             receiveOnce: {
                 let approved = try choices.allowedDeliveryIDs(receiverID: receiverID, destination: .usb)

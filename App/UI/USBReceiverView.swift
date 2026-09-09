@@ -135,9 +135,14 @@ struct USBReceiverView: View {
             }
             Label(
                 model.usbDisplayName ?? "USB 폴더 미선택",
-                systemImage: model.hasUSBDestination ? "externaldrive.fill.badge.checkmark" : "externaldrive.badge.questionmark"
+                systemImage: model.isUSBAvailable == true ? "externaldrive.fill.badge.checkmark" : "externaldrive.badge.questionmark"
             )
-            .foregroundStyle(model.hasUSBDestination ? .green : .orange)
+            .foregroundStyle(model.isUSBAvailable == true ? .green : .orange)
+            if let message = model.usbConnectionMessage {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(model.isUSBAvailable == false ? Color.orange : Color.secondary)
+            }
             Button(model.hasUSBDestination ? "USB 폴더 다시 선택" : "USB 폴더 선택") {
                 model.isChoosingUSBFolder = true
             }

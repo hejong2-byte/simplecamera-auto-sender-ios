@@ -276,7 +276,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
     @MainActor
     func makeIncomingFilesViewModel() -> IPhoneIncomingFilesViewModel {
         IPhoneIncomingFilesViewModel(
-            loadPendingFiles: { [client, registrationStore] in
+            loadPendingFiles: { [client, registrationStore, jobStore, ledger, catalog] in
                 guard let credentials = try registrationStore.load() else {
                     return IPhoneIncomingSnapshot(receiverID: nil, files: [])
                 }
@@ -286,7 +286,14 @@ final class USBReceiverDependencies: @unchecked Sendable {
                 guard current == receiverID else {
                     return IPhoneIncomingSnapshot(receiverID: current, files: [])
                 }
-                return IPhoneIncomingSnapshot(receiverID: receiverID, files: files)
+                let newFiles = files.filter { file in
+                    IPhoneIncomingFilePolicy.needsNewDecision(
+                        localStage: jobStore.job(for: file.deliveryID)?.stage,
+                        usbState: ledger.checkpoint(for: file.deliveryID)?.state,
+                        hasStoredRecord: catalog.record(for: file.deliveryID) != nil
+                    )
+                }
+                return IPhoneIncomingSnapshot(receiverID: receiverID, files: newFiles)
             },
             approveFiles: { [approvalStore, registrationStore] receiverID, ids, decision in
                 guard try registrationStore.load()?.identity.receiverID == receiverID else {

@@ -15,16 +15,16 @@ SOURCES = [
     "USBZIPReceivePipeline.swift",
 ]
 
-def hash_method(name):
+def hash_method(name, method="hashFile"):
     source = (ROOT / "App" / "Receive" / name).read_text(encoding="utf-8")
-    start = source.index("    private func hashFile(_ url: URL) throws -> String {")
+    start = source.index("    private func " + method + "(")
     opening = source.index("{", start)
     depth = 1
     end = opening + 1
     while depth:
         depth += (source[end] == "{") - (source[end] == "}")
         end += 1
-    return source[start:end].replace("private func hashFile", "func hashFile", 1)
+    return source[start:end].replace("private func " + method, "func " + method, 1)
 
 SWIFT = r'''
 import Foundation
@@ -62,19 +62,28 @@ let expected = reference.finalize().map { String(format: "%02x", $0) }.joined()
 var failures = 0
 '''
 
-for index, source in enumerate(SOURCES):
+CASES = [(source, "hashFile") for source in SOURCES] + [
+    ("IPhoneUSBExportService.swift", "copyAndHash"),
+    ("USBZIPReceivePipeline.swift", "copyAndHash"),
+]
+for index, (source, method) in enumerate(CASES):
     SWIFT += "\nstruct ProductionHash%d {\n" % index
-    SWIFT += hash_method(source)
+    SWIFT += hash_method(source, method)
     SWIFT += '\nstatic func hex(_ digest: SHA256.Digest) -> String { digest.map { String(format: "%02x", $0) }.joined() }\n}\n'
+    call = (f"ProductionHash{index}().hashFile(fixture)" if method == "hashFile" else
+            f"ProductionHash{index}().copyAndHash(source: fixture, destination: copied, progress: {{ _ in }})")
     SWIFT += f'''
+let copied{index} = fixture.appendingPathExtension("copy-{index}")
 if selected == {index} {{ try autoreleasepool {{
+    let copied = copied{index}
+    FileManager.default.createFile(atPath: copied.path, contents: nil)
     let before = residentBytes()
     let started = Date()
-    let digest = try ProductionHash{index}().hashFile(fixture)
+    let digest = try {call}
     let after = residentBytes()
     let growth = after > before ? after - before : 0
     let checksumOK = digest == expected
-    print("{source}: bytes=\\(size) memoryGrowth=\\(growth) checksumOK=\\(checksumOK) seconds=\\(Date().timeIntervalSince(started))")
+    print("{source}/{method}: bytes=\\(size) memoryGrowth=\\(growth) checksumOK=\\(checksumOK) seconds=\\(Date().timeIntervalSince(started))")
     if !checksumOK || growth > 64 * 1_024 * 1_024 {{ failures += 1 }}
 }} }}
 '''
@@ -88,7 +97,9 @@ with tempfile.TemporaryDirectory(prefix="simplecam-hash-memory-") as temporary:
     subprocess.run(["swiftc", "-O", str(swift), "-o", str(binary)], check=True)
     size = int(sys.argv[1]) if len(sys.argv) > 1 else 256 * 1024 * 1024 + 123
     failures = 0
-    for index in range(len(SOURCES)):
-        completed = subprocess.run([str(binary), str(size), str(folder / "zeros.bin"), str(index)])
+    for index, (_, method) in enumerate(CASES):
+        # Full-size SHA test; the copy probe writes at most 256 MiB of private data.
+        case_size = min(size, 256 * 1024 * 1024 + 123) if method == "copyAndHash" else size
+        completed = subprocess.run([str(binary), str(case_size), str(folder / "zeros.bin"), str(index)])
         failures += completed.returncode != 0
     sys.exit(1 if failures else 0)
