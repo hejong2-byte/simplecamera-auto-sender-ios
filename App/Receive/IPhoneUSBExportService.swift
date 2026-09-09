@@ -195,7 +195,11 @@ actor IPhoneUSBExportService {
                 )
                 verified.append(decision)
             } catch {
-                failed.append(Self.failure(sourceID: file.id, error: error))
+                let reason = Self.failure(sourceID: file.id, error: error)
+                let last = progressStore.snapshot()
+                let phase = last.detail ?? (last.stage == .extracting ? "압축 해제" : "USB 복사")
+                failed.append(IPhoneUSBExportFailure(sourceID: file.id, error: reason.error,
+                    detail: "\(phase)\n\(reason.message)"))
             }
         }
         let summary = IPhoneUSBExportSummary(verified: verified, failed: failed)
@@ -756,6 +760,9 @@ actor IPhoneUSBExportService {
         }
         if let path = systemError.userInfo[NSFilePathErrorKey] as? String {
             diagnostics += " · \((path as NSString).lastPathComponent)"
+        }
+        if let debug = systemError.userInfo["NSDebugDescription"] as? String {
+            diagnostics += " · \(debug.prefix(512))"
         }
         let message = systemError.domain == NSCocoaErrorDomain && systemError.code == CocoaError.Code.fileReadUnknown.rawValue
             ? "파일을 읽지 못했습니다. 파일 손상으로 판정한 것은 아닙니다."

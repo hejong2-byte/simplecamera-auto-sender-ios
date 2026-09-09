@@ -104,6 +104,10 @@ final class USBReceiveProgressStore: @unchecked Sendable {
     private var latest = USBReceiveProgress.idle
     private var continuations: [UUID: AsyncStream<USBReceiveProgress>.Continuation] = [:]
 
+    func snapshot() -> USBReceiveProgress {
+        lock.withLock { latest }
+    }
+
     func publish(_ progress: USBReceiveProgress) {
         let current = lock.withLock { () -> [
             AsyncStream<USBReceiveProgress>.Continuation

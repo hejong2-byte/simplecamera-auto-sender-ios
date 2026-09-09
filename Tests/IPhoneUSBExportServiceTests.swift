@@ -157,6 +157,9 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             [],
             "Temporary extracted files must be removed after verified USB copy"
         )
+        let verification = await context.service.verifyCopies([file], to: context.destination)
+        XCTAssertTrue(verification.failed.isEmpty)
+        XCTAssertEqual(verification.verified.count, 1)
     }
 
     func testZIPExportCanKeepTheArchiveWithoutExtractingIt() async throws {
@@ -476,6 +479,18 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         let reopened = try IPhoneUSBDeletionDecisionStore(fileURL: stateURL)
 
         XCTAssertEqual(reopened.pending(), [decision])
+    }
+
+    func testLegacyDeletionStateWithoutOptionalManifestStillLoads() throws {
+        let stateURL = temporaryDirectory().appendingPathComponent("legacy.json")
+        let legacy = """
+        {"version":1,"decisions":[{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","sourceID":"old","sourceURL":"file:///tmp/old.zip","sourceSize":8,"sourceSHA256":"abc","usbStoredName":"old.zip","verifiedAt":123}]}
+        """
+        try Data(legacy.utf8).write(to: stateURL)
+        let reopened = try IPhoneUSBDeletionDecisionStore(fileURL: stateURL)
+        XCTAssertEqual(reopened.pending().count, 1)
+        XCTAssertNil(reopened.pending().first?.copiedFiles)
+        XCTAssertTrue(reopened.copies().isEmpty)
     }
 
     private func makeContext(
