@@ -168,6 +168,14 @@ final class ForegroundReceiveUITests: XCTestCase {
         XCTAssertEqual(copy.frame.midY, delete.frame.midY, accuracy: 2,
                        "Copy and delete must share a row")
         XCTAssertLessThan(copy.frame.minX, delete.frame.minX)
+        let temporary = app.buttons["stored-files-clean-temp"]
+        XCTAssertTrue(temporary.exists)
+        XCTAssertEqual(copy.frame.midY, temporary.frame.midY, accuracy: 2)
+        XCTAssertLessThan(delete.frame.minX, temporary.frame.minX)
+        XCTAssertEqual(copy.frame.height, delete.frame.height, accuracy: 2)
+        XCTAssertEqual(copy.frame.height, temporary.frame.height, accuracy: 2)
+        XCTAssertLessThan(copy.frame.height, 50, "Do not add a 44pt label inside button padding")
+        keepScreenshot("compact-three-storage-actions", app: app)
         XCTAssertFalse(delete.isEnabled, "No selection must leave deletion disabled")
         selected.tap()
         XCTAssertTrue(delete.isEnabled)

@@ -290,6 +290,18 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("open-receiver")
 
+            if receiverModel.isExportingToUSB || receiverModel.usbExportProgress?.stage == .paused {
+                HStack {
+                    Text(receiverModel.usbExportStageTitle)
+                    Spacer()
+                    Text("\(receiverModel.usbExportDisplayedPercent)%")
+                        .monospacedDigit()
+                }
+                .font(.subheadline)
+                .foregroundStyle(.orange)
+                .accessibilityIdentifier("usb-copy-home-status")
+            }
+
             PCReceiveStatusView(status: receiverModel.receiveStatus, compact: true,
                 dismissAction: receiverModel.canDismissReceiveOutcome ? { receiverModel.dismissReceiveOutcome() } : nil,
                 dismissalError: receiverModel.receiveOutcomeDismissalError)
