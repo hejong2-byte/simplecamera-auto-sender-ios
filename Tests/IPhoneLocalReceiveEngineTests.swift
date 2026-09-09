@@ -200,6 +200,10 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
         )
         XCTAssertEqual(try context.jobs.load().jobs.first?.stage, .ackPending)
         XCTAssertEqual(try context.catalog.refresh().map(\.name), ["pending.zip"])
+        var pendingUpdates = context.progress.updates().makeAsyncIterator()
+        let pendingProgress = await pendingUpdates.next()
+        XCTAssertEqual(pendingProgress?.stage.rawValue, "receiptPending",
+                       "Verified local storage is not a failed download")
         let scheduledBefore = await context.scheduler.scheduledIDs().count
 
         await context.engine.restore()

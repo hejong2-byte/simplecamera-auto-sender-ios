@@ -154,7 +154,8 @@ final class IPhoneReceivedFileCatalog: @unchecked Sendable {
 
     func delete(
         _ files: [IPhoneStoredFile],
-        protectedFileNames: Set<String> = []
+        protectedFileNames: Set<String> = [],
+        progress: @Sendable (FileDeletionProgress) -> Void = { _ in }
     ) -> IPhoneStoredFileDeletionSummary {
         lock.withLock {
             var deletedIDs: [String] = []

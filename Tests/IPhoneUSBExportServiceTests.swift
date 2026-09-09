@@ -74,7 +74,16 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             in: context.sourceDirectory
         )
 
+        let progressUpdates = context.progressStore.updates()
         let summary = await context.service.export([file], to: context.destination)
+        context.progressStore.publishFailure("end-zip-progress-test")
+        var reported: [USBReceiveProgress] = []
+        for await progress in progressUpdates {
+            if progress.errorMessage == "end-zip-progress-test" { break }
+            reported.append(progress)
+        }
+        XCTAssertTrue(reported.contains { $0.stage == .extracting && $0.totalBytes > 0 })
+        XCTAssertTrue(reported.contains { $0.stage == .verifying && $0.bytesReceived == 0 && $0.totalBytes > 0 })
 
         XCTAssertEqual(summary.failed, [])
         let decision = try XCTUnwrap(summary.verified.first)

@@ -3,6 +3,21 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneStoredFileDeletionTests: XCTestCase {
+    func testDeletionPublishesItemProgressAndCountsFailureSeparately() throws {
+        let catalog = try makeCatalog()
+        _ = try write("first.txt", in: catalog.receivedDirectory)
+        _ = try write("protected.txt", in: catalog.receivedDirectory)
+        let files = try catalog.refresh().sorted { $0.name < $1.name }
+        let log = DeletionProgressLog()
+        let result = catalog.delete(files, protectedFileNames: ["protected.txt"], progress: log.append)
+        XCTAssertEqual(result.deletedIDs.count, 1)
+        XCTAssertEqual(log.values.last?.processedCount, 2)
+        XCTAssertEqual(log.values.last?.failedCount, 1)
+        XCTAssertEqual(log.values.last?.percent, 100)
+        XCTAssertTrue(log.values.contains { $0.processedCount == 1 && $0.percent == 50 })
+        XCTAssertTrue(log.values.contains { $0.currentName == "first.txt" && $0.processedCount == 0 })
+    }
+
     func testOnlySelectedLocalFileIsDeletedAndReceiptRecordIsPreserved() throws {
         let catalog = try makeCatalog()
         let firstURL = try write("first.txt", in: catalog.receivedDirectory)
@@ -151,4 +166,11 @@ final class IPhoneStoredFileDeletionTests: XCTestCase {
             size: 4, modifiedAt: .now, receivedRecord: nil
         )
     }
+}
+
+final class DeletionProgressLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [FileDeletionProgress] = []
+    func append(_ value: FileDeletionProgress) { lock.withLock { items.append(value) } }
+    var values: [FileDeletionProgress] { lock.withLock { items } }
 }

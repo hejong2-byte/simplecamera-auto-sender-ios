@@ -3,6 +3,36 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class USBFolderCleanupServiceTests: XCTestCase {
+    func testUSBDeletionReportsProgressForTopLevelItems() async throws {
+        let root = temporaryDirectory()
+        for name in ["one.txt", "two.txt"] {
+            try Data("test".utf8).write(to: root.appendingPathComponent(name))
+        }
+        let service = makeService(volumeID: "volume-1")
+        let target = destination(root, volumeID: "volume-1")
+        let summary = try await service.inspect(target)
+        let log = DeletionProgressLog()
+        _ = try await service.deleteAllContents(of: target, matching: summary, progress: log.append)
+        XCTAssertEqual(log.values.last?.processedCount, 2)
+        XCTAssertEqual(log.values.last?.failedCount, 0)
+        XCTAssertTrue(log.values.contains { $0.percent == 50 })
+    }
+
+    func testProviderErrorAfterActualRemovalDoesNotReportPhantomFailure() async throws {
+        let root = temporaryDirectory()
+        try Data("test".utf8).write(to: root.appendingPathComponent("removed.txt"))
+        let service = USBFolderCleanupService(
+            fileManager: RemovedThenErrorFileManager(),
+            volumeIdentity: { _ in "volume-1" },
+            startAccessing: { _ in true }, stopAccessing: { _ in }
+        )
+        let target = destination(root, volumeID: "volume-1")
+        let summary = try await service.inspect(target)
+        let result = try await service.deleteAllContents(of: target, matching: summary)
+        XCTAssertEqual(result.remainingItemCount, 0)
+        XCTAssertTrue(result.failures.isEmpty, "Actual absence must reconcile a provider's late error")
+    }
+
     func testInspectAndDeleteAcquireScopeOnOriginalBookmarkURL() async throws {
         let parent = temporaryDirectory()
         let root = parent.appendingPathComponent("SD CARD", isDirectory: true)
@@ -183,6 +213,13 @@ final class USBFolderCleanupServiceTests: XCTestCase {
         )
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         return directory
+    }
+}
+
+private final class RemovedThenErrorFileManager: FileManager, @unchecked Sendable {
+    override func removeItem(at URL: URL) throws {
+        try super.removeItem(at: URL)
+        throw CocoaError(.fileNoSuchFile)
     }
 }
 

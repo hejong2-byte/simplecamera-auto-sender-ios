@@ -88,7 +88,8 @@ actor USBFolderCleanupService {
 
     func deleteAllContents(
         of destination: USBBookmarkDestination,
-        matching expected: USBFolderContentsSummary
+        matching expected: USBFolderContentsSummary,
+        progress: @Sendable (FileDeletionProgress) -> Void = { _ in }
     ) throws -> USBFolderDeletionSummary {
         try withValidatedAccess(to: destination) { root in
             let children = try topLevelChildren(in: root)
