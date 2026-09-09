@@ -32,6 +32,7 @@ jobs:
             -parallel-testing-enabled NO \
             -only-testing:SimpleCameraAutoSenderTests/USBFolderCleanupServiceTests \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testHomeCannotReopenZIPDecisionWhileReceiving \
+            -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testUSBDisconnectionAppearsWithoutReopeningSettings \
             -only-testing:SimpleCameraAutoSenderTests/IPhoneIncomingFilesViewModelTests/testMultipleArrivalsStayPendingUntilUserOpensSelectionAfterEachLaunch \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testMultipleArrivalsDoNotOpenSheetUntilTappedAfterColdLaunch \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testProductionLaunchRecoversCorruptLocalState \

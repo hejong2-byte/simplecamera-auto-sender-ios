@@ -1,6 +1,23 @@
 import XCTest
 
 final class ForegroundReceiveUITests: XCTestCase {
+    func testUSBDisconnectionAppearsWithoutReopeningSettings() {
+        let app = launchSimulation(delay: 3_600, outcome: "usb-disconnect", withStorageManagement: true)
+        let settings = app.buttons["open-settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 15))
+        reveal(settings, in: app)
+        settings.tap()
+        let storage = app.buttons["SD/USB 저장장치 관리"]
+        reveal(storage, in: app)
+        storage.tap()
+        XCTAssertTrue(app.staticTexts["USB 연결 확인됨"].waitForExistence(timeout: 10))
+        let unavailable = app.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS %@", "USB 연결이 끊겼거나"
+        )).firstMatch
+        XCTAssertTrue(unavailable.waitForExistence(timeout: 35))
+        XCTAssertFalse(app.staticTexts["USB 연결 확인됨"].exists)
+    }
+
     func testHomeCannotReopenZIPDecisionWhileReceiving() {
         let app = launchSimulation(delay: 2, outcome: "downloading", withZIP: true)
         let pending = app.buttons["incoming-pending"]

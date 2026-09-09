@@ -186,6 +186,13 @@ final class ForegroundReceiveSimulation {
                 displayName: "SD CARD",
                 formatDescription: "ExFAT"
             )
+            if outcome == "usb-disconnect" {
+                // Only this simulator fixture owns this temporary mock volume.
+                Task.detached {
+                    try? await Task.sleep(for: .seconds(20))
+                    try? FileManager.default.removeItem(at: usbRoot)
+                }
+            }
         }
         let cleanup = USBFolderCleanupService(
             volumeIdentity: { _ in "simulation-volume" },
