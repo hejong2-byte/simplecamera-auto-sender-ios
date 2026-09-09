@@ -463,6 +463,19 @@ final class ForegroundReceiveUITests: XCTestCase {
         keepScreenshot("main-receive-success", app: app)
     }
 
+    func testMainScreenCanDismissPCReceiveFailureWithoutOpeningReceiver() {
+        let app = launchSimulation(delay: 60, outcome: "error")
+        let result = app.otherElements["pc-receive-error"]
+        XCTAssertTrue(result.waitForExistence(timeout: 20))
+        let dismiss = app.buttons["pc-receive-dismiss"]
+        reveal(dismiss, in: app)
+        XCTAssertTrue(dismiss.exists, "Terminal receive notices need a dismiss action")
+        dismiss.tap()
+        XCTAssertFalse(result.exists)
+        XCTAssertTrue(app.otherElements["pc-receive-live"].exists)
+        keepScreenshot("main-receive-notice-dismissed", app: app)
+    }
+
     func testMainScreenShowsCategorizedPCReceiveFailure() {
         let app = launchSimulation(delay: 60, outcome: "error")
 
