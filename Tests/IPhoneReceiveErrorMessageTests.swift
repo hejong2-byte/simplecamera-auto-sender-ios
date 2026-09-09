@@ -3,6 +3,12 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneReceiveErrorMessageTests: XCTestCase {
+    func testUSBSizeMismatchIsNotPresentedAsSHAVerificationFailure() {
+        let message = IPhoneReceiveErrorMessage.message(IPhoneUSBExportError.sizeMismatch)
+        XCTAssertTrue(message.contains("파일 크기"))
+        XCTAssertFalse(message.contains("무결성 검증"))
+    }
+
     func testUnknownReceiveErrorKeepsItsDiagnosticCode() {
         let message = IPhoneReceiveErrorMessage.message(
             NSError(domain: NSCocoaErrorDomain, code: 260)

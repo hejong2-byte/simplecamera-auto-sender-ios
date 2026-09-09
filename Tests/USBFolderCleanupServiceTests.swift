@@ -3,6 +3,22 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class USBFolderCleanupServiceTests: XCTestCase {
+    func testDelayedProviderRemovalIsRecheckedBeforeReporting65Remaining() async throws {
+        let root = temporaryDirectory()
+        for index in 0..<65 {
+            try Data([1]).write(to: root.appendingPathComponent("file-\(index).bin"))
+        }
+        let service = USBFolderCleanupService(fileManager: DelayedRemovalFileManager(),
+            volumeIdentity: { _ in "volume-1" }, startAccessing: { _ in true }, stopAccessing: { _ in })
+        let target = destination(root, volumeID: "volume-1")
+        let before = try await service.inspect(target)
+        let result = try await service.deleteAllContents(of: target, matching: before)
+        XCTAssertEqual(result.remainingItemCount, 0, "Do not report the provider's first stale listing as final")
+        XCTAssertEqual(result.deletedItemCount, 65)
+        XCTAssertTrue(result.failures.isEmpty)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
+    }
+
     func testUSBDeletionReportsProgressForTopLevelItems() async throws {
         let root = temporaryDirectory()
         for name in ["one.txt", "two.txt"] {
@@ -236,6 +252,23 @@ private final class RemovedThenErrorFileManager: FileManager, @unchecked Sendabl
     override func removeItem(at URL: URL) throws {
         try super.removeItem(at: URL)
         throw CocoaError(.fileNoSuchFile)
+    }
+}
+
+private final class DelayedRemovalFileManager: FileManager, @unchecked Sendable {
+    private var pending: [URL] = []
+    private var refreshCount = 0
+    override func removeItem(at URL: URL) throws { pending.append(URL) }
+    override func contentsOfDirectory(at url: URL, includingPropertiesForKeys keys: [URLResourceKey]?,
+                                     options mask: FileManager.DirectoryEnumerationOptions = []) throws -> [URL] {
+        if !pending.isEmpty {
+            refreshCount += 1
+            if refreshCount >= 2 {
+                for item in pending { try super.removeItem(at: item) }
+                pending = []
+            }
+        }
+        return try super.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: mask)
     }
 }
 
