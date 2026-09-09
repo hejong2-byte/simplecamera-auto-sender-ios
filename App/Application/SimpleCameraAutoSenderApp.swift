@@ -8,6 +8,12 @@ enum AppIdentity {
 struct SimpleCameraAutoSenderApp: App {
     @UIApplicationDelegateAdaptor(BackgroundSessionAppDelegate.self) private var appDelegate
 
+    #if DEBUG && targetEnvironment(simulator)
+    init() {
+        LiveStateCorruptionSimulation.seedIfRequested()
+    }
+    #endif
+
     var body: some Scene {
         WindowGroup {
             #if DEBUG && targetEnvironment(simulator)

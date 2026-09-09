@@ -13,12 +13,11 @@ actor UploadLedger {
 
     init(fileURL: URL) throws {
         self.fileURL = fileURL
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            let data = try Data(contentsOf: fileURL)
-            snapshot = try JSONDecoder().decode(Snapshot.self, from: data)
-        } else {
-            snapshot = .empty
-        }
+        snapshot = PersistedStateRecovery.decodeOrRecover(
+            Snapshot.self,
+            from: fileURL,
+            fallback: .empty
+        )
     }
 
     static func defaultFileURL() throws -> URL {

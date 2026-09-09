@@ -68,14 +68,12 @@ final class IPhoneUSBDeletionDecisionStore: @unchecked Sendable {
     init(fileURL: URL, fileManager: FileManager = .default) throws {
         self.fileURL = fileURL
         self.fileManager = fileManager
-        if fileManager.fileExists(atPath: fileURL.path) {
-            state = try JSONDecoder().decode(
-                State.self,
-                from: Data(contentsOf: fileURL)
-            )
-        } else {
-            state = State(version: 1, decisions: [])
-        }
+        state = PersistedStateRecovery.decodeOrRecover(
+            State.self,
+            from: fileURL,
+            fallback: State(version: 1, decisions: []),
+            fileManager: fileManager
+        )
     }
 
     func pending() -> [IPhoneUSBDeletionDecision] {

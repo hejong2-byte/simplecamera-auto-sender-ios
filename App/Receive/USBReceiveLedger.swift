@@ -88,15 +88,12 @@ final class USBReceiveLedger: @unchecked Sendable {
 
     init(fileURL: URL) throws {
         self.fileURL = fileURL
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            let stored = try JSONDecoder().decode(
-                [USBReceiveCheckpoint].self,
-                from: Data(contentsOf: fileURL)
-            )
-            checkpoints = Dictionary(uniqueKeysWithValues: stored.map { ($0.deliveryID, $0) })
-        } else {
-            checkpoints = [:]
-        }
+        let stored = PersistedStateRecovery.decodeOrRecover(
+            [USBReceiveCheckpoint].self,
+            from: fileURL,
+            fallback: []
+        )
+        checkpoints = Dictionary(uniqueKeysWithValues: stored.map { ($0.deliveryID, $0) })
     }
 
     func checkpoint(for deliveryID: UUID) -> USBReceiveCheckpoint? {

@@ -34,14 +34,11 @@ final class IPhoneLocalReceiveJobStore: @unchecked Sendable {
 
     init(fileURL: URL) throws {
         self.fileURL = fileURL
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            state = try JSONDecoder().decode(
-                IPhoneLocalReceiveJobState.self,
-                from: Data(contentsOf: fileURL)
-            )
-        } else {
-            state = IPhoneLocalReceiveJobState(version: 1, jobs: [])
-        }
+        state = PersistedStateRecovery.decodeOrRecover(
+            IPhoneLocalReceiveJobState.self,
+            from: fileURL,
+            fallback: IPhoneLocalReceiveJobState(version: 1, jobs: [])
+        )
     }
 
     func load() throws -> IPhoneLocalReceiveJobState {

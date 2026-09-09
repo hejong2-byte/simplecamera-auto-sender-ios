@@ -98,14 +98,12 @@ final class IPhoneReceivedFileCatalog: @unchecked Sendable {
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
         try staging.setResourceValues(values)
-        if fileManager.fileExists(atPath: recordsFileURL.path) {
-            records = try JSONDecoder().decode(
-                RecordState.self,
-                from: Data(contentsOf: recordsFileURL)
-            ).records
-        } else {
-            records = []
-        }
+        records = PersistedStateRecovery.decodeOrRecover(
+            RecordState.self,
+            from: recordsFileURL,
+            fallback: RecordState(version: 1, records: []),
+            fileManager: fileManager
+        ).records
     }
 
     func save(_ record: IPhoneReceivedFileRecord) throws {

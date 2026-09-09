@@ -1,6 +1,15 @@
 import XCTest
 
 final class ForegroundReceiveUITests: XCTestCase {
+    func testProductionLaunchRecoversCorruptLocalState() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-corrupt-live-state"]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["open-settings"].waitForExistence(timeout: 15))
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
     func testKakaoFilePickerCancellationDoesNotRequestPhotoPermissionOrStartTransfer() {
         let app = launchSimulation(delay: 3_600)
         let files = app.buttons["manual-kakao-file"]
