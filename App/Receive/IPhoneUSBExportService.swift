@@ -1051,11 +1051,14 @@ actor IPhoneUSBExportService {
     }
 
     private func fileSize(_ url: URL) throws -> Int64 {
-        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-        guard values.isRegularFile == true else {
+        // URL resource values can retain the pre-copy size for a URL that was
+        // opened before an append. Always ask FileManager for fresh metadata.
+        let attributes = try fileManager.attributesOfItem(atPath: url.path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? NSNumber else {
             throw IPhoneUSBExportError.sourceChanged
         }
-        return Int64(values.fileSize ?? 0)
+        return size.int64Value
     }
 
     private func modificationDate(_ url: URL) throws -> Date? {
