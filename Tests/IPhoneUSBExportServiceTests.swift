@@ -318,6 +318,54 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent("docs/report.txt")), Data("report-data".utf8))
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: context.zipWorkingDirectory.path), [])
     }
+
+    func testInterruptedZIPFinalizationResumesAfterOneRootItemWasAlreadyMoved() async throws {
+        let fileManager = CancelAfterFirstRootMoveFileManager()
+        let context = try makeContext(fileManager: fileManager)
+        let fixture = temporaryDirectory()
+        let map = fixture.appendingPathComponent("MAP", isDirectory: true)
+        let binary = fixture.appendingPathComponent("_bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: map, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: binary, withIntermediateDirectories: true)
+        try Data("map".utf8).write(to: map.appendingPathComponent("map.dat"))
+        try Data("binary".utf8).write(to: binary.appendingPathComponent("engine.bin"))
+        let zip = context.sourceDirectory.appendingPathComponent("navigation-source.zip")
+        try FileManager.default.zipItem(at: fixture, to: zip, shouldKeepParent: false)
+        let file = try makeStoredFile(
+            name: "navigation.zip",
+            data: Data(contentsOf: zip),
+            in: context.sourceDirectory
+        )
+
+        let first = await Task {
+            await context.service.export(
+                [file],
+                to: context.destination,
+                preservePartialOnCancellation: true
+            )
+        }.value
+        XCTAssertTrue(first.cancelled)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: context.usbDirectory.appendingPathComponent("MAP").path)
+                || FileManager.default.fileExists(atPath: context.usbDirectory.appendingPathComponent("_bin").path)
+        )
+
+        let resumed = await context.service.export(
+            [file],
+            to: context.destination,
+            preservePartialOnCancellation: true
+        )
+
+        XCTAssertTrue(resumed.failed.isEmpty, resumed.errorMessage ?? "finalization resume failed")
+        XCTAssertEqual(
+            try Data(contentsOf: context.usbDirectory.appendingPathComponent("MAP/map.dat")),
+            Data("map".utf8)
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: context.usbDirectory.appendingPathComponent("_bin/engine.bin")),
+            Data("binary".utf8)
+        )
+    }
     func testOptionalVerificationDetectsTamperingWithoutDeletingEitherCopy() async throws {
         let context = try makeContext()
         let file = try makeStoredFile(name: "optional.bin", data: Data("original".utf8), in: context.sourceDirectory)
@@ -926,6 +974,26 @@ private final class CancelOnlyFirstExportFileFileManager: FileManager, @unchecke
         }
         if shouldCancel { withUnsafeCurrentTask { $0?.cancel() } }
         return created
+    }
+}
+
+private final class CancelAfterFirstRootMoveFileManager: FileManager, @unchecked Sendable {
+    private let lock = NSLock()
+    private var hasCancelled = false
+
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        let isFinalRootMove = srcURL.path.contains(".partial/")
+            && dstURL.deletingLastPathComponent().lastPathComponent == "usb"
+        let shouldCancel = lock.withLock { () -> Bool in
+            guard isFinalRootMove, !hasCancelled else { return false }
+            hasCancelled = true
+            return true
+        }
+        try super.moveItem(at: srcURL, to: dstURL)
+        if shouldCancel {
+            withUnsafeCurrentTask { $0?.cancel() }
+            throw CancellationError()
+        }
     }
 }
 
