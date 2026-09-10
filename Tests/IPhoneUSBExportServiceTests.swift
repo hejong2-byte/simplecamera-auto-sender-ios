@@ -219,7 +219,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             reported.append(progress)
         }
 
-        XCTAssertTrue(summary.failed.isEmpty)
+        XCTAssertTrue(summary.failed.isEmpty, summary.errorMessage ?? "resume export failed without detail")
         XCTAssertEqual(summary.verified.count, 1)
         XCTAssertTrue(reported.contains {
             $0.stage == .copyingToUSB
@@ -262,7 +262,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             reported.append(progress)
         }
 
-        XCTAssertTrue(second.failed.isEmpty)
+        XCTAssertTrue(second.failed.isEmpty, second.errorMessage ?? "ZIP resume export failed without detail")
         XCTAssertEqual(second.verified.count, 1)
         XCTAssertFalse(reported.contains { $0.stage == .extracting }, "Completed local extraction must be reused")
         XCTAssertTrue(reported.contains { $0.detail?.contains("이어받기") == true })
