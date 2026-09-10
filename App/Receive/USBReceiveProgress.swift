@@ -39,6 +39,8 @@ struct USBReceiveProgress: Codable, Sendable, Equatable {
     let expiresAt: Date?
     let errorMessage: String?
     let detail: String?
+    let sourceFileIDs: [String]?
+    let archiveMode: IPhoneReceiveArchiveMode?
 
     init(
         stage: USBReceiveStage,
@@ -53,7 +55,9 @@ struct USBReceiveProgress: Codable, Sendable, Equatable {
         startedAt: Date?,
         expiresAt: Date?,
         errorMessage: String?,
-        detail: String? = nil
+        detail: String? = nil,
+        sourceFileIDs: [String]? = nil,
+        archiveMode: IPhoneReceiveArchiveMode? = nil
     ) {
         self.stage = stage
         self.destination = destination
@@ -68,6 +72,8 @@ struct USBReceiveProgress: Codable, Sendable, Equatable {
         self.expiresAt = expiresAt
         self.errorMessage = errorMessage
         self.detail = detail
+        self.sourceFileIDs = sourceFileIDs
+        self.archiveMode = archiveMode
     }
 
     var percent: Int {
@@ -124,12 +130,18 @@ final class USBReceiveProgressStore: @unchecked Sendable {
         }
     }
 
-    func beginExport(fileName: String?, totalCount: Int) {
+    func beginExport(
+        fileName: String?,
+        totalCount: Int,
+        sourceFileIDs: [String] = [],
+        archiveMode: IPhoneReceiveArchiveMode? = nil
+    ) {
         lock.withLock { interruption = nil }
         publish(USBReceiveProgress(stage: .checkingSource, deliveryID: nil, fileName: fileName,
             currentIndex: 1, totalCount: totalCount, completedCount: 0, bytesReceived: 0,
             totalBytes: 0, startedAt: Date(), expiresAt: nil, errorMessage: nil,
-            detail: "USB 복사 준비 중"))
+            detail: "USB 복사 준비 중", sourceFileIDs: sourceFileIDs,
+            archiveMode: archiveMode))
     }
 
     func interruptExport() {
@@ -150,7 +162,8 @@ final class USBReceiveProgressStore: @unchecked Sendable {
             fileName: value.fileName, currentIndex: value.currentIndex, totalCount: value.totalCount,
             completedCount: value.completedCount, bytesReceived: value.bytesReceived,
             totalBytes: value.totalBytes, startedAt: nil, expiresAt: nil, errorMessage: nil,
-            detail: [value.detail, message].compactMap { $0 }.joined(separator: "\n"))
+            detail: [value.detail, message].compactMap { $0 }.joined(separator: "\n"),
+            sourceFileIDs: value.sourceFileIDs, archiveMode: value.archiveMode)
     }
 
     // Small local checkpoints, at most once a second while bytes advance. Stage
@@ -171,7 +184,8 @@ final class USBReceiveProgressStore: @unchecked Sendable {
                 completedCount: latest.completedCount, bytesReceived: latest.bytesReceived,
                 totalBytes: latest.totalBytes, startedAt: latest.startedAt, expiresAt: latest.expiresAt,
                 errorMessage: latest.errorMessage,
-                detail: "USB 복사 진행 기록 저장 실패 · 앱을 종료하면 진행 표시를 복원하지 못할 수 있습니다.")
+                detail: "USB 복사 진행 기록 저장 실패 · 앱을 종료하면 진행 표시를 복원하지 못할 수 있습니다.",
+                sourceFileIDs: latest.sourceFileIDs, archiveMode: latest.archiveMode)
         }
     }
 
@@ -210,7 +224,9 @@ final class USBReceiveProgressStore: @unchecked Sendable {
                 totalBytes: latest.totalBytes,
                 startedAt: latest.startedAt,
                 expiresAt: latest.expiresAt,
-                errorMessage: message
+                errorMessage: message,
+                sourceFileIDs: latest.sourceFileIDs,
+                archiveMode: latest.archiveMode
             )
         }
         publish(failure)
@@ -247,10 +263,15 @@ final class USBReceiveProgressStore: @unchecked Sendable {
         clear { $0.stage == .completed }
     }
 
+    func clearInterruptedExport() {
+        clear { $0.stage == .paused }
+    }
+
     private func clear(where shouldClear: (USBReceiveProgress) -> Bool) {
         let current = lock.withLock { () -> [AsyncStream<USBReceiveProgress>.Continuation] in
             guard shouldClear(latest) else { return [] }
             latest = .idle
+            interruption = nil
             persistLocked(force: true)
             return Array(continuations.values)
         }

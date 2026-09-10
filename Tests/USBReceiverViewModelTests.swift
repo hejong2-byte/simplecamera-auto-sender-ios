@@ -102,7 +102,8 @@ final class USBReceiverViewModelTests: XCTestCase {
 
         await model.resumeInterruptedUSBCopy()
         await fulfillment(of: [resumed], timeout: 2)
-        XCTAssertEqual(await modes.values(), [.extract])
+        let recordedModes = await modes.values()
+        XCTAssertEqual(recordedModes, [.extract])
     }
 
     func testPausedUSBProgressCanBeDismissedWithoutDeletingOriginalFile() async throws {
@@ -1094,8 +1095,16 @@ final class USBReceiverViewModelTests: XCTestCase {
             exportProgressUpdates: {
                 exportProgressStore?.updates() ?? AsyncStream { $0.finish() }
             },
-            beginExportProgress: { name, count in exportProgressStore?.beginExport(fileName: name, totalCount: count) },
+            beginExportProgress: { name, count, sourceFileIDs, archiveMode in
+                exportProgressStore?.beginExport(
+                    fileName: name,
+                    totalCount: count,
+                    sourceFileIDs: sourceFileIDs,
+                    archiveMode: archiveMode
+                )
+            },
             interruptExportProgress: { exportProgressStore?.interruptExport() },
+            clearInterruptedExportProgress: { exportProgressStore?.clearInterruptedExport() },
             defaultDeviceName: "iPhone",
             preferences: isolatedPreferences()
         )

@@ -174,6 +174,8 @@ actor IPhoneUSBExportService {
     private let now: @Sendable () -> Date
     private let coordinateWrite: CoordinateWrite
     private var cleanupFailures: [String] = []
+    private var activeSourceFileIDs: [String]?
+    private var activeArchiveMode: IPhoneReceiveArchiveMode?
 
     init(
         deletionStore: IPhoneUSBDeletionDecisionStore,
@@ -300,6 +302,8 @@ actor IPhoneUSBExportService {
         var cancelled = false
         cleanupFailures = []
         for (index, file) in files.enumerated() {
+            activeSourceFileIDs = Array(files[index...].map(\.id))
+            activeArchiveMode = archiveMode
             do {
                 try Task.checkCancellation()
                 let decision = try exportOne(
@@ -323,6 +327,8 @@ actor IPhoneUSBExportService {
                     detail: "\(phase)\n\(reason.message)"))
             }
         }
+        activeSourceFileIDs = nil
+        activeArchiveMode = nil
         let summary = IPhoneUSBExportSummary(verified: verified, failed: failed,
             cancelled: cancelled, cleanupWarning: cleanupFailures.isEmpty ? nil : cleanupFailures.joined(separator: "\n"))
         if cancelled {
@@ -1161,7 +1167,9 @@ actor IPhoneUSBExportService {
             startedAt: startedAt,
             expiresAt: nil,
             errorMessage: nil,
-            detail: detail
+            detail: detail,
+            sourceFileIDs: activeSourceFileIDs,
+            archiveMode: activeArchiveMode
         ))
     }
 

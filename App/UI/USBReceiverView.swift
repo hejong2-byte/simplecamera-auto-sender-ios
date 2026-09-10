@@ -368,6 +368,26 @@ struct USBReceiverView: View {
         VStack(alignment: .leading, spacing: 10) {
             Divider()
             Text(model.usbExportStageTitle).font(.headline)
+            if model.usbExportProgress?.stage == .paused {
+                HStack(spacing: 8) {
+                    Button("중단 지점부터 이어받기") {
+                        Task { await model.resumeInterruptedUSBCopy() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.canResumeInterruptedUSBCopy)
+                    .accessibilityIdentifier("stored-files-resume-export")
+
+                    Button("중단 기록 지우기", role: .destructive) {
+                        model.dismissInterruptedUSBCopy()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!model.canDismissInterruptedUSBCopy)
+                    .accessibilityIdentifier("stored-files-dismiss-interrupted-export")
+                }
+                .font(.subheadline)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            }
             if model.isExportingToUSB && !model.isVerifyingUSBCopies {
                 Button(model.isCancellingUSBCopy ? "취소 처리 대기 중" : "복사 취소", role: .destructive) {
                     model.cancelUSBCopy()

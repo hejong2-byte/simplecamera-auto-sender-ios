@@ -273,10 +273,18 @@ final class USBReceiverDependencies: @unchecked Sendable {
             },
             progressUpdates: { [progressStore] in progressStore.updates() },
             exportProgressUpdates: { [exportProgressStore] in exportProgressStore.updates() },
-            beginExportProgress: { [exportProgressStore] name, count in
-                exportProgressStore.beginExport(fileName: name, totalCount: count)
+            beginExportProgress: { [exportProgressStore] name, count, sourceFileIDs, archiveMode in
+                exportProgressStore.beginExport(
+                    fileName: name,
+                    totalCount: count,
+                    sourceFileIDs: sourceFileIDs,
+                    archiveMode: archiveMode
+                )
             },
             interruptExportProgress: { [exportProgressStore] in exportProgressStore.interruptExport() },
+            clearInterruptedExportProgress: { [exportProgressStore] in
+                exportProgressStore.clearInterruptedExport()
+            },
             failExportProgress: { [exportProgressStore] message in exportProgressStore.publishFailure(message) },
             loadOutcome: { [outcomeStore] receiverID in
                 outcomeStore.load(receiverID: receiverID)

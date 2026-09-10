@@ -137,8 +137,9 @@ final class USBReceiverViewModel: ObservableObject {
     private var currentExportRequest: USBExportRequest?
     private var interruptedExportRequest: USBExportRequest?
     private var resumeWhenCurrentExportStops = false
-    private let beginExportProgress: @Sendable (String?, Int) -> Void
+    private let beginExportProgress: @Sendable (String?, Int, [String], IPhoneReceiveArchiveMode) -> Void
     private let interruptExportProgress: @Sendable () -> Void
+    private let clearInterruptedExportProgress: @Sendable () -> Void
     private let failExportProgress: @Sendable (String) -> Void
     private let verifyCopies: VerifyCopies
     private let pendingDeletionDecisions: PendingDeletionDecisions
@@ -203,8 +204,9 @@ final class USBReceiverViewModel: ObservableObject {
         refreshFeatures: @escaping RefreshFeatures = {},
         progressUpdates: @escaping ProgressUpdates,
         exportProgressUpdates: @escaping ProgressUpdates = { AsyncStream { $0.finish() } },
-        beginExportProgress: @escaping @Sendable (String?, Int) -> Void = { _, _ in },
+        beginExportProgress: @escaping @Sendable (String?, Int, [String], IPhoneReceiveArchiveMode) -> Void = { _, _, _, _ in },
         interruptExportProgress: @escaping @Sendable () -> Void = {},
+        clearInterruptedExportProgress: @escaping @Sendable () -> Void = {},
         failExportProgress: @escaping @Sendable (String) -> Void = { _ in },
         loadOutcome: @escaping LoadOutcome = { _ in nil },
         saveOutcome: @escaping SaveOutcome = { _ in },
@@ -230,6 +232,7 @@ final class USBReceiverViewModel: ObservableObject {
         self.exportFiles = exportFiles
         self.beginExportProgress = beginExportProgress
         self.interruptExportProgress = interruptExportProgress
+        self.clearInterruptedExportProgress = clearInterruptedExportProgress
         self.failExportProgress = failExportProgress
         self.cleanupExportTemps = cleanupExportTemps
         self.verifyCopies = verifyCopies
@@ -733,6 +736,52 @@ final class USBReceiverViewModel: ObservableObject {
         isExportingToUSB && !isVerifyingUSBCopies && usbCopyTask != nil && !isCancellingUSBCopy
     }
 
+    var canResumeInterruptedUSBCopy: Bool {
+        guard usbExportProgress?.stage == .paused,
+              !isExportingToUSB, !isReceivingFile, !isDeletingStoredFiles,
+              !isCleaningUSBFolder, !needsStoredZIPExportChoice else { return false }
+        return !interruptedStoredFiles().isEmpty
+    }
+
+    var canDismissInterruptedUSBCopy: Bool {
+        usbExportProgress?.stage == .paused && !isExportingToUSB
+    }
+
+    func resumeInterruptedUSBCopy() async {
+        guard canResumeInterruptedUSBCopy, let progress = usbExportProgress else { return }
+        let files = interruptedStoredFiles()
+        guard !files.isEmpty else {
+            lastUSBExportError = "이어받을 iPhone 원본 파일을 찾지 못했습니다. 원본 파일이 남아 있는지 확인해 주세요."
+            return
+        }
+        selectedStoredFileIDs = Set(files.map(\.id))
+        let mode = progress.archiveMode
+            ?? (files.contains(where: Self.isZIP) ? .extract : .keepArchive)
+        await exportStoredFiles(files, archiveMode: mode)
+    }
+
+    func dismissInterruptedUSBCopy() {
+        guard canDismissInterruptedUSBCopy else { return }
+        interruptedExportRequest = nil
+        resumeWhenCurrentExportStops = false
+        clearInterruptedExportProgress()
+        usbExportProgress = nil
+        usbExportLastUpdatedAt = nil
+        lastUSBExportError = nil
+        usbExportCompletionMessage = nil
+    }
+
+    private func interruptedStoredFiles() -> [IPhoneStoredFile] {
+        guard let progress = usbExportProgress, progress.stage == .paused else { return [] }
+        if let ids = progress.sourceFileIDs, !ids.isEmpty {
+            let byID = Dictionary(uniqueKeysWithValues: storedFiles.map { ($0.id, $0) })
+            return ids.compactMap { byID[$0] }
+        }
+        guard let name = progress.fileName,
+              let matching = storedFiles.first(where: { $0.name == name }) else { return [] }
+        return [matching]
+    }
+
     func cancelUSBCopy() {
         guard canCancelUSBCopy else { return }
         interruptedExportRequest = nil
@@ -822,7 +871,12 @@ final class USBReceiverViewModel: ObservableObject {
         currentExportRequest = request
         isExportingToUSB = true
         usbCopyBackgroundExpired = false
-        beginExportProgress(selected.first?.name, selected.count)
+        beginExportProgress(
+            selected.first?.name,
+            selected.count,
+            selected.map(\.id),
+            archiveMode
+        )
         usbExportProgress = nil
         lastUSBExportError = nil
         usbExportCompletionMessage = nil
