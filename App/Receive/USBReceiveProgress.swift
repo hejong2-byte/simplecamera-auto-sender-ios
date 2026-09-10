@@ -114,7 +114,7 @@ final class USBReceiveProgressStore: @unchecked Sendable {
         do {
             let saved = try JSONDecoder().decode(USBReceiveProgress.self, from: Data(contentsOf: fileURL))
             latest = Self.isInFlight(saved.stage)
-                ? Self.paused(saved, message: "이전 USB 복사가 중단되었습니다. 마지막 기록이며 완료된 복사본이 아닙니다. USB를 확인하고 임시파일을 정리한 뒤 다시 복사해 주세요. 원본 ZIP은 유지됩니다.")
+                ? Self.paused(saved, message: "이전 USB 복사가 중단되었습니다. 같은 파일을 다시 USB로 복사하면 남은 부분부터 이어받습니다. 임시파일 정리는 이어받기를 포기할 때만 실행해 주세요. 원본 ZIP은 유지됩니다.")
                 : saved
         } catch {
             latest = USBReceiveProgress(stage: .failed, deliveryID: nil, fileName: nil,
@@ -134,7 +134,7 @@ final class USBReceiveProgressStore: @unchecked Sendable {
 
     func interruptExport() {
         let paused = lock.withLock { () -> USBReceiveProgress in
-            let value = Self.paused(latest, message: "백그라운드 실행 시간이 끝나 USB 복사가 중단되었습니다. 마지막 진행 기록이며 복사 완료가 아닙니다. 원본 ZIP은 유지됩니다. 임시파일을 정리한 뒤 다시 복사해 주세요.")
+            let value = Self.paused(latest, message: "백그라운드 실행 시간이 끝나 USB 복사가 중단되었습니다. 앱으로 돌아오면 자동으로 이어받으며, 앱이 다시 실행된 경우 같은 파일을 USB로 복사하면 남은 부분부터 이어받습니다. 원본 ZIP은 유지됩니다.")
             interruption = value
             return value
         }

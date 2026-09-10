@@ -235,7 +235,12 @@ final class USBReceiverDependencies: @unchecked Sendable {
                 return catalog.delete(files, protectedFileNames: protectedNames, progress: progress)
             },
             exportFiles: { [exporter] files, destination, archiveMode in
-                await exporter.export(files, to: destination, archiveMode: archiveMode)
+                await exporter.export(
+                    files,
+                    to: destination,
+                    archiveMode: archiveMode,
+                    preservePartialOnCancellation: true
+                )
             },
             cleanupExportTemps: { [exporter] destination, progress in
                 await exporter.cleanupTemporaryFiles(to: destination, progress: progress)

@@ -20,6 +20,11 @@ struct IPhoneReceiveStatus: Sendable, Equatable {
 
 @MainActor
 final class USBReceiverViewModel: ObservableObject {
+    private struct USBExportRequest {
+        let files: [IPhoneStoredFile]
+        let archiveMode: IPhoneReceiveArchiveMode
+    }
+
     typealias ReceiveOnce = @Sendable () async throws -> USBReceiveSummary
     typealias ReceiveLocalOnce = @Sendable () async throws -> Void
     typealias PendingDeliveryIDs = @Sendable () async throws -> Set<UUID>
@@ -127,6 +132,11 @@ final class USBReceiverViewModel: ObservableObject {
     private var usbCopyTask: Task<IPhoneUSBExportSummary, Never>?
     private let copyBackgroundTask = USBCopyBackgroundTask()
     private var usbCopyBackgroundExpired = false
+    private var isAppActive = true
+    private var enteredBackgroundDuringExport = false
+    private var currentExportRequest: USBExportRequest?
+    private var interruptedExportRequest: USBExportRequest?
+    private var resumeWhenCurrentExportStops = false
     private let beginExportProgress: @Sendable (String?, Int) -> Void
     private let interruptExportProgress: @Sendable () -> Void
     private let failExportProgress: @Sendable (String) -> Void
@@ -725,8 +735,25 @@ final class USBReceiverViewModel: ObservableObject {
 
     func cancelUSBCopy() {
         guard canCancelUSBCopy else { return }
+        interruptedExportRequest = nil
+        resumeWhenCurrentExportStops = false
         isCancellingUSBCopy = true
         usbCopyTask?.cancel()
+    }
+
+    func setAppActive(_ active: Bool) {
+        isAppActive = active
+        if !active {
+            if isExportingToUSB { enteredBackgroundDuringExport = true }
+            return
+        }
+        guard enteredBackgroundDuringExport, interruptedExportRequest != nil else { return }
+        enteredBackgroundDuringExport = false
+        if isExportingToUSB {
+            resumeWhenCurrentExportStops = true
+        } else {
+            resumeInterruptedUSBExportIfPossible()
+        }
     }
 
     var canCleanTemporaryFiles: Bool {
@@ -791,6 +818,8 @@ final class USBReceiverViewModel: ObservableObject {
         guard !isExportingToUSB, !isReceivingFile,
               !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation,
               !isCleaningUSBFolder else { return }
+        let request = USBExportRequest(files: selected, archiveMode: archiveMode)
+        currentExportRequest = request
         isExportingToUSB = true
         usbCopyBackgroundExpired = false
         beginExportProgress(selected.first?.name, selected.count)
@@ -802,8 +831,13 @@ final class USBReceiverViewModel: ObservableObject {
         defer {
             copyBackgroundTask.end()
             usbCopyTask = nil
+            currentExportRequest = nil
             isCancellingUSBCopy = false
             isExportingToUSB = false
+            if resumeWhenCurrentExportStops, isAppActive {
+                resumeWhenCurrentExportStops = false
+                resumeInterruptedUSBExportIfPossible()
+            }
         }
         copyBackgroundTask.begin { [weak self] in self?.expireUSBCopyBackgroundTime() }
         do {
@@ -825,9 +859,25 @@ final class USBReceiverViewModel: ObservableObject {
             selectedStoredFileIDs.subtract(summary.verified.map(\.sourceID))
             if summary.cancelled {
                 try await keepOriginalFiles(Set(summary.verified.map(\.id)))
-                usbExportCompletionMessage = usbCopyBackgroundExpired
-                    ? "USB 복사 중단 · 백그라운드 실행 시간 종료"
-                    : "USB 복사 취소 완료 · 원본 유지"
+                if usbCopyBackgroundExpired {
+                    let completedIDs = Set(summary.verified.map(\.sourceID))
+                    let remaining = selected.filter { !completedIDs.contains($0.id) }
+                    interruptedExportRequest = remaining.isEmpty
+                        ? nil
+                        : USBExportRequest(files: remaining, archiveMode: archiveMode)
+                    usbExportCompletionMessage = remaining.isEmpty
+                        ? "USB 복사 완료"
+                        : "USB 복사 중단 · 앱으로 돌아오면 중단 지점부터 이어받습니다."
+                } else {
+                    interruptedExportRequest = nil
+                    let cleanup = await cleanupCancelledExportTemps()
+                    usbExportCompletionMessage = "USB 복사 취소 완료 · 원본 유지\(cleanup.message)"
+                    if !cleanup.failures.isEmpty {
+                        lastOriginalCleanupError = cleanup.failures.joined(separator: "\n")
+                    }
+                }
+            } else {
+                interruptedExportRequest = nil
             }
             storedFiles = try storedFilesProvider()
             needsDeletionDecision = !pendingDeletionDecisions().isEmpty
@@ -842,9 +892,32 @@ final class USBReceiverViewModel: ObservableObject {
     func expireUSBCopyBackgroundTime() {
         guard isExportingToUSB else { return }
         usbCopyBackgroundExpired = true
+        interruptedExportRequest = currentExportRequest
         interruptExportProgress()
         usbCopyTask?.cancel()
         isCancellingUSBCopy = true
+    }
+
+    private func resumeInterruptedUSBExportIfPossible() {
+        guard isAppActive, !isExportingToUSB, let request = interruptedExportRequest else { return }
+        interruptedExportRequest = nil
+        Task { [weak self] in
+            await self?.exportStoredFiles(request.files, archiveMode: request.archiveMode)
+        }
+    }
+
+    private func cleanupCancelledExportTemps() async -> (message: String, failures: [String]) {
+        var destination: USBBookmarkDestination?
+        do {
+            destination = try await Task.detached { [bookmarkStore] in try bookmarkStore.resolve() }.value
+        } catch {
+            destination = nil
+        }
+        let result = await cleanupExportTemps(destination, { _ in })
+        var message = ""
+        if result.deletedCount > 0 { message = " · 임시파일 정리 완료" }
+        if !result.usbChecked { message += " · USB 임시파일은 연결 후 정리 필요" }
+        return (message, result.failures)
     }
 
     private static func isZIP(_ file: IPhoneStoredFile) -> Bool {

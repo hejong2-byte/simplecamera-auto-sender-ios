@@ -123,11 +123,13 @@ struct ContentView: View {
             let active = scenePhase == .active
             incomingModel.setActive(active)
             textModel.setActive(active)
+            receiverModel.setAppActive(active)
         }
         .onChange(of: scenePhase) { _, phase in
             let active = phase == .active
             incomingModel.setActive(active)
             textModel.setActive(active)
+            receiverModel.setAppActive(active)
         }
         .task(id: scenePhase) {
             if scenePhase == .active { await receiverModel.monitorUSBAvailability() }

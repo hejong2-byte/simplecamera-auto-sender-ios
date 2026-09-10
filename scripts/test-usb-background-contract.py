@@ -21,6 +21,21 @@ class USBBackgroundContract(unittest.TestCase):
         body = source.split('var canCleanTemporaryFiles: Bool {')[1].split('\n    }')[0]
         self.assertNotIn('!isPerformingReceive', body)
 
+    def test_interrupted_copy_has_stable_resume_storage(self):
+        service = (ROOT / 'App/Receive/IPhoneUSBExportService.swift').read_text(encoding='utf-8')
+        dependencies = (ROOT / 'App/Application/USBReceiverDependencies.swift').read_text(encoding='utf-8')
+        self.assertIn('static func resumeIdentifier(', service)
+        self.assertIn('resumeBoundaryMatches(', service)
+        self.assertIn('resumeAt: resumeOffset', service)
+        self.assertIn('preservePartialOnCancellation: true', dependencies)
+
+    def test_foreground_return_requests_automatic_resume(self):
+        model = (ROOT / 'App/UI/USBReceiverViewModel.swift').read_text(encoding='utf-8')
+        content = (ROOT / 'App/UI/ContentView.swift').read_text(encoding='utf-8')
+        self.assertIn('func setAppActive(_ active: Bool)', model)
+        self.assertIn('resumeInterruptedUSBExportIfPossible()', model)
+        self.assertIn('receiverModel.setAppActive(active)', content)
+
 
 if __name__ == '__main__':
     unittest.main()
