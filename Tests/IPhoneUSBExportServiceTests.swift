@@ -5,6 +5,55 @@ import ZIPFoundation
 @testable import SimpleCameraAutoSender
 
 final class IPhoneUSBExportServiceTests: XCTestCase {
+    func testNestedArchiveAndSDCardWrappersAreRemovedFromUSBRoot() async throws {
+        let context = try makeContext()
+        let fixture = temporaryDirectory()
+        let archiveName = "싼타페_V11_전체본_SD카드용"
+        let map = fixture
+            .appendingPathComponent(archiveName)
+            .appendingPathComponent("SD_CARD_ROOT")
+            .appendingPathComponent("MAP")
+        try FileManager.default.createDirectory(at: map, withIntermediateDirectories: true)
+        try Data("navigation".utf8).write(to: map.appendingPathComponent("data.bin"))
+        let zip = context.sourceDirectory.appendingPathComponent("fixture.zip")
+        try FileManager.default.zipItem(at: fixture, to: zip, shouldKeepParent: false)
+        let file = try makeStoredFile(
+            name: "\(archiveName).zip",
+            data: Data(contentsOf: zip),
+            in: context.sourceDirectory
+        )
+
+        let result = await context.service.export([file], to: context.destination)
+
+        XCTAssertTrue(result.failed.isEmpty)
+        XCTAssertEqual(
+            try Data(contentsOf: context.usbDirectory.appendingPathComponent("MAP/data.bin")),
+            Data("navigation".utf8)
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: context.usbDirectory.appendingPathComponent(archiveName).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: context.usbDirectory.appendingPathComponent("SD_CARD_ROOT").path))
+    }
+
+    func testRootPackagingFolderIsRemovedButNavigationFoldersArePreserved() async throws {
+        let context = try makeContext()
+        let fixture = temporaryDirectory()
+        let map = fixture.appendingPathComponent("ROOT/MAP")
+        try FileManager.default.createDirectory(at: map, withIntermediateDirectories: true)
+        try Data("navigation".utf8).write(to: map.appendingPathComponent("data.bin"))
+        let zip = context.sourceDirectory.appendingPathComponent("fixture.zip")
+        try FileManager.default.zipItem(at: fixture, to: zip, shouldKeepParent: false)
+        let file = try makeStoredFile(name: "navigation.zip", data: Data(contentsOf: zip), in: context.sourceDirectory)
+
+        let result = await context.service.export([file], to: context.destination)
+
+        XCTAssertTrue(result.failed.isEmpty)
+        XCTAssertEqual(
+            try Data(contentsOf: context.usbDirectory.appendingPathComponent("MAP/data.bin")),
+            Data("navigation".utf8)
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: context.usbDirectory.appendingPathComponent("ROOT").path))
+    }
+
     func testSDCardArchivePlacesActualContentsAtUSBRootWithoutEitherWrapper() async throws {
         let context = try makeContext()
         let fixture = temporaryDirectory()
