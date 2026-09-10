@@ -698,23 +698,9 @@ actor IPhoneUSBExportService {
             }
         }
 
-        // Keep the iPhone staging paths intact; change only the USB layout.
-        let wrapper = "SD_CARD_ROOT"
-        let prefix = wrapper + "/"
-        let archivePaths = extraction.directories + extraction.files.map(\.relativePath)
-        if !archivePaths.isEmpty,
-           archivePaths.allSatisfy({ $0 == wrapper || $0.hasPrefix(prefix) }),
-           extraction.directories.contains(wrapper) {
-            extraction = SafeZIPExtraction(
-                files: extraction.files.map {
-                    SafeZIPExtractedFile(relativePath: String($0.relativePath.dropFirst(prefix.count)),
-                                         url: $0.url, size: $0.size)
-                },
-                directories: extraction.directories.filter { $0 != wrapper }
-                    .map { String($0.dropFirst(prefix.count)) },
-                totalBytes: extraction.totalBytes
-            )
-        }
+        // Keep the iPhone staging paths intact; remove only packaging folders
+        // from the final USB/SD layout. Navigation folders such as MAP remain.
+        extraction = Self.removingPackagingWrappers(from: extraction, archiveName: file.name)
 
         try saveZIPResume(
             extraction,
@@ -867,6 +853,58 @@ actor IPhoneUSBExportService {
         try deletionStore.save(decision)
         return decision
         }
+    }
+
+    private static func removingPackagingWrappers(
+        from original: SafeZIPExtraction,
+        archiveName: String
+    ) -> SafeZIPExtraction {
+        var extraction = original
+        let archiveBaseName = (archiveName as NSString).deletingPathExtension
+        let archiveKey = packagingNameKey(archiveBaseName)
+        let knownWrapperKeys: Set<String> = ["root", "sdcardroot", "usbroot"]
+
+        while true {
+            let paths = extraction.directories + extraction.files.map(\.relativePath)
+            let topLevelNames = Set(paths.compactMap {
+                $0.split(separator: "/", omittingEmptySubsequences: true).first.map(String.init)
+            })
+            guard topLevelNames.count == 1,
+                  let wrapper = topLevelNames.first,
+                  extraction.directories.contains(wrapper) else {
+                break
+            }
+            let wrapperKey = packagingNameKey(wrapper)
+            guard knownWrapperKeys.contains(wrapperKey)
+                    || (!archiveKey.isEmpty && wrapperKey == archiveKey) else {
+                break
+            }
+            let prefix = wrapper + "/"
+            guard paths.allSatisfy({ $0 == wrapper || $0.hasPrefix(prefix) }) else {
+                break
+            }
+            extraction = SafeZIPExtraction(
+                files: extraction.files.map {
+                    SafeZIPExtractedFile(
+                        relativePath: String($0.relativePath.dropFirst(prefix.count)),
+                        url: $0.url,
+                        size: $0.size
+                    )
+                },
+                directories: extraction.directories.compactMap {
+                    guard $0 != wrapper else { return nil }
+                    return String($0.dropFirst(prefix.count))
+                },
+                totalBytes: extraction.totalBytes
+            )
+        }
+        return extraction
+    }
+
+    private static func packagingNameKey(_ name: String) -> String {
+        let normalized = name.precomposedStringWithCanonicalMapping.lowercased()
+        let scalars = normalized.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }
+        return String(String.UnicodeScalarView(scalars))
     }
 
     private func removeExportTemporaryItem(_ url: URL, destination: USBBookmarkDestination? = nil) {
