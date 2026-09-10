@@ -79,6 +79,40 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
     }
 
+    func testSDCardRootIsRemovedWhenManifestFilesExistBesideIt() async throws {
+        let context = try makeContext()
+        let fixture = temporaryDirectory()
+        let map = fixture.appendingPathComponent("SD_CARD_ROOT/MAP")
+        try FileManager.default.createDirectory(at: map, withIntermediateDirectories: true)
+        try Data("navigation".utf8).write(to: map.appendingPathComponent("MAP.spd.000"))
+        try Data("manifest".utf8).write(to: fixture.appendingPathComponent("D1_전체파일_명세.json"))
+        try Data("readme".utf8).write(to: fixture.appendingPathComponent("먼저읽기_V11_D1_진단용.txt"))
+        let zip = context.sourceDirectory.appendingPathComponent("mixed-root.zip")
+        try FileManager.default.zipItem(at: fixture, to: zip, shouldKeepParent: false)
+        let file = try makeStoredFile(name: "싼타페.zip", data: Data(contentsOf: zip), in: context.sourceDirectory)
+
+        let result = await context.service.export([file], to: context.destination)
+
+        XCTAssertTrue(result.failed.isEmpty, result.errorMessage ?? "mixed-root ZIP export failed")
+        XCTAssertEqual(
+            try Data(contentsOf: context.usbDirectory.appendingPathComponent("MAP/MAP.spd.000")),
+            Data("navigation".utf8)
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: context.usbDirectory.appendingPathComponent("D1_전체파일_명세.json")),
+            Data("manifest".utf8)
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: context.usbDirectory.appendingPathComponent("먼저읽기_V11_D1_진단용.txt")),
+            Data("readme".utf8)
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: context.usbDirectory.appendingPathComponent("SD_CARD_ROOT").path
+            )
+        )
+    }
+
     func testRootExportConflictDoesNotOverwriteOrRenameExistingNavigationFolder() async throws {
         let context = try makeContext()
         let fixture = temporaryDirectory()
