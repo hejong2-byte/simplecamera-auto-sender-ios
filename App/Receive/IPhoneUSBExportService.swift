@@ -927,13 +927,13 @@ actor IPhoneUSBExportService {
         do {
             let destinationSize = try output.seekToEnd()
             guard destinationSize == UInt64(resumeAt) else {
-                throw IPhoneUSBExportError.sizeMismatch
+                throw CocoaError(.fileWriteUnknown)
             }
             while copied < resumeAt {
                 try Task.checkCancellation()
                 let remaining = min(Int64(1_024 * 1_024), resumeAt - copied)
                 guard let data = try input.read(upToCount: Int(remaining)), !data.isEmpty else {
-                    throw IPhoneUSBExportError.sourceChanged
+                    throw CocoaError(.fileReadCorruptFile)
                 }
                 hasher.update(data: data)
                 copied += Int64(data.count)
