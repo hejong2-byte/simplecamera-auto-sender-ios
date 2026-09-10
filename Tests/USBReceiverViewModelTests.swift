@@ -63,6 +63,82 @@ final class USBReceiverViewModelTests: XCTestCase {
         XCTAssertEqual(calls.value, 2)
     }
 
+    func testRelaunchRestoresZIPResumeActionFromPersistedPausedProgress() async throws {
+        let file = try storedFile(name: "navigation.zip")
+        let progressURL = temporaryDirectory().appendingPathComponent("usb-export-progress.json")
+        let firstStore = USBReceiveProgressStore(fileURL: progressURL)
+        firstStore.publish(USBReceiveProgress(
+            stage: .copyingToUSB,
+            deliveryID: nil,
+            fileName: file.name,
+            currentIndex: 1,
+            totalCount: 1,
+            completedCount: 0,
+            bytesReceived: 99,
+            totalBytes: 100,
+            startedAt: Date(),
+            expiresAt: nil,
+            errorMessage: nil,
+            detail: "2/2 · USB 복사 99/100개",
+            sourceFileIDs: [file.id],
+            archiveMode: .extract
+        ))
+        firstStore.interruptExport()
+
+        let restoredStore = USBReceiveProgressStore(fileURL: progressURL)
+        let resumed = expectation(description: "persisted copy resumed")
+        let modes = ArchiveModeLog()
+        let model = try exportModel(files: [file], exportProgressStore: restoredStore) { files, _, mode in
+            XCTAssertEqual(files.map(\.id), [file.id])
+            await modes.record(mode)
+            resumed.fulfill()
+            return IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+
+        await model.refresh()
+        await waitUntil { model.usbExportProgress?.stage == .paused }
+        XCTAssertEqual(model.usbExportDisplayedPercent, 99)
+        XCTAssertTrue(model.canResumeInterruptedUSBCopy)
+
+        await model.resumeInterruptedUSBCopy()
+        await fulfillment(of: [resumed], timeout: 2)
+        XCTAssertEqual(await modes.values(), [.extract])
+    }
+
+    func testPausedUSBProgressCanBeDismissedWithoutDeletingOriginalFile() async throws {
+        let file = try storedFile(name: "navigation.zip")
+        let progressStore = USBReceiveProgressStore()
+        progressStore.publish(USBReceiveProgress(
+            stage: .copyingToUSB,
+            deliveryID: nil,
+            fileName: file.name,
+            currentIndex: 1,
+            totalCount: 1,
+            completedCount: 0,
+            bytesReceived: 12,
+            totalBytes: 100,
+            startedAt: Date(),
+            expiresAt: nil,
+            errorMessage: nil,
+            sourceFileIDs: [file.id],
+            archiveMode: .extract
+        ))
+        progressStore.interruptExport()
+        let model = try exportModel(files: [file], exportProgressStore: progressStore) { _, _, _ in
+            XCTFail("Dismissing the record must not restart the copy")
+            return IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+
+        await model.refresh()
+        await waitUntil { model.usbExportProgress?.stage == .paused }
+        XCTAssertTrue(model.canDismissInterruptedUSBCopy)
+
+        model.dismissInterruptedUSBCopy()
+
+        await waitUntil { model.usbExportProgress == nil }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
+
     func testCleanupAvailabilityIgnoresDiscoveryButBlocksActualDownload() async throws {
         let store = USBReceiveProgressStore()
         let model = try exportModel(files: [], receiveProgressStore: store) { _, _, _ in
