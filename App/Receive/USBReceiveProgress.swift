@@ -114,7 +114,7 @@ final class USBReceiveProgressStore: @unchecked Sendable {
         do {
             let saved = try JSONDecoder().decode(USBReceiveProgress.self, from: Data(contentsOf: fileURL))
             latest = Self.isInFlight(saved.stage)
-                ? Self.paused(saved, message: "이전 USB 복사가 중단되었습니다. 같은 파일을 다시 USB로 복사하면 남은 부분부터 이어받습니다. 임시파일 정리는 이어받기를 포기할 때만 실행해 주세요. 원본 ZIP은 유지됩니다.")
+                ? Self.paused(saved, message: "이전 USB 복사가 중단되었습니다. 완료된 복사본이 아닙니다. 같은 파일을 다시 USB로 복사하면 남은 부분부터 이어받습니다. 임시파일 정리는 이어받기를 포기할 때만 실행해 주세요. 원본 ZIP은 유지됩니다.")
                 : saved
         } catch {
             latest = USBReceiveProgress(stage: .failed, deliveryID: nil, fileName: nil,

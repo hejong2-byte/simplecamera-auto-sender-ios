@@ -50,9 +50,9 @@ final class USBReceiverViewModelTests: XCTestCase {
         }
         await model.refresh()
         model.toggleStoredFileSelection(file.id)
-        model.setAppActive(false)
         let task = Task { await model.exportSelectedFilesToUSB() }
         await fulfillment(of: [firstStarted], timeout: 2)
+        model.setAppActive(false)
         model.expireUSBCopyBackgroundTime()
         await task.value
         XCTAssertEqual(calls.value, 1)

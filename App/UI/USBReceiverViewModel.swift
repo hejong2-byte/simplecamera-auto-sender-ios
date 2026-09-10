@@ -916,7 +916,6 @@ final class USBReceiverViewModel: ObservableObject {
         let result = await cleanupExportTemps(destination, { _ in })
         var message = ""
         if result.deletedCount > 0 { message = " · 임시파일 정리 완료" }
-        if !result.usbChecked { message += " · USB 임시파일은 연결 후 정리 필요" }
         return (message, result.failures)
     }
 

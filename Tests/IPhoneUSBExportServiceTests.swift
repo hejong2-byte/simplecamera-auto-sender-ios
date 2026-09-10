@@ -187,7 +187,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         let payload = Data(repeating: 0x4d, count: 3 * 1_024 * 1_024 + 41)
         let file = try makeStoredFile(name: "resume-large.bin", data: payload, in: context.sourceDirectory)
         let modifiedAt = try XCTUnwrap(
-            FileManager.default.attributesOfItem(atPath: file.url.path)[.modificationDate] as? Date
+            file.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
         )
         let identifier = IPhoneUSBExportService.resumeIdentifier(
             for: file,
@@ -237,11 +237,13 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         let archiveData = try XCTUnwrap(Data(base64Encoded: "UEsDBBQAAAAIANJIKF03rc1dEwAAAAsAAAAPAAAAZG9jcy9yZXBvcnQudHh0KkotyC8q0U1JLEkEAAAA//8DAFBLAwQUAAAACADSSChd+/k8aREAAAAJAAAACAAAAHJvb3QudHh0KsrPL9FNSSxJBAAAAP//AwBQSwECFAAUAAAACADSSChdN63NXRMAAAALAAAADwAAAAAAAAAAAAAAAAAAAAAAZG9jcy9yZXBvcnQudHh0UEsBAhQAFAAAAAgA0kgoXfv5PGkRAAAACQAAAAgAAAAAAAAAAAAAAAAAQAAAAHJvb3QudHh0UEsFBgAAAAACAAIAcwAAAHcAAAAAAA=="))
         let file = try makeStoredFile(name: "resume.zip", data: archiveData, in: context.sourceDirectory)
 
-        let first = await context.service.export(
-            [file],
-            to: context.destination,
-            preservePartialOnCancellation: true
-        )
+        let first = await Task {
+            await context.service.export(
+                [file],
+                to: context.destination,
+                preservePartialOnCancellation: true
+            )
+        }.value
         XCTAssertTrue(first.cancelled)
         XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: context.zipWorkingDirectory.path).isEmpty)
         let partialRoot = context.usbDirectory.appendingPathComponent(IPhoneUSBExportService.partialDirectoryName)
