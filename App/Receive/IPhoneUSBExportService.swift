@@ -732,7 +732,27 @@ actor IPhoneUSBExportService {
                 }
             }
         }
-        try checkRootConflicts()
+        func topLevelName(_ relativePath: String) -> String? {
+            relativePath.split(separator: "/").first.map(String.init)
+        }
+        func finalizedRootItemMatches(_ name: String) throws -> Bool {
+            var foundExpectedItem = false
+            for directory in extraction.directories where topLevelName(directory) == name {
+                foundExpectedItem = true
+                var isDirectory = ObjCBool(false)
+                guard fileManager.fileExists(
+                    atPath: destination.url.appendingPathComponent(directory).path,
+                    isDirectory: &isDirectory
+                ), isDirectory.boolValue else { return false }
+            }
+            for file in extraction.files where topLevelName(file.relativePath) == name {
+                foundExpectedItem = true
+                guard try fileSize(destination.url.appendingPathComponent(file.relativePath)) == file.size else {
+                    return false
+                }
+            }
+            return foundExpectedItem
+        }
         let partialDirectory = destination.url.appendingPathComponent(
             Self.partialDirectoryName,
             isDirectory: true
@@ -745,6 +765,8 @@ actor IPhoneUSBExportService {
             "export-\(resumeIdentifier.uuidString.lowercased()).partial",
             isDirectory: true
         )
+        let isResumingUSBPartial = fileManager.fileExists(atPath: partialURL.path)
+        if !isResumingUSBPartial { try checkRootConflicts() }
         try fileManager.createDirectory(at: partialURL, withIntermediateDirectories: true)
         defer {
             if !preservePartialOnCancellation || !Task.isCancelled {
@@ -752,11 +774,51 @@ actor IPhoneUSBExportService {
             }
         }
 
+        var finalizedTopLevelNames: Set<String> = []
+        if isResumingUSBPartial {
+            for name in topLevelNames {
+                let staged = partialURL.appendingPathComponent(name)
+                let target = destination.url.appendingPathComponent(name)
+                guard fileManager.fileExists(atPath: target.path) else { continue }
+                guard !fileManager.fileExists(atPath: staged.path),
+                      try finalizedRootItemMatches(name) else {
+                    throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
+                }
+                finalizedTopLevelNames.insert(name)
+            }
+        }
+
+        var existingOffsets: [String: Int64] = [:]
+        var resumableBytes = extraction.files
+            .filter { topLevelName($0.relativePath).map(finalizedTopLevelNames.contains) == true }
+            .reduce(Int64(0)) { $0 + $1.size }
+        for extractedFile in extraction.files {
+            if topLevelName(extractedFile.relativePath).map(finalizedTopLevelNames.contains) == true {
+                continue
+            }
+            let partialFile = partialURL.appendingPathComponent(extractedFile.relativePath)
+            guard fileManager.fileExists(atPath: partialFile.path) else { continue }
+            let existingSize = try fileSize(partialFile)
+            if existingSize <= extractedFile.size {
+                existingOffsets[extractedFile.relativePath] = existingSize
+                resumableBytes += existingSize
+            } else {
+                try fileManager.removeItem(at: partialFile)
+            }
+        }
+
         phaseStartedAt = now()
-        report(.copyingToUSB, 0, extraction.totalBytes, "2/2 · USB 폴더 생성 준비")
+        let resumeSummary = resumableBytes > 0
+            ? " · 기존 \(Self.byteText(resumableBytes)) 발견"
+            : ""
+        report(.copyingToUSB, resumableBytes, extraction.totalBytes,
+               "2/2 · 이어받기 위치 확인 완료\(resumeSummary)")
         for (index, relativePath) in extraction.directories.enumerated() {
             try Task.checkCancellation()
-            report(.copyingToUSB, 0, extraction.totalBytes,
+            if topLevelName(relativePath).map(finalizedTopLevelNames.contains) == true {
+                continue
+            }
+            report(.copyingToUSB, resumableBytes, extraction.totalBytes,
                    "2/2 · USB 폴더 생성 \(index)/\(extraction.directories.count)개\n\(relativePath)")
             try fileManager.createDirectory(
                 at: partialURL.appendingPathComponent(relativePath, isDirectory: true),
@@ -765,11 +827,34 @@ actor IPhoneUSBExportService {
         }
 
         var copiedBytes: Int64 = 0
+        var newlyCopiedBytes: Int64 = 0
         var copiedFiles: [USBCopyFileDigest] = []
         for extractedFile in extraction.files {
             try Task.checkCancellation()
+            if topLevelName(extractedFile.relativePath).map(finalizedTopLevelNames.contains) == true {
+                let copiedSHA = try hashFile(extractedFile.url) { _ in
+                    self.publish(
+                        file: file,
+                        currentIndex: currentIndex,
+                        totalCount: totalCount,
+                        completedCount: completedCount,
+                        bytes: resumableBytes + newlyCopiedBytes,
+                        totalBytes: extraction.totalBytes,
+                        startedAt: phaseStartedAt,
+                        detail: "2/2 · 이미 USB 루트에 저장된 항목 확인\n\(extractedFile.relativePath)"
+                    )
+                }
+                copiedBytes += extractedFile.size
+                copiedFiles.append(USBCopyFileDigest(
+                    path: extractedFile.relativePath,
+                    size: extractedFile.size,
+                    sha256: copiedSHA
+                ))
+                continue
+            }
             let partialFile = partialURL.appendingPathComponent(extractedFile.relativePath)
             var resumeOffset: Int64 = 0
+            let previouslyCounted = existingOffsets[extractedFile.relativePath] ?? 0
             if fileManager.fileExists(atPath: partialFile.path) {
                 let existingSize = try fileSize(partialFile)
                 if existingSize <= extractedFile.size,
@@ -777,6 +862,7 @@ actor IPhoneUSBExportService {
                     resumeOffset = existingSize
                 } else {
                     try fileManager.removeItem(at: partialFile)
+                    resumableBytes -= previouslyCounted
                 }
             }
             if !fileManager.fileExists(atPath: partialFile.path),
@@ -784,22 +870,29 @@ actor IPhoneUSBExportService {
                 throw IPhoneUSBExportError.destinationNotWritable
             }
             let resumeText = resumeOffset > 0 ? " · 이어받기" : ""
-            report(.copyingToUSB, copiedBytes + resumeOffset, extraction.totalBytes,
+            report(.copyingToUSB, resumableBytes + newlyCopiedBytes, extraction.totalBytes,
                    "2/2 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\(resumeText)\n\(extractedFile.relativePath)")
             let copiedSHA = try copyAndHash(
                 source: extractedFile.url,
                 destination: partialFile,
                 resumeAt: resumeOffset,
                 progress: { bytes in
+                    let checkingExisting = resumeOffset > 0 && bytes <= resumeOffset
+                    let detail = checkingExisting
+                        ? "2/2 · 기존 복사분 확인 \(copiedFiles.count)/\(extraction.files.count)개\n\(extractedFile.relativePath)"
+                        : "2/2 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\(resumeText)\n\(extractedFile.relativePath)"
                     self.publish(
                         file: file,
                         currentIndex: currentIndex,
                         totalCount: totalCount,
                         completedCount: completedCount,
-                        bytes: copiedBytes + bytes,
+                        bytes: min(
+                            extraction.totalBytes,
+                            resumableBytes + newlyCopiedBytes + max(0, bytes - resumeOffset)
+                        ),
                         totalBytes: extraction.totalBytes,
                         startedAt: phaseStartedAt,
-                        detail: "2/2 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\(resumeText)\n\(extractedFile.relativePath)"
+                        detail: detail
                     )
                 }
             )
@@ -807,24 +900,37 @@ actor IPhoneUSBExportService {
                 throw IPhoneUSBExportError.sizeMismatch
             }
             copiedBytes += extractedFile.size
+            newlyCopiedBytes += extractedFile.size - resumeOffset
             copiedFiles.append(USBCopyFileDigest(
                 path: extractedFile.relativePath,
                 size: extractedFile.size,
                 sha256: copiedSHA
             ))
-            report(.copyingToUSB, copiedBytes, extraction.totalBytes,
+            report(.copyingToUSB, resumableBytes + newlyCopiedBytes, extraction.totalBytes,
                    "2/2 · USB 복사 \(copiedFiles.count)/\(extraction.files.count)개\n\(extractedFile.relativePath)")
         }
 
         try Task.checkCancellation()
-        try checkRootConflicts()
         // All bytes are written and sized before publishing the exact top-level
         // names. Never add a ZIP-name wrapper or rename navigation directories.
         for (index, name) in topLevelNames.enumerated() {
+            try Task.checkCancellation()
+            let staged = partialURL.appendingPathComponent(name)
+            let target = destination.url.appendingPathComponent(name)
             report(.finalizing, copiedBytes, extraction.totalBytes,
                    "USB 루트에 저장 확정 \(index)/\(topLevelNames.count)개\n\(name)")
-            try fileManager.moveItem(at: partialURL.appendingPathComponent(name),
-                                     to: destination.url.appendingPathComponent(name))
+            if finalizedTopLevelNames.contains(name) {
+                guard !fileManager.fileExists(atPath: staged.path),
+                      try finalizedRootItemMatches(name) else {
+                    throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
+                }
+                continue
+            }
+            guard fileManager.fileExists(atPath: staged.path),
+                  !fileManager.fileExists(atPath: target.path) else {
+                throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
+            }
+            try fileManager.moveItem(at: staged, to: target)
         }
         // Cleanup trouble must not turn successfully placed data into a copy
         // failure. Report it separately and retain the original ZIP.
@@ -981,6 +1087,7 @@ actor IPhoneUSBExportService {
                 }
                 hasher.update(data: data)
                 copied += Int64(data.count)
+                progress(copied)
             }
             progress(copied)
             while try autoreleasepool(invoking: {
@@ -1118,6 +1225,7 @@ actor IPhoneUSBExportService {
         // FileHandle can retain autoreleased buffers until this long operation returns.
         // Drain each chunk so verifying multi-GB files uses bounded memory.
         while try autoreleasepool(invoking: {
+            try Task.checkCancellation()
             guard let data = try input.read(upToCount: 1_024 * 1_024), !data.isEmpty else { return false }
             hasher.update(data: data)
             processedBytes += Int64(data.count)

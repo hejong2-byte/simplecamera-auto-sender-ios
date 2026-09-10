@@ -314,6 +314,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         XCTAssertTrue(second.failed.isEmpty, second.errorMessage ?? "ZIP resume export failed without detail")
         XCTAssertEqual(second.verified.count, 1)
         XCTAssertFalse(reported.contains { $0.stage == .extracting }, "Completed local extraction must be reused")
+        XCTAssertTrue(reported.contains { $0.detail?.contains("이어받기 위치 확인 완료") == true })
         XCTAssertTrue(reported.contains { $0.detail?.contains("이어받기") == true })
         XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent("docs/report.txt")), Data("report-data".utf8))
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: context.zipWorkingDirectory.path), [])
