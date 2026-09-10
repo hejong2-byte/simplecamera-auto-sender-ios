@@ -977,35 +977,28 @@ actor IPhoneUSBExportService {
         let knownWrapperKeys: Set<String> = ["root", "sdcardroot", "usbroot"]
 
         while true {
-            let paths = extraction.directories + extraction.files.map(\.relativePath)
-            let topLevelNames = Set(paths.compactMap {
-                $0.split(separator: "/", omittingEmptySubsequences: true).first.map(String.init)
-            })
-            guard topLevelNames.count == 1,
-                  let wrapper = topLevelNames.first,
-                  extraction.directories.contains(wrapper) else {
-                break
-            }
-            let wrapperKey = packagingNameKey(wrapper)
-            guard knownWrapperKeys.contains(wrapperKey)
-                    || (!archiveKey.isEmpty && wrapperKey == archiveKey) else {
-                break
-            }
+            guard let wrapper = extraction.directories.first(where: { path in
+                guard !path.contains("/") else { return false }
+                let key = packagingNameKey(path)
+                return knownWrapperKeys.contains(key)
+                    || (!archiveKey.isEmpty && key == archiveKey)
+            }) else { break }
             let prefix = wrapper + "/"
-            guard paths.allSatisfy({ $0 == wrapper || $0.hasPrefix(prefix) }) else {
-                break
-            }
             extraction = SafeZIPExtraction(
                 files: extraction.files.map {
                     SafeZIPExtractedFile(
-                        relativePath: String($0.relativePath.dropFirst(prefix.count)),
+                        relativePath: $0.relativePath.hasPrefix(prefix)
+                            ? String($0.relativePath.dropFirst(prefix.count))
+                            : $0.relativePath,
                         url: $0.url,
                         size: $0.size
                     )
                 },
                 directories: extraction.directories.compactMap {
                     guard $0 != wrapper else { return nil }
-                    return String($0.dropFirst(prefix.count))
+                    return $0.hasPrefix(prefix)
+                        ? String($0.dropFirst(prefix.count))
+                        : $0
                 },
                 totalBytes: extraction.totalBytes
             )
