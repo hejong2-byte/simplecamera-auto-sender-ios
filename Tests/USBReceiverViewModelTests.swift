@@ -33,6 +33,36 @@ final class USBReceiverViewModelTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
     }
 
+    func testReturningToForegroundAutomaticallyRetriesInterruptedUSBExport() async throws {
+        let file = try storedFile()
+        let calls = ReceiveCounter()
+        let firstStarted = expectation(description: "first copy started")
+        let resumed = expectation(description: "copy resumed")
+        let model = try exportModel(files: [file]) { _, _, _ in
+            calls.increment()
+            if calls.value == 1 {
+                firstStarted.fulfill()
+                try? await Task.sleep(for: .seconds(5))
+                return IPhoneUSBExportSummary(verified: [], failed: [], cancelled: Task.isCancelled)
+            }
+            resumed.fulfill()
+            return IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        await model.refresh()
+        model.toggleStoredFileSelection(file.id)
+        model.setAppActive(false)
+        let task = Task { await model.exportSelectedFilesToUSB() }
+        await fulfillment(of: [firstStarted], timeout: 2)
+        model.expireUSBCopyBackgroundTime()
+        await task.value
+        XCTAssertEqual(calls.value, 1)
+
+        model.setAppActive(true)
+        await fulfillment(of: [resumed], timeout: 2)
+        await waitUntil { !model.isExportingToUSB }
+        XCTAssertEqual(calls.value, 2)
+    }
+
     func testCleanupAvailabilityIgnoresDiscoveryButBlocksActualDownload() async throws {
         let store = USBReceiveProgressStore()
         let model = try exportModel(files: [], receiveProgressStore: store) { _, _, _ in

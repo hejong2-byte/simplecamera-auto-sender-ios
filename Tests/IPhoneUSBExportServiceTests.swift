@@ -181,6 +181,92 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: partials.path), [])
         XCTAssertFalse(FileManager.default.fileExists(atPath: context.usbDirectory.appendingPathComponent("cancel").path))
     }
+
+    func testInterruptedSingleFileContinuesFromStableUSBPartial() async throws {
+        let context = try makeContext()
+        let payload = Data(repeating: 0x4d, count: 3 * 1_024 * 1_024 + 41)
+        let file = try makeStoredFile(name: "resume-large.bin", data: payload, in: context.sourceDirectory)
+        let modifiedAt = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: file.url.path)[.modificationDate] as? Date
+        )
+        let identifier = IPhoneUSBExportService.resumeIdentifier(
+            for: file,
+            destination: context.destination,
+            archiveMode: .keepArchive,
+            sourceSize: Int64(payload.count),
+            sourceModifiedAt: modifiedAt
+        )
+        let partialDirectory = context.usbDirectory.appendingPathComponent(
+            IPhoneUSBExportService.partialDirectoryName,
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: partialDirectory, withIntermediateDirectories: true)
+        let partialURL = partialDirectory.appendingPathComponent("export-\(identifier.uuidString.lowercased()).partial")
+        let alreadyCopied = 1_024 * 1_024 + 19
+        try payload.prefix(alreadyCopied).write(to: partialURL)
+        let updates = context.progressStore.updates()
+
+        let summary = await context.service.export(
+            [file],
+            to: context.destination,
+            archiveMode: .keepArchive,
+            preservePartialOnCancellation: true
+        )
+        context.progressStore.publishFailure("end-resume-test")
+        var reported: [USBReceiveProgress] = []
+        for await progress in updates {
+            if progress.errorMessage == "end-resume-test" { break }
+            reported.append(progress)
+        }
+
+        XCTAssertTrue(summary.failed.isEmpty)
+        XCTAssertEqual(summary.verified.count, 1)
+        XCTAssertTrue(reported.contains {
+            $0.stage == .copyingToUSB
+                && $0.bytesReceived >= Int64(alreadyCopied)
+                && $0.detail?.contains("이어받기") == true
+        })
+        let storedName = try XCTUnwrap(summary.verified.first?.usbStoredName)
+        XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent(storedName)), payload)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: partialURL.path))
+    }
+
+    func testInterruptedZIPUSBStageReusesExtractionAndPartialOnRetry() async throws {
+        let fileManager = CancelOnlyFirstExportFileFileManager()
+        let context = try makeContext(fileManager: fileManager)
+        let archiveData = try XCTUnwrap(Data(base64Encoded: "UEsDBBQAAAAIANJIKF03rc1dEwAAAAsAAAAPAAAAZG9jcy9yZXBvcnQudHh0KkotyC8q0U1JLEkEAAAA//8DAFBLAwQUAAAACADSSChd+/k8aREAAAAJAAAACAAAAHJvb3QudHh0KsrPL9FNSSxJBAAAAP//AwBQSwECFAAUAAAACADSSChdN63NXRMAAAALAAAADwAAAAAAAAAAAAAAAAAAAAAAZG9jcy9yZXBvcnQudHh0UEsBAhQAFAAAAAgA0kgoXfv5PGkRAAAACQAAAAgAAAAAAAAAAAAAAAAAQAAAAHJvb3QudHh0UEsFBgAAAAACAAIAcwAAAHcAAAAAAA=="))
+        let file = try makeStoredFile(name: "resume.zip", data: archiveData, in: context.sourceDirectory)
+
+        let first = await context.service.export(
+            [file],
+            to: context.destination,
+            preservePartialOnCancellation: true
+        )
+        XCTAssertTrue(first.cancelled)
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: context.zipWorkingDirectory.path).isEmpty)
+        let partialRoot = context.usbDirectory.appendingPathComponent(IPhoneUSBExportService.partialDirectoryName)
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: partialRoot.path).isEmpty)
+
+        let updates = context.progressStore.updates()
+        let second = await context.service.export(
+            [file],
+            to: context.destination,
+            preservePartialOnCancellation: true
+        )
+        context.progressStore.publishFailure("end-zip-resume-test")
+        var reported: [USBReceiveProgress] = []
+        for await progress in updates {
+            if progress.errorMessage == "end-zip-resume-test" { break }
+            reported.append(progress)
+        }
+
+        XCTAssertTrue(second.failed.isEmpty)
+        XCTAssertEqual(second.verified.count, 1)
+        XCTAssertFalse(reported.contains { $0.stage == .extracting }, "Completed local extraction must be reused")
+        XCTAssertTrue(reported.contains { $0.detail?.contains("이어받기") == true })
+        XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent("docs/report.txt")), Data("report-data".utf8))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: context.zipWorkingDirectory.path), [])
+    }
     func testOptionalVerificationDetectsTamperingWithoutDeletingEitherCopy() async throws {
         let context = try makeContext()
         let file = try makeStoredFile(name: "optional.bin", data: Data("original".utf8), in: context.sourceDirectory)
@@ -772,6 +858,22 @@ private final class CancelWhenExportPartialCreatedFileManager: FileManager, @unc
         if path.contains("export-"), path.contains(".partial/") {
             withUnsafeCurrentTask { $0?.cancel() }
         }
+        return created
+    }
+}
+
+private final class CancelOnlyFirstExportFileFileManager: FileManager, @unchecked Sendable {
+    private let lock = NSLock()
+    private var hasCancelled = false
+
+    override func createFile(atPath path: String, contents data: Data?, attributes attr: [FileAttributeKey: Any]? = nil) -> Bool {
+        let created = super.createFile(atPath: path, contents: data, attributes: attr)
+        let shouldCancel = lock.withLock { () -> Bool in
+            guard !hasCancelled, path.contains("export-"), path.contains(".partial/") else { return false }
+            hasCancelled = true
+            return true
+        }
+        if shouldCancel { withUnsafeCurrentTask { $0?.cancel() } }
         return created
     }
 }
