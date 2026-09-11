@@ -107,6 +107,10 @@ struct ContentView: View {
                 FileTransferRecipientPicker(
                     savedRecipients: textModel.savedRecipients,
                     initialCode: preferredFileRecipientCode,
+                    onSave: { code, name in
+                        await textModel.saveRecipient(code: code, name: name)
+                        return textModel.lastError
+                    },
                     onConfirm: chooseFileRecipient
                 )
             }
@@ -549,19 +553,28 @@ struct ContentView: View {
 
 private struct FileTransferRecipientPicker: View {
     let savedRecipients: [TextSavedRecipient]
+    let onSave: (String, String) async -> String?
     let onConfirm: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var code: String
+    @State private var computerName = ""
+    @State private var saveMessage: String?
+    @State private var isSaving = false
 
     init(
         savedRecipients: [TextSavedRecipient],
         initialCode: String,
+        onSave: @escaping (String, String) async -> String?,
         onConfirm: @escaping (String) -> Void
     ) {
         self.savedRecipients = savedRecipients
+        self.onSave = onSave
         self.onConfirm = onConfirm
         _code = State(initialValue: initialCode)
+        _computerName = State(
+            initialValue: savedRecipients.first(where: { $0.code == initialCode })?.name ?? ""
+        )
     }
 
     var body: some View {
@@ -572,6 +585,8 @@ private struct FileTransferRecipientPicker: View {
                         ForEach(savedRecipients) { recipient in
                             Button {
                                 code = recipient.code
+                                computerName = recipient.name
+                                saveMessage = nil
                             } label: {
                                 HStack {
                                     Text(recipient.name)
@@ -595,8 +610,34 @@ private struct FileTransferRecipientPicker: View {
                         .font(.title3.monospacedDigit())
                         .onChange(of: code) { _, value in
                             code = String(value.filter(\.isNumber).prefix(6))
+                            if savedRecipients.contains(where: { $0.code == code }) == false {
+                                computerName = ""
+                            }
+                            saveMessage = nil
                         }
-                    Button("파일 선택") {
+
+                    TextField("컴퓨터 이름 (예: 행정망 PC)", text: $computerName)
+
+                    Button("컴퓨터 저장") {
+                        isSaving = true
+                        saveMessage = nil
+                        Task {
+                            let error = await onSave(code, computerName)
+                            await MainActor.run {
+                                isSaving = false
+                                saveMessage = error ?? "저장 완료 · \(computerName.trimmingCharacters(in: .whitespacesAndNewlines))"
+                            }
+                        }
+                    }
+                    .disabled(!isValidCode || normalizedName.isEmpty || isSaving)
+
+                    if let saveMessage {
+                        Text(saveMessage)
+                            .font(.caption)
+                            .foregroundStyle(saveMessage.hasPrefix("저장 완료") ? .green : .red)
+                    }
+
+                    Button("선택한 컴퓨터로 파일 고르기") {
                         onConfirm(code)
                         dismiss()
                     }
@@ -615,6 +656,10 @@ private struct FileTransferRecipientPicker: View {
 
     private var isValidCode: Bool {
         (try? PCFileMailbox.identifier(for: code)) != nil
+    }
+
+    private var normalizedName: String {
+        computerName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

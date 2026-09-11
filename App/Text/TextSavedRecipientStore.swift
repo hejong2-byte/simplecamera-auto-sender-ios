@@ -28,7 +28,7 @@ enum TextSavedRecipientStoreError: Error, Equatable, LocalizedError {
         case .emptyName:
             return "수신코드 이름을 입력하세요."
         case .limitReached:
-            return "수신코드는 최대 5개까지 저장할 수 있습니다."
+            return "수신코드는 최대 10개까지 저장할 수 있습니다."
         case .recipientNotFound:
             return "저장된 수신코드를 찾지 못했습니다."
         }
@@ -36,7 +36,7 @@ enum TextSavedRecipientStoreError: Error, Equatable, LocalizedError {
 }
 
 actor TextSavedRecipientStore {
-    static let limit = 5
+    static let limit = 10
     typealias Persistence = (Data, URL, FileManager) throws -> Void
 
     private let fileURL: URL

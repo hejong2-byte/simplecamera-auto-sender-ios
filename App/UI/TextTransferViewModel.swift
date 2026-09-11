@@ -245,6 +245,17 @@ final class TextTransferViewModel: ObservableObject {
         }
     }
 
+    func saveRecipient(code: String, name: String) async {
+        clearError()
+        do {
+            let state = try await persistRecipient(code, name)
+            applyRecipientState(state)
+            statusMessage = "수신코드 저장 완료"
+        } catch {
+            record(error)
+        }
+    }
+
     func selectRecipient(code: String) async {
         clearError()
         do {

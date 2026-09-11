@@ -130,7 +130,7 @@ struct TextTransferView: View {
                 Text("저장된 수신코드")
                     .font(.subheadline.bold())
                 Spacer()
-                Text("\(model.savedRecipients.count)/5")
+                Text("\(model.savedRecipients.count)/10")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
