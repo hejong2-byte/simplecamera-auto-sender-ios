@@ -6,8 +6,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    CURRENT_PROJECT_VERSION: 44
-    MARKETING_VERSION: 0.3.33
+    CURRENT_PROJECT_VERSION: 45
+    MARKETING_VERSION: 0.3.34
 packages:
   ZIPFoundation:
     url: https://github.com/weichsel/ZIPFoundation.git
@@ -34,6 +34,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: SimpleCamera 업무사진 전송
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: PC에서 받은 사진과 동영상을 사진 앱에도 저장하려면 사진 추가 권한이 필요합니다.
         INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Simple Cam 자동 사진과 직접 선택한 사진, 스크린샷 및 동영상을 전송하려면 사진 보관함 전체 접근이 필요합니다.
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor

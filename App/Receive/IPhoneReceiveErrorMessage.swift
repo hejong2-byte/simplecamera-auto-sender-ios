@@ -48,6 +48,8 @@ enum IPhoneReceiveErrorMessage {
             return "저장 공간이 부족합니다."
         case let cleanupError as USBFolderCleanupError:
             return cleanupError.localizedDescription
+        case let mediaError as IPhoneReceivedMediaLibraryError:
+            return mediaError.localizedDescription
         case USBReceiveServiceError.fat32FileTooLarge:
             return "FAT32 USB에는 4GiB 초과 파일을 저장할 수 없습니다. exFAT을 사용해 주세요."
         case IPhoneUSBExportError.sizeMismatch:

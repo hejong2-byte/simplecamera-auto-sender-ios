@@ -120,6 +120,58 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
         XCTAssertEqual(latest?.stage, .completed)
     }
 
+    func testReceivedImageIsAlsoAddedToThePhotosLibrary() async throws {
+        let payload = Data("received jpeg".utf8)
+        let recorder = ReceivedMediaSaveRecorder()
+        let context = try makeContext(
+            payloads: ["현장사진.jpg": payload],
+            contentTypes: ["현장사진.jpg": "image/jpeg"],
+            saveReceivedMedia: { url, contentType in
+                await recorder.record(url: url, contentType: contentType)
+                return true
+            }
+        )
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        let staging = context.catalog.stagingDirectory.appendingPathComponent("photo.download")
+        try payload.write(to: staging)
+
+        await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+
+        let calls = await recorder.values()
+        XCTAssertEqual(calls.map(\.fileName), ["현장사진.jpg"])
+        XCTAssertEqual(calls.map(\.contentType), ["image/jpeg"])
+        XCTAssertEqual(try context.jobs.load().jobs.first?.mediaLibraryAdded, true)
+        var updates = context.progress.updates().makeAsyncIterator()
+        let latest = await updates.next()
+        XCTAssertEqual(latest?.stage, .completed)
+        XCTAssertTrue(latest?.errorMessage?.contains("사진 앱에도 저장") == true)
+    }
+
+    func testPhotosLibraryFailureDoesNotDeleteTheReceivedOriginal() async throws {
+        let payload = Data("received png".utf8)
+        let context = try makeContext(
+            payloads: ["현장사진.png": payload],
+            contentTypes: ["현장사진.png": "image/png"],
+            saveReceivedMedia: { _, _ in throw IPhoneReceivedMediaLibraryError.permissionDenied }
+        )
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        let staging = context.catalog.stagingDirectory.appendingPathComponent("photo.download")
+        try payload.write(to: staging)
+
+        await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+
+        let stored = try XCTUnwrap(try context.catalog.refresh().first)
+        XCTAssertEqual(try Data(contentsOf: stored.url), payload)
+        XCTAssertEqual(try context.jobs.load().jobs.first?.stage, .completed)
+        XCTAssertEqual(try context.jobs.load().jobs.first?.mediaLibraryAdded, false)
+        var updates = context.progress.updates().makeAsyncIterator()
+        let latest = await updates.next()
+        XCTAssertEqual(latest?.stage, .completed)
+        XCTAssertTrue(latest?.errorMessage?.contains("사진 앱 추가 실패") == true)
+    }
+
     func testZeroByteFinalizesAndVerifyingProgressIsOneHundredPercent() async throws {
         let context = try makeContext(payloads: ["empty.txt": Data()])
         try await context.engine.discoverAndSchedule()
@@ -311,17 +363,19 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
 
     private func makeContext(
         payloads: [String: Data],
+        contentTypes: [String: String] = [:],
         ackFailures: Int = 0,
         ackError: IPhoneReceiverClientError? = nil,
         automaticDiscoveryAllowed: @escaping @Sendable () -> Bool = { true },
-        now: @escaping @Sendable () -> Date = { Date(timeIntervalSince1970: 500) }
+        now: @escaping @Sendable () -> Date = { Date(timeIntervalSince1970: 500) },
+        saveReceivedMedia: @escaping IPhoneLocalReceiveEngine.SaveReceivedMedia = { _, _ in false }
     ) throws -> LocalReceiveContext {
         let root = temporaryDirectory()
         let deliveries = payloads.map { name, payload in
             IPhoneDelivery(
                 deliveryID: UUID(),
                 fileName: name,
-                contentType: "application/octet-stream",
+                contentType: contentTypes[name] ?? "application/octet-stream",
                 size: Int64(payload.count),
                 sha256: Self.sha256(payload),
                 state: .available,
@@ -361,7 +415,8 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
             credentials: { credentials },
             automaticDiscoveryAllowed: automaticDiscoveryAllowed,
             progressStore: progress,
-            now: now
+            now: now,
+            saveReceivedMedia: saveReceivedMedia
         )
         return LocalReceiveContext(
             engine: engine,
@@ -387,6 +442,21 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         return directory
     }
+}
+
+private actor ReceivedMediaSaveRecorder {
+    struct Value: Equatable {
+        let fileName: String
+        let contentType: String
+    }
+
+    private var records: [Value] = []
+
+    func record(url: URL, contentType: String) {
+        records.append(Value(fileName: url.lastPathComponent, contentType: contentType))
+    }
+
+    func values() -> [Value] { records }
 }
 
 private struct LocalReceiveContext {

@@ -24,6 +24,8 @@ final class IPhoneLocalReceiveJobStoreTests: XCTestCase {
         job.bytesReceived = 40
         job.retryCount = 2
         job.lastError = "ack timeout"
+        job.mediaLibraryAdded = true
+        job.mediaLibraryMessage = "사진 앱에도 저장했습니다."
         try store.save(job)
 
         let reopened = try IPhoneLocalReceiveJobStore(fileURL: stateURL)
@@ -31,6 +33,7 @@ final class IPhoneLocalReceiveJobStoreTests: XCTestCase {
         XCTAssertEqual(try reopened.load().version, 1)
         XCTAssertEqual(try reopened.load().jobs, [job])
         XCTAssertEqual(try reopened.load().jobs.first?.stage, .ackPending)
+        XCTAssertEqual(try reopened.load().jobs.first?.mediaLibraryAdded, true)
     }
 
     private func delivery() -> IPhoneDelivery {

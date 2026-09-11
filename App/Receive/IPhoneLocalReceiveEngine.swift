@@ -67,6 +67,8 @@ enum IPhoneLocalFileNaming {
 }
 
 actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
+    typealias SaveReceivedMedia = @Sendable (URL, String) async throws -> Bool
+
     private let client: any IPhoneLocalReceiveNetworking
     private let scheduler: any IPhoneReceiveTaskScheduling
     private let jobStore: IPhoneLocalReceiveJobStore
@@ -76,6 +78,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
     private let progressStore: USBReceiveProgressStore
     private let fileManager: FileManager
     private let now: @Sendable () -> Date
+    private let saveReceivedMedia: SaveReceivedMedia
     private var progressDeliveryID: UUID?
     private var progressStartedAt: Date?
     private var isDiscovering = false
@@ -89,7 +92,13 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         automaticDiscoveryAllowed: @escaping @Sendable () -> Bool = { true },
         progressStore: USBReceiveProgressStore,
         fileManager: FileManager = .default,
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        saveReceivedMedia: @escaping SaveReceivedMedia = { url, contentType in
+            try await IPhoneReceivedMediaLibrary.saveIfSupported(
+                fileURL: url,
+                contentType: contentType
+            )
+        }
     ) {
         self.client = client
         self.scheduler = scheduler
@@ -100,6 +109,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         self.progressStore = progressStore
         self.fileManager = fileManager
         self.now = now
+        self.saveReceivedMedia = saveReceivedMedia
     }
 
     func discoverAndSchedule(force: Bool = false) async throws {
@@ -308,6 +318,23 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
                 sha256: job.delivery.sha256,
                 receivedAt: now()
             ))
+            if job.mediaLibraryAdded == nil {
+                do {
+                    let added = try await saveReceivedMedia(
+                        finalURL,
+                        job.delivery.contentType
+                    )
+                    job.mediaLibraryAdded = added
+                    job.mediaLibraryMessage = added
+                        ? "iPhone 저장 완료 · 사진 앱에도 저장했습니다."
+                        : nil
+                } catch {
+                    job.mediaLibraryAdded = false
+                    job.mediaLibraryMessage = "iPhone 파일 저장 완료 · 사진 앱 추가 실패. "
+                        + IPhoneReceiveErrorMessage.message(error)
+                }
+                try jobStore.save(job)
+            }
             job.stage = .ackPending
             job.bytesReceived = job.delivery.size
             job.lastError = nil
@@ -348,7 +375,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
             job.stage = .completed
             job.lastError = nil
             try jobStore.save(job)
-            publish(stage: .completed, job: job)
+            publish(stage: .completed, job: job, message: job.mediaLibraryMessage)
             try? await discoverAndSchedule()
         } catch {
             guard verifiedLocalFile else {

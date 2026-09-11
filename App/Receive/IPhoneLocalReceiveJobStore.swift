@@ -21,6 +21,8 @@ struct IPhoneLocalReceiveJob: Codable, Equatable, Sendable, Identifiable {
     var bytesReceived: Int64
     var retryCount: Int
     var lastError: String?
+    var mediaLibraryAdded: Bool? = nil
+    var mediaLibraryMessage: String? = nil
 }
 
 struct IPhoneLocalReceiveJobState: Codable, Equatable, Sendable {

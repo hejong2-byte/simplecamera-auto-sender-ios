@@ -449,10 +449,12 @@ final class USBReceiverViewModelTests: XCTestCase {
         progress.publish(USBReceiveProgress(
             stage: .completed, destination: .iphoneLocal, deliveryID: UUID(), fileName: file.name,
             currentIndex: 1, totalCount: 1, completedCount: 1,
-            bytesReceived: file.size, totalBytes: file.size, startedAt: nil, expiresAt: nil, errorMessage: nil
+            bytesReceived: file.size, totalBytes: file.size, startedAt: nil, expiresAt: nil,
+            errorMessage: "iPhone 저장 완료 · 사진 앱에도 저장했습니다."
         ))
         await waitUntil { model.storedFiles.count == 1 }
         XCTAssertEqual(model.storedFiles.map(\.id), [file.id])
+        XCTAssertEqual(model.receiveOutcome?.message, "iPhone 저장 완료 · 사진 앱에도 저장했습니다.")
     }
 
     func testRelaunchRestoresStoredFilesEvenWhenServerRefreshFails() async throws {

@@ -1351,7 +1351,7 @@ final class USBReceiverViewModel: ObservableObject {
             totalCount: max(progress.totalCount, progress.completedCount),
             completedCount: progress.completedCount,
             message: kind == .saved
-                ? "\(destination) 저장 완료"
+                ? (progress.errorMessage ?? "\(destination) 저장 완료")
                 : (progress.errorMessage ?? "\(destination) 수신에 실패했습니다."),
             occurredAt: now()
         )
