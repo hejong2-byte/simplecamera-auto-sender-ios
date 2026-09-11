@@ -219,7 +219,17 @@ final class ContentViewModelTests: XCTestCase {
 
     func testManualPreparationMessageShowsBytePercentWhenFingerprinting() async throws {
         let feed = ManualProgressFeed()
-        let model = makeModel(manualUpdates: { feed.stream })
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("Bearer test")
+        let model = ContentViewModel(
+            credentialStore: credentials,
+            ledger: try UploadLedger(fileURL: temporaryLedgerURL()),
+            uploader: NoOpUploader(),
+            now: Date.init,
+            send: { _ in .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
+            manualUpdates: { feed.stream },
+            photoAuthorizationStatus: .authorized
+        )
         feed.yield(progress(
             kind: .file,
             stage: .preparing,
