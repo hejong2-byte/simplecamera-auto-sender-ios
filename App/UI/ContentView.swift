@@ -13,6 +13,9 @@ struct ContentView: View {
     @State private var readinessMessage: String?
     @State private var receiveNotice: String?
     @State private var isAdvancingIncomingPrompt = false
+    @State private var isChoosingFileRecipient = false
+    @State private var selectedFileRecipientCode: String?
+    @State private var openFilePickerAfterRecipientChoice = false
 
     private enum Destination: Hashable {
         case receiver
@@ -97,15 +100,35 @@ struct ContentView: View {
             } message: {
                 Text(readinessMessage ?? "")
             }
+            .sheet(
+                isPresented: $isChoosingFileRecipient,
+                onDismiss: openChosenFilePicker
+            ) {
+                FileTransferRecipientPicker(
+                    savedRecipients: textModel.savedRecipients,
+                    initialCode: preferredFileRecipientCode,
+                    onConfirm: chooseFileRecipient
+                )
+            }
             .sheet(item: $filePickerModel.request, onDismiss: filePickerModel.didDismiss) { request in
                 DocumentFilePicker(
                     request: request,
                     onSelection: { urls in
                         let selected = filePickerModel.accept(urls)
                         guard !selected.isEmpty else { return nil }
-                        return { await model.sendSelectedFiles(selected) }
+                        guard let recipientCode = selectedFileRecipientCode else { return nil }
+                        selectedFileRecipientCode = nil
+                        return {
+                            await model.sendSelectedFiles(
+                                selected,
+                                recipientCode: recipientCode
+                            )
+                        }
                     },
-                    onCancel: filePickerModel.cancel
+                    onCancel: {
+                        filePickerModel.cancel()
+                        selectedFileRecipientCode = nil
+                    }
                 )
                 .ignoresSafeArea()
                 .interactiveDismissDisabled()
@@ -193,6 +216,7 @@ struct ContentView: View {
         let receiverIsBusy = receiverModel.isReceivingFile
             || receiverModel.needsLocalFallbackDecision || receiverModel.needsDeletionDecision
         return scenePhase == .active && pickerKind == nil && readinessMessage == nil
+            && !isChoosingFileRecipient && !openFilePickerAfterRecipientChoice
             && !filePickerModel.isPresenting
             && !receiverModel.isChoosingUSBFolder && !receiverModel.isShowingSettingsConfirmation
             && !receiverModel.isDeletingStoredFiles && !receiverModel.needsStoredFileDeletionConfirmation
@@ -456,7 +480,10 @@ struct ContentView: View {
             if let message = model.fileTransferReadinessMessage {
                 readinessMessage = message
             } else {
-                filePickerModel.beginFileSelection()
+                Task {
+                    await textModel.refreshRecipients()
+                    isChoosingFileRecipient = true
+                }
             }
             return
         }
@@ -465,6 +492,38 @@ struct ContentView: View {
             return
         }
         pickerKind = kind
+    }
+
+    private var preferredFileRecipientCode: String {
+        let candidates = [
+            textModel.selectedRecipientCode,
+            textModel.recipient,
+            textModel.savedRecipients.first?.code
+        ]
+        return candidates.compactMap { $0 }.first(where: {
+            (try? PCFileMailbox.identifier(for: $0)) != nil
+        }) ?? ""
+    }
+
+    private func chooseFileRecipient(_ code: String) {
+        selectedFileRecipientCode = code
+        openFilePickerAfterRecipientChoice = true
+        if textModel.savedRecipients.contains(where: { $0.code == code }) {
+            Task { await textModel.selectRecipient(code: code) }
+        }
+    }
+
+    private func openChosenFilePicker() {
+        guard openFilePickerAfterRecipientChoice,
+              selectedFileRecipientCode != nil else {
+            selectedFileRecipientCode = nil
+            return
+        }
+        openFilePickerAfterRecipientChoice = false
+        Task { @MainActor in
+            await Task.yield()
+            filePickerModel.beginFileSelection()
+        }
     }
 
     private func statusValue(_ title: String, _ value: Int) -> some View {
@@ -482,6 +541,77 @@ struct ContentView: View {
         case .paused: return .orange
         default: return .cyan
         }
+    }
+}
+
+private struct FileTransferRecipientPicker: View {
+    let savedRecipients: [TextSavedRecipient]
+    let onConfirm: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var code: String
+
+    init(
+        savedRecipients: [TextSavedRecipient],
+        initialCode: String,
+        onConfirm: @escaping (String) -> Void
+    ) {
+        self.savedRecipients = savedRecipients
+        self.onConfirm = onConfirm
+        _code = State(initialValue: initialCode)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if !savedRecipients.isEmpty {
+                    Section("저장된 수신코드") {
+                        ForEach(savedRecipients) { recipient in
+                            Button {
+                                code = recipient.code
+                            } label: {
+                                HStack {
+                                    Text(recipient.name)
+                                    Spacer()
+                                    Text(recipient.code)
+                                        .font(.body.monospacedDigit())
+                                    if code == recipient.code {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.cyan)
+                                    }
+                                }
+                            }
+                            .foregroundStyle(.primary)
+                        }
+                    }
+                }
+
+                Section("받을 PC") {
+                    TextField("수신코드 숫자 6자리", text: $code)
+                        .keyboardType(.numberPad)
+                        .font(.title3.monospacedDigit())
+                        .onChange(of: code) { _, value in
+                            code = String(value.filter(\.isNumber).prefix(6))
+                        }
+                    Button("파일 선택") {
+                        onConfirm(code)
+                        dismiss()
+                    }
+                    .disabled(!isValidCode)
+                }
+            }
+            .navigationTitle("전송할 컴퓨터 선택")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("취소") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var isValidCode: Bool {
+        (try? PCFileMailbox.identifier(for: code)) != nil
     }
 }
 

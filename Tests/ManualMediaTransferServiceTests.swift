@@ -82,7 +82,8 @@ final class ManualMediaTransferServiceTests: XCTestCase {
         )
 
         let summary = await service.enqueueFiles([original], recipientCode: "651421")
-        let job = try XCTUnwrap(await engine.recordedJobs().first)
+        let jobs = await engine.recordedJobs()
+        let job = try XCTUnwrap(jobs.first)
 
         XCTAssertEqual(summary.failed, 0)
         XCTAssertEqual(

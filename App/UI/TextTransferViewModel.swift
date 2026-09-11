@@ -148,6 +148,18 @@ final class TextTransferViewModel: ObservableObject {
         await refresh(expectedGeneration: nil)
     }
 
+    func refreshRecipients() async {
+        do {
+            let state = try await loadRecipients()
+            if recipient.isEmpty, let selectedCode = state.selectedCode {
+                recipient = selectedCode
+            }
+            applyRecipientState(state)
+        } catch {
+            record(error)
+        }
+    }
+
     func send() async {
         guard activity == .idle else { return }
         activity = .sending

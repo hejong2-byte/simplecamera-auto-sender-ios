@@ -313,6 +313,7 @@ final class ManualBackgroundTransferEngineTests: XCTestCase {
             capturedAt: nil,
             sha256: String(repeating: "a", count: 64),
             remoteID: "123e4567-e89b-42d3-a456-426614174000",
+            recipientMailboxID: nil,
             totalBytes: totalBytes,
             stage: .uploading,
             uploadID: uploadID,

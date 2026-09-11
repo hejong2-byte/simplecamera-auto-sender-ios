@@ -91,14 +91,30 @@ actor ManualMediaTransferService: ManualMediaTransferring {
         }
     }
 
-    func enqueueFiles(_ urls: [URL]) async -> ManualMediaTransferSummary {
+    func enqueueFiles(
+        _ urls: [URL],
+        recipientCode: String? = nil
+    ) async -> ManualMediaTransferSummary {
         var seen = Set<String>()
         let selected = urls.filter { seen.insert($0.standardizedFileURL.absoluteString).inserted }
+        let recipientMailboxID: UUID?
+        do {
+            recipientMailboxID = try recipientCode.map(PCFileMailbox.identifier(for:))
+        } catch {
+            return ManualMediaTransferSummary(
+                selected: selected.count,
+                uploaded: 0,
+                failed: selected.count,
+                failureCategories: [.other]
+            )
+        }
         let identifiers = selected.map { _ in "document-\(UUID().uuidString)" }
         let files = Dictionary(uniqueKeysWithValues: zip(identifiers, selected))
         let source = ManualDocumentSource(maxBytes: maxBytes)
         return await enqueue(
-            selection: ManualMediaSelection(assetIdentifiers: identifiers, unavailableCount: 0), kind: .file
+            selection: ManualMediaSelection(assetIdentifiers: identifiers, unavailableCount: 0),
+            kind: .file,
+            recipientMailboxID: recipientMailboxID
         ) { [exportDirectory] identifier, onProgress in
             guard let url = files[identifier] else { throw ManualDocumentSourceError.unavailable }
             return try await source.exportOriginal(
@@ -113,6 +129,7 @@ actor ManualMediaTransferService: ManualMediaTransferring {
     private func enqueue(
         selection: ManualMediaSelection,
         kind: ManualMediaKind,
+        recipientMailboxID: UUID? = nil,
         export: (
             String,
             (Int64, Int64) -> Void
@@ -188,7 +205,7 @@ actor ManualMediaTransferService: ManualMediaTransferring {
 
                 let jobID = UUID()
                 var parts: [ManualTransferPart] = []
-                if fingerprint.size > singleRequestMaxBytes {
+                if recipientMailboxID != nil || fingerprint.size > singleRequestMaxBytes {
                     let partDirectory = exportDirectory.appendingPathComponent(
                         "Multipart-\(jobID.uuidString)",
                         isDirectory: true
@@ -222,6 +239,7 @@ actor ManualMediaTransferService: ManualMediaTransferring {
                     capturedAt: exported.capturedAt,
                     sha256: fingerprint.sha256,
                     remoteID: fingerprint.remoteID,
+                    recipientMailboxID: recipientMailboxID,
                     totalBytes: fingerprint.size,
                     stage: .preparing,
                     uploadID: nil,

@@ -19,8 +19,8 @@ final class ProjectSmokeTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 45"))
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.34"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 46"))
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.35"))
         XCTAssertTrue(project.contains("INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription"))
         XCTAssertTrue(project.contains("exactVersion: 0.9.20"))
         XCTAssertTrue(project.contains("UIFileSharingEnabled: true"))
@@ -52,7 +52,7 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(install.contains("앱이 다시 활성화될 때마다"))
         XCTAssertTrue(install.contains("iPhone 내부 임시공간"))
         XCTAssertTrue(install.contains("검증된 압축 해제 폴더"))
-        XCTAssertTrue(readme.contains("현재 버전은 0.3.34(빌드 45)"))
+        XCTAssertTrue(readme.contains("현재 버전은 0.3.35(빌드 46)"))
     }
 
     func testReleaseDocumentsPriorityReceiveStoredZIPAndStorageManagement() throws {
@@ -263,6 +263,9 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(source.contains("DocumentFilePicker("))
         XCTAssertTrue(source.contains("model.sendSelectedFiles("))
         XCTAssertTrue(source.contains("model.fileTransferReadinessMessage"))
+        XCTAssertTrue(source.contains("FileTransferRecipientPicker("))
+        XCTAssertTrue(source.contains("Section(\"저장된 수신코드\")"))
+        XCTAssertTrue(source.contains("recipientCode: recipientCode"))
     }
 
     func testPCReceiverCardAppearsBelowManualTransferStatus() throws {

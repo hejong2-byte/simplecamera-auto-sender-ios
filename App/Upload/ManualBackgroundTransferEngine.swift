@@ -207,9 +207,10 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
             return job.uploadID == nil ? [] : [.abort]
         }
         guard job.uploadID != nil else {
-            return job.totalBytes <= ManualMediaUploadLimit.singleRequestMaxBytes
-                ? [.single]
-                : [.start]
+            return job.recipientMailboxID != nil
+                || job.totalBytes > ManualMediaUploadLimit.singleRequestMaxBytes
+                ? [.start]
+                : [.single]
         }
         let missing = job.parts
             .filter { $0.etag == nil }
@@ -306,7 +307,8 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
                     credential: credential,
                     fingerprint: fingerprint,
                     metadata: metadata,
-                    fileTransfer: job.kind == .file
+                    fileTransfer: job.kind == .file,
+                    recipientMailboxID: job.recipientMailboxID
                 ),
                 emptyFile
             )
@@ -327,7 +329,8 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
                     uploadID: uploadID,
                     partNumber: number,
                     partSize: Int(part.size),
-                    fileTransfer: job.kind == .file
+                    fileTransfer: job.kind == .file,
+                    recipientMailboxID: job.recipientMailboxID
                 ),
                 part.fileURL
             )
@@ -352,7 +355,8 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
                     credential: credential,
                     remoteID: job.remoteID,
                     uploadID: uploadID,
-                    fileTransfer: job.kind == .file
+                    fileTransfer: job.kind == .file,
+                    recipientMailboxID: job.recipientMailboxID
                 ),
                 bodyFile
             )
@@ -365,7 +369,8 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
                     credential: credential,
                     remoteID: job.remoteID,
                     uploadID: uploadID,
-                    fileTransfer: job.kind == .file
+                    fileTransfer: job.kind == .file,
+                    recipientMailboxID: job.recipientMailboxID
                 ),
                 emptyFile
             )

@@ -14,15 +14,16 @@ final class ContentViewModelTests: XCTestCase {
         let model = ContentViewModel(credentialStore: InMemoryCredentialStore(), ledger: ledger,
             uploader: NoOpUploader(), now: Date.init,
             send: { _ in XCTFail("Document input must not trigger automatic sync"); return .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
-            manualFileEnqueue: { urls in
+            manualFileEnqueue: { urls, code in
                 XCTAssertEqual(urls, [url])
+                XCTAssertEqual(code, "651421")
                 return .init(selected: 1, uploaded: 0, failed: 0, failureCategories: [])
             }, manualUpdates: { feed.stream }, photoAuthorizationStatus: .denied)
         XCTAssertNotNil(model.fileTransferReadinessMessage)
         try await model.saveCredential("Bearer synthetic-test")
         XCTAssertNil(model.fileTransferReadinessMessage)
         XCTAssertNotNil(model.manualTransferReadinessMessage)
-        await model.sendSelectedFiles([url])
+        await model.sendSelectedFiles([url], recipientCode: "651421")
         XCTAssertTrue(model.isManualTransferWorking)
         feed.yield(progress(kind: .file, stage: .uploading, selected: 1, currentIndex: 1,
             totalBytes: 100, confirmedBytes: 20, taskBytesSent: 30))
@@ -42,12 +43,15 @@ final class ContentViewModelTests: XCTestCase {
         let model = ContentViewModel(credentialStore: InMemoryCredentialStore(),
             ledger: try UploadLedger(fileURL: temporaryLedgerURL()), uploader: NoOpUploader(), now: Date.init,
             send: { _ in .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
-            manualFileEnqueue: { _ in XCTFail("No enqueue expected"); return .empty },
+            manualFileEnqueue: { _, _ in XCTFail("No enqueue expected"); return .empty },
             photoAuthorizationStatus: .denied)
-        await model.sendSelectedFiles([])
+        await model.sendSelectedFiles([], recipientCode: "651421")
         XCTAssertNil(model.lastManualSummary)
         XCTAssertNil(model.manualTransferMessage)
-        await model.sendSelectedFiles([URL(fileURLWithPath: "/selected.pdf")])
+        await model.sendSelectedFiles(
+            [URL(fileURLWithPath: "/selected.pdf")],
+            recipientCode: "651421"
+        )
         XCTAssertNil(model.lastManualSummary)
         XCTAssertTrue(model.manualTransferMessage?.contains("인증값") == true)
         XCTAssertFalse(model.isManualTransferWorking)
@@ -63,7 +67,7 @@ final class ContentViewModelTests: XCTestCase {
             uploader: NoOpUploader(),
             now: Date.init,
             send: { _ in .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
-            manualFileEnqueue: { urls in
+            manualFileEnqueue: { urls, _ in
                 await gate.beginAndWait()
                 return .init(
                     selected: urls.count,
@@ -76,7 +80,10 @@ final class ContentViewModelTests: XCTestCase {
         )
         await model.refresh()
         let send = Task {
-            await model.sendSelectedFiles([URL(fileURLWithPath: "/external/document.hwpx")])
+            await model.sendSelectedFiles(
+                [URL(fileURLWithPath: "/external/document.hwpx")],
+                recipientCode: "651421"
+            )
         }
 
         for _ in 0..<200 {

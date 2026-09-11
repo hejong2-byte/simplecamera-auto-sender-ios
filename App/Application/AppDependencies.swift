@@ -113,8 +113,11 @@ final class AppDependencies: @unchecked Sendable {
             manualEnqueue: { [manualTransferService] selection, kind in
                 await manualTransferService.enqueue(selection: selection, kind: kind)
             },
-            manualFileEnqueue: { [manualTransferService] urls in
-                await manualTransferService.enqueueFiles(urls)
+            manualFileEnqueue: { [manualTransferService] urls, recipientCode in
+                await manualTransferService.enqueueFiles(
+                    urls,
+                    recipientCode: recipientCode
+                )
             },
             manualUpdates: { [manualTransferService] in
                 await manualTransferService.updates()

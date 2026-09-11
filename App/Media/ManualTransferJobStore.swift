@@ -30,6 +30,7 @@ struct ManualTransferJob: Codable, Sendable, Equatable, Identifiable {
     let capturedAt: Date?
     let sha256: String
     let remoteID: String
+    let recipientMailboxID: UUID?
     let totalBytes: Int64
     var stage: ManualTransferStage
     var uploadID: String?

@@ -8,7 +8,10 @@ final class ContentViewModel: ObservableObject {
         ManualMediaSelection,
         ManualMediaKind
     ) async -> ManualMediaTransferSummary
-    typealias ManualFileEnqueueAction = @Sendable ([URL]) async -> ManualMediaTransferSummary
+    typealias ManualFileEnqueueAction = @Sendable (
+        [URL],
+        String
+    ) async -> ManualMediaTransferSummary
     typealias ManualUpdatesAction = @Sendable () async -> AsyncStream<ManualTransferProgress>
     typealias AutomaticUpdatesAction = @Sendable () -> AsyncStream<AutomaticTransferProgress>
 
@@ -45,7 +48,7 @@ final class ContentViewModel: ObservableObject {
         now: @escaping @Sendable () -> Date,
         send: @escaping SendAction,
         manualEnqueue: @escaping ManualEnqueueAction = { _, _ in .empty },
-        manualFileEnqueue: @escaping ManualFileEnqueueAction = { _ in .empty },
+        manualFileEnqueue: @escaping ManualFileEnqueueAction = { _, _ in .empty },
         manualUpdates: @escaping ManualUpdatesAction = {
             AsyncStream { continuation in continuation.finish() }
         },
@@ -168,7 +171,7 @@ final class ContentViewModel: ObservableObject {
         await refresh()
     }
 
-    func sendSelectedFiles(_ urls: [URL]) async {
+    func sendSelectedFiles(_ urls: [URL], recipientCode: String) async {
         guard !urls.isEmpty, !isManualTransferWorking else { return }
         guard fileTransferReadinessMessage == nil else {
             manualTransferMessage = fileTransferReadinessMessage
@@ -178,7 +181,7 @@ final class ContentViewModel: ObservableObject {
         lastManualSummary = nil
         isManualTransferWorking = true
         manualTransferMessage = "\(urls.count)개 파일 준비 중…"
-        let summary = await manualFileEnqueue(urls)
+        let summary = await manualFileEnqueue(urls, recipientCode)
         // A tiny file may have completed while preparation was returning its summary.
         if let progress = manualProgress,
            progress.kind == .file,

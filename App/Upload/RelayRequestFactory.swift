@@ -61,9 +61,15 @@ struct RelayRequestFactory: Sendable {
         credential: String,
         fingerprint: UploadFileFingerprint,
         metadata: ManualMediaUploadMetadata,
-        fileTransfer: Bool = false
+        fileTransfer: Bool = false,
+        recipientMailboxID: UUID? = nil
     ) throws -> URLRequest {
-        var request = URLRequest(url: fileTransfer ? AppConfiguration.manualFileMultipartEndpoint : AppConfiguration.manualMultipartEndpoint)
+        let endpoint = recipientMailboxID.map { mailboxFilesEndpoint(for: $0) }
+            .map { $0.appendingPathComponent("multipart") }
+            ?? (fileTransfer
+                ? AppConfiguration.manualFileMultipartEndpoint
+                : AppConfiguration.manualMultipartEndpoint)
+        var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         applyManualHeaders(
             to: &request,
@@ -80,14 +86,17 @@ struct RelayRequestFactory: Sendable {
         uploadID: String,
         partNumber: Int,
         partSize: Int,
-        fileTransfer: Bool = false
+        fileTransfer: Bool = false,
+        recipientMailboxID: UUID? = nil
     ) throws -> URLRequest {
-        var request = URLRequest(url: AppConfiguration.manualMultipartEndpoint(
-            id: remoteID,
+        let endpoint = multipartOperationEndpoint(
+            remoteID: remoteID,
             suffix: ["parts", String(partNumber)],
             uploadID: uploadID,
-            fileTransfer: fileTransfer
-        ))
+            fileTransfer: fileTransfer,
+            recipientMailboxID: recipientMailboxID
+        )
+        var request = URLRequest(url: endpoint)
         request.httpMethod = "PUT"
         request.setValue(
             try normalizedCredential(credential),
@@ -102,14 +111,17 @@ struct RelayRequestFactory: Sendable {
         credential: String,
         remoteID: String,
         uploadID: String,
-        fileTransfer: Bool = false
+        fileTransfer: Bool = false,
+        recipientMailboxID: UUID? = nil
     ) throws -> URLRequest {
-        var request = URLRequest(url: AppConfiguration.manualMultipartEndpoint(
-            id: remoteID,
+        let endpoint = multipartOperationEndpoint(
+            remoteID: remoteID,
             suffix: ["complete"],
             uploadID: uploadID,
-            fileTransfer: fileTransfer
-        ))
+            fileTransfer: fileTransfer,
+            recipientMailboxID: recipientMailboxID
+        )
+        var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue(
             try normalizedCredential(credential),
@@ -123,13 +135,16 @@ struct RelayRequestFactory: Sendable {
         credential: String,
         remoteID: String,
         uploadID: String,
-        fileTransfer: Bool = false
+        fileTransfer: Bool = false,
+        recipientMailboxID: UUID? = nil
     ) throws -> URLRequest {
-        var request = URLRequest(url: AppConfiguration.manualMultipartEndpoint(
-            id: remoteID,
+        let endpoint = multipartOperationEndpoint(
+            remoteID: remoteID,
             uploadID: uploadID,
-            fileTransfer: fileTransfer
-        ))
+            fileTransfer: fileTransfer,
+            recipientMailboxID: recipientMailboxID
+        )
+        var request = URLRequest(url: endpoint)
         request.httpMethod = "DELETE"
         request.setValue(
             try normalizedCredential(credential),
@@ -170,6 +185,38 @@ struct RelayRequestFactory: Sendable {
             throw UploadConfigurationError.missingCredential
         }
         return value
+    }
+
+    private func mailboxFilesEndpoint(for mailboxID: UUID) -> URL {
+        AppConfiguration.relayAPIBaseURL
+            .appendingPathComponent("mailboxes")
+            .appendingPathComponent(mailboxID.uuidString.lowercased())
+            .appendingPathComponent("files")
+    }
+
+    private func multipartOperationEndpoint(
+        remoteID: String,
+        suffix: [String] = [],
+        uploadID: String,
+        fileTransfer: Bool,
+        recipientMailboxID: UUID?
+    ) -> URL {
+        guard let recipientMailboxID else {
+            return AppConfiguration.manualMultipartEndpoint(
+                id: remoteID,
+                suffix: suffix,
+                uploadID: uploadID,
+                fileTransfer: fileTransfer
+            )
+        }
+        var url = mailboxFilesEndpoint(for: recipientMailboxID)
+            .appendingPathComponent(remoteID)
+        for component in suffix {
+            url.appendPathComponent(component)
+        }
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "uploadId", value: uploadID)]
+        return components.url!
     }
 
     private static func encodedFileName(_ fileName: String) -> String {

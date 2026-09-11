@@ -21,6 +21,8 @@ final class KakaoFilePickerModel: ObservableObject {
     private let store: KakaoFolderStore
     private var openFilesAfterFolder = false
     private var pendingDirectory: URL?
+    private var activeRequest: DocumentPickerRequest?
+    private var sheetDidDismiss = false
 
     init(store: KakaoFolderStore) {
         self.store = store
@@ -28,7 +30,8 @@ final class KakaoFilePickerModel: ObservableObject {
     }
 
     var isPresenting: Bool {
-        request != nil || isDismissing || pendingDirectory != nil || errorMessage != nil
+        request != nil || activeRequest != nil || isDismissing
+            || pendingDirectory != nil || errorMessage != nil
     }
 
     func beginFileSelection() {
@@ -37,36 +40,49 @@ final class KakaoFilePickerModel: ObservableObject {
         do {
             if let folder = try store.resolve() {
                 folderName = folder.lastPathComponent
-                request = .files(folder)
+                present(.files(folder))
             } else {
-                request = .files(nil)
+                present(.files(nil))
             }
-        } catch { errorMessage = error.localizedDescription }
+        } catch {
+            activeRequest = nil
+            request = nil
+            errorMessage = error.localizedDescription
+        }
     }
 
     func changeFolder() {
         openFilesAfterFolder = false
         errorMessage = nil
-        request = .folder(try? store.resolve())
+        present(.folder(try? store.resolve()))
     }
 
     func reselectAfterError() {
         errorMessage = nil
-        request = .folder(nil)
+        present(.folder(nil))
     }
 
     func accept(_ urls: [URL]) -> [URL] {
-        guard let current = request else { return [] }
+        guard let current = activeRequest ?? request else { return [] }
         guard !urls.isEmpty else { cancel(); return [] }
+        let wasDismissed = sheetDidDismiss
         request = nil
-        isDismissing = true
+        activeRequest = nil
+        sheetDidDismiss = false
+        isDismissing = !wasDismissed
         switch current {
         case .folder:
             do {
                 let folder = urls[0]
                 try store.save(folder)
                 folderName = folder.lastPathComponent
-                if openFilesAfterFolder { pendingDirectory = folder }
+                if openFilesAfterFolder {
+                    if wasDismissed {
+                        present(.files(folder))
+                    } else {
+                        pendingDirectory = folder
+                    }
+                }
             } catch { errorMessage = error.localizedDescription }
             return []
         case .files:
@@ -76,8 +92,10 @@ final class KakaoFilePickerModel: ObservableObject {
     }
 
     func cancel() {
-        isDismissing = request != nil
+        isDismissing = request != nil || activeRequest != nil
         request = nil
+        activeRequest = nil
+        sheetDidDismiss = false
         pendingDirectory = nil
         openFilesAfterFolder = false
         errorMessage = nil
@@ -85,9 +103,19 @@ final class KakaoFilePickerModel: ObservableObject {
 
     func didDismiss() {
         isDismissing = false
+        if activeRequest != nil {
+            sheetDidDismiss = true
+            return
+        }
         if let folder = pendingDirectory {
             pendingDirectory = nil
-            request = .files(folder)
+            present(.files(folder))
         }
+    }
+
+    private func present(_ request: DocumentPickerRequest) {
+        activeRequest = request
+        sheetDidDismiss = false
+        self.request = request
     }
 }
