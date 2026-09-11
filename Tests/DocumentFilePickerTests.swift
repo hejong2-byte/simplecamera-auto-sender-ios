@@ -5,6 +5,64 @@ import XCTest
 
 @MainActor
 final class DocumentFilePickerTests: XCTestCase {
+    func testFileSelectionIsCapturedBeforePickerDelegateReturns() {
+        let url = URL(fileURLWithPath: "/external/선택 문서.hwpx")
+        var capturedURLs: [URL] = []
+        let picker = DocumentFilePicker(
+            request: .files(nil),
+            selectionAccess: DocumentSelectionAccess(
+                startAccessing: { _ in false },
+                stopAccessing: { _ in }
+            ),
+            onSelection: { capturedURLs = $0 },
+            onCancel: { XCTFail("Selection must not be treated as cancellation") }
+        )
+        let coordinator = picker.makeCoordinator()
+        let controller = UIDocumentPickerViewController(
+            forOpeningContentTypes: [.item],
+            asCopy: false
+        )
+
+        coordinator.documentPicker(controller, didPickDocumentsAt: [url])
+
+        XCTAssertEqual(
+            capturedURLs,
+            [url],
+            "The sheet can dismiss immediately after this delegate returns, so selection state must be captured synchronously"
+        )
+    }
+
+    func testFolderSelectionIsSavedBeforePickerDelegateReturns() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let folder = root.appendingPathComponent("기본 파일 폴더", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = KakaoFolderStore(fileURL: root.appendingPathComponent("state/folder.json"))
+        let model = KakaoFilePickerModel(store: store)
+        model.changeFolder()
+        let request = try XCTUnwrap(model.request)
+        let picker = DocumentFilePicker(
+            request: request,
+            selectionAccess: DocumentSelectionAccess(
+                startAccessing: { _ in false },
+                stopAccessing: { _ in }
+            ),
+            onSelection: { _ = model.accept($0) },
+            onCancel: { XCTFail("Selection must not be treated as cancellation") }
+        )
+        let coordinator = picker.makeCoordinator()
+        let controller = UIDocumentPickerViewController(
+            forOpeningContentTypes: [.folder],
+            asCopy: false
+        )
+
+        coordinator.documentPicker(controller, didPickDocumentsAt: [folder])
+
+        XCTAssertEqual(model.folderName, folder.lastPathComponent)
+        XCTAssertNotNil(try store.resolve(), "The chosen default folder must survive a new picker launch")
+    }
+
     func testPickedURLsKeepSecurityScopeUntilAsyncHandoffCompletes() async {
         let url = URL(fileURLWithPath: "/external/카카오톡 문서.hwpx")
         let probe = SecurityScopeProbe()
