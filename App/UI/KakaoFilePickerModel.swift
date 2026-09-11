@@ -52,7 +52,9 @@ final class KakaoFilePickerModel: ObservableObject {
     }
 
     func changeFolder() {
-        openFilesAfterFolder = false
+        if activeRequest == nil && request == nil {
+            openFilesAfterFolder = false
+        }
         errorMessage = nil
         present(.folder(try? store.resolve()))
     }
