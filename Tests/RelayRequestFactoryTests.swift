@@ -27,6 +27,58 @@ final class RelayRequestFactoryTests: XCTestCase {
         XCTAssertEqual(media.url?.path, "/api/photos/\(fingerprint.remoteID)")
     }
 
+    func testTargetedFilesUseTheSelectedPCMailboxForEveryMultipartRequest() throws {
+        let factory = RelayRequestFactory()
+        let fingerprint = UploadFileFingerprint(
+            sha256: String(repeating: "a", count: 64),
+            size: 20,
+            remoteID: "123e4567-e89b-42d3-a456-426614174000"
+        )
+        let metadata = ManualMediaUploadMetadata(
+            fileName: "현장 자료.hwpx",
+            contentType: "application/octet-stream",
+            capturedAt: nil
+        )
+        let mailbox = try PCFileMailbox.identifier(for: "651421")
+        let prefix = "/api/mailboxes/53434d52-0000-4000-8000-000000651421/files"
+
+        let start = try factory.makeMultipartStartRequest(
+            credential: "Bearer test",
+            fingerprint: fingerprint,
+            metadata: metadata,
+            fileTransfer: true,
+            recipientMailboxID: mailbox
+        )
+        let part = try factory.makeMultipartPartRequest(
+            credential: "Bearer test",
+            remoteID: fingerprint.remoteID,
+            uploadID: "upload-1",
+            partNumber: 1,
+            partSize: 20,
+            fileTransfer: true,
+            recipientMailboxID: mailbox
+        )
+        let complete = try factory.makeMultipartCompleteRequest(
+            credential: "Bearer test",
+            remoteID: fingerprint.remoteID,
+            uploadID: "upload-1",
+            fileTransfer: true,
+            recipientMailboxID: mailbox
+        )
+        let abort = try factory.makeMultipartAbortRequest(
+            credential: "Bearer test",
+            remoteID: fingerprint.remoteID,
+            uploadID: "upload-1",
+            fileTransfer: true,
+            recipientMailboxID: mailbox
+        )
+
+        XCTAssertEqual(start.url?.path, "\(prefix)/multipart")
+        XCTAssertEqual(part.url?.path, "\(prefix)/\(fingerprint.remoteID)/parts/1")
+        XCTAssertEqual(complete.url?.path, "\(prefix)/\(fingerprint.remoteID)/complete")
+        XCTAssertEqual(abort.url?.path, "\(prefix)/\(fingerprint.remoteID)")
+    }
+
     func testRequestMatchesRelayContract() throws {
         let request = try RelayRequestFactory().makeUploadRequest(credential: "test-secret")
         XCTAssertEqual(request.url, AppConfiguration.relayEndpoint)

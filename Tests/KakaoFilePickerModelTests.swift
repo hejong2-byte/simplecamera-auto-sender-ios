@@ -27,12 +27,30 @@ final class KakaoFilePickerModelTests: XCTestCase {
         model.beginFileSelection()
 
         model.request = nil
+        model.didDismiss()
 
         XCTAssertEqual(
             model.accept([selected]),
             [selected],
             "iOS can clear the sheet binding before the picker delegate delivers the selected URLs"
         )
+        XCTAssertFalse(model.isPresenting)
+    }
+
+    func testFolderSelectionStillAdvancesWhenSystemDismissesBeforeDelegateCallback() throws {
+        let (root, store) = try fixture()
+        let folder = root.appendingPathComponent("업무 다운로드", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let model = KakaoFilePickerModel(store: store)
+        model.beginFileSelection()
+        model.changeFolder()
+
+        model.request = nil
+        model.didDismiss()
+
+        XCTAssertTrue(model.accept([folder]).isEmpty)
+        XCTAssertEqual(model.request, .files(folder))
+        XCTAssertEqual(model.folderName, folder.lastPathComponent)
     }
 
     func testSavedFolderIsUsedOnNextLaunchAndSettingsReselectDoesNotSend() throws {

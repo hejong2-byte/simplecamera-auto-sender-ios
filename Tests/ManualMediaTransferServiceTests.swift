@@ -68,6 +68,31 @@ final class ManualMediaTransferServiceTests: XCTestCase {
         XCTAssertTrue(job.parts.allSatisfy { !FileManager.default.fileExists(atPath: $0.fileURL.path) })
     }
 
+    func testTargetedDocumentPersistsPCMailboxAndUsesMultipartEvenWhenSmall() async throws {
+        let root = temporaryDirectory()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let original = root.appendingPathComponent("현장 자료.hwpx")
+        try Data("document".utf8).write(to: original)
+        let engine = RecordingManualTransferEngine()
+        let service = ManualMediaTransferService(
+            source: FakeManualMediaSource(directory: root),
+            jobStore: ManualTransferJobStore(fileURL: root.appendingPathComponent("queue.json")),
+            engine: engine,
+            exportDirectory: root.appendingPathComponent("exports")
+        )
+
+        let summary = await service.enqueueFiles([original], recipientCode: "651421")
+        let job = try XCTUnwrap(await engine.recordedJobs().first)
+
+        XCTAssertEqual(summary.failed, 0)
+        XCTAssertEqual(
+            job.recipientMailboxID?.uuidString.lowercased(),
+            "53434d52-0000-4000-8000-000000651421"
+        )
+        XCTAssertEqual(job.parts.count, 1, "PC mailbox uploads always use resumable multipart")
+        XCTAssertEqual(job.parts.first?.size, Int64("document".utf8.count))
+    }
+
     func testEmptyDocumentSelectionDoesNotCreateAnyBatchOrStagingFile() async throws {
         let root = temporaryDirectory()
         let stateURL = root.appendingPathComponent("queue.json")
