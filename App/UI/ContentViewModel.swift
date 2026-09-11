@@ -265,7 +265,12 @@ final class ContentViewModel: ObservableObject {
         guard let progress = manualProgress else { return "수동 전송 상태" }
         switch progress.stage {
         case .idle: return "전송 대기"
-        case .preparing: return "파일 준비 중"
+        case .preparing:
+            switch progress.preparationPhase {
+            case .copyingDocument?: return "선택 파일 가져오는 중"
+            case .fingerprinting?: return "파일 무결성 확인 중"
+            case nil: return "파일 준비 중"
+            }
         case .starting: return "백그라운드 전송 시작 중"
         case .uploading: return "PC로 전송 중"
         case .retrying: return "연결 재시도 중"
@@ -370,7 +375,15 @@ final class ContentViewModel: ObservableObject {
         case .idle:
             return "전송할 종류를 선택하세요."
         case .preparing:
-            return "\(progress.kind.title) 준비 중 · \(progress.currentIndex)/\(progress.selectedCount)"
+            let position = "\(progress.currentIndex)/\(progress.selectedCount)"
+            switch progress.preparationPhase {
+            case .copyingDocument?:
+                return "선택 파일 가져오는 중 · \(progress.percent)% · \(position)"
+            case .fingerprinting?:
+                return "파일 무결성 확인 중 · \(progress.percent)% · \(position)"
+            case nil:
+                return "\(progress.kind.title) 준비 중 · \(position)"
+            }
         case .starting:
             return "\(progress.kind.title) 백그라운드 시작 중"
         case .uploading:

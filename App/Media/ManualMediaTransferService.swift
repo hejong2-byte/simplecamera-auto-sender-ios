@@ -86,7 +86,7 @@ actor ManualMediaTransferService: ManualMediaTransferring {
         selection: ManualMediaSelection,
         kind: ManualMediaKind
     ) async -> ManualMediaTransferSummary {
-        await enqueue(selection: selection, kind: kind) { [source, exportDirectory] identifier in
+        await enqueue(selection: selection, kind: kind) { [source, exportDirectory] identifier, _ in
             try await source.exportOriginal(assetIdentifier: identifier, kind: kind, to: exportDirectory)
         }
     }
@@ -99,16 +99,24 @@ actor ManualMediaTransferService: ManualMediaTransferring {
         let source = ManualDocumentSource(maxBytes: maxBytes)
         return await enqueue(
             selection: ManualMediaSelection(assetIdentifiers: identifiers, unavailableCount: 0), kind: .file
-        ) { [exportDirectory] identifier in
+        ) { [exportDirectory] identifier, onProgress in
             guard let url = files[identifier] else { throw ManualDocumentSourceError.unavailable }
-            return try await source.exportOriginal(fileURL: url, identifier: identifier, to: exportDirectory)
+            return try await source.exportOriginal(
+                fileURL: url,
+                identifier: identifier,
+                to: exportDirectory,
+                onProgress: onProgress
+            )
         }
     }
 
     private func enqueue(
         selection: ManualMediaSelection,
         kind: ManualMediaKind,
-        export: @Sendable (String) async throws -> ManualMediaExport
+        export: (
+            String,
+            (Int64, Int64) -> Void
+        ) async throws -> ManualMediaExport
     ) async -> ManualMediaTransferSummary {
         var seen = Set<String>()
         let identifiers = selection.assetIdentifiers.filter { seen.insert($0).inserted }
@@ -150,10 +158,29 @@ actor ManualMediaTransferService: ManualMediaTransferring {
             var partURLs: [URL] = []
             var preparationRecorded = false
             do {
-                let exported = try await export(identifier)
+                let exported = try await export(identifier) { processedBytes, totalBytes in
+                    publish(preparationProgress(
+                        batch: batch,
+                        currentIndex: currentIndex,
+                        stage: .preparing,
+                        totalBytes: totalBytes,
+                        processedBytes: processedBytes,
+                        preparationPhase: kind == .file ? .copyingDocument : nil
+                    ))
+                }
                 exportedFileURL = exported.fileURL
                 let fingerprint = try UploadFileFingerprinter.fingerprint(
-                    fileURL: exported.fileURL
+                    fileURL: exported.fileURL,
+                    onProgress: { processedBytes, totalBytes in
+                        publish(preparationProgress(
+                            batch: batch,
+                            currentIndex: currentIndex,
+                            stage: .preparing,
+                            totalBytes: totalBytes,
+                            processedBytes: processedBytes,
+                            preparationPhase: .fingerprinting
+                        ))
+                    }
                 )
                 guard fingerprint.size <= maxBytes else {
                     throw ManualMediaUploadError.fileTooLarge(maxBytes: maxBytes)
@@ -257,6 +284,8 @@ actor ManualMediaTransferService: ManualMediaTransferring {
         currentIndex: Int,
         stage: ManualTransferStage,
         totalBytes: Int64 = 0,
+        processedBytes: Int64 = 0,
+        preparationPhase: ManualPreparationPhase? = nil,
         failure: ManualTransferFailure? = nil
     ) -> ManualTransferProgress {
         ManualTransferProgress(
@@ -269,9 +298,10 @@ actor ManualMediaTransferService: ManualMediaTransferring {
             stage: stage,
             totalBytes: totalBytes,
             confirmedBytes: 0,
-            taskBytesSent: 0,
+            taskBytesSent: processedBytes,
             retryAttempt: 0,
-            failure: failure
+            failure: failure,
+            preparationPhase: preparationPhase
         )
     }
 

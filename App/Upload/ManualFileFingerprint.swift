@@ -8,17 +8,24 @@ struct UploadFileFingerprint: Sendable, Equatable {
 }
 
 enum UploadFileFingerprinter {
-    static func fingerprint(fileURL: URL) throws -> UploadFileFingerprint {
+    static func fingerprint(
+        fileURL: URL,
+        onProgress: (Int64, Int64) -> Void = { _, _ in }
+    ) throws -> UploadFileFingerprint {
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let totalBytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
 
         var hasher = SHA256()
         var size: Int64 = 0
+        onProgress(0, totalBytes)
         while true {
             let chunk = try handle.read(upToCount: 1024 * 1024) ?? Data()
             guard !chunk.isEmpty else { break }
             size += Int64(chunk.count)
             hasher.update(data: chunk)
+            onProgress(size, totalBytes)
         }
 
         let digest = Array(hasher.finalize())

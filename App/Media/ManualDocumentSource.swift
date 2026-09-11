@@ -20,7 +20,12 @@ enum ManualDocumentSourceError: LocalizedError {
 struct ManualDocumentSource: Sendable {
     var maxBytes: Int64 = ManualMediaUploadLimit.maxBytes
 
-    func exportOriginal(fileURL: URL, identifier: String, to directory: URL) async throws -> ManualMediaExport {
+    func exportOriginal(
+        fileURL: URL,
+        identifier: String,
+        to directory: URL,
+        onProgress: (Int64, Int64) -> Void = { _, _ in }
+    ) async throws -> ManualMediaExport {
         try Task.checkCancellation()
         guard fileURL.isFileURL else { throw ManualDocumentSourceError.unavailable }
         let scoped = fileURL.startAccessingSecurityScopedResource()
@@ -43,7 +48,12 @@ struct ManualDocumentSource: Sendable {
                 }
                 guard size <= maxBytes else { throw ManualMediaUploadError.fileTooLarge(maxBytes: maxBytes) }
                 try manager.createDirectory(at: directory, withIntermediateDirectories: true)
-                try manager.copyItem(at: coordinatedURL, to: destination)
+                try copyFile(
+                    from: coordinatedURL,
+                    to: destination,
+                    totalBytes: size,
+                    onProgress: onProgress
+                )
                 let after = try manager.attributesOfItem(atPath: coordinatedURL.path)
                 let copy = try manager.attributesOfItem(atPath: destination.path)
                 guard after[.type] as? FileAttributeType == .typeRegular,
@@ -83,5 +93,34 @@ struct ManualDocumentSource: Sendable {
             }
             throw ManualDocumentSourceError.unavailable
         }
+    }
+
+    private func copyFile(
+        from source: URL,
+        to destination: URL,
+        totalBytes: Int64,
+        onProgress: (Int64, Int64) -> Void
+    ) throws {
+        guard FileManager.default.createFile(atPath: destination.path, contents: nil) else {
+            throw ManualDocumentSourceError.unavailable
+        }
+        let sourceHandle = try FileHandle(forReadingFrom: source)
+        let destinationHandle = try FileHandle(forWritingTo: destination)
+        defer {
+            try? sourceHandle.close()
+            try? destinationHandle.close()
+        }
+
+        var copiedBytes: Int64 = 0
+        onProgress(0, totalBytes)
+        while true {
+            try Task.checkCancellation()
+            let chunk = try sourceHandle.read(upToCount: 4 * 1024 * 1024) ?? Data()
+            guard !chunk.isEmpty else { break }
+            try destinationHandle.write(contentsOf: chunk)
+            copiedBytes += Int64(chunk.count)
+            onProgress(copiedBytes, totalBytes)
+        }
+        try destinationHandle.synchronize()
     }
 }

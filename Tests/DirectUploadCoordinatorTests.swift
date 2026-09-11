@@ -127,6 +127,27 @@ final class DirectUploadCoordinatorTests: XCTestCase {
         XCTAssertEqual(first.remoteID[first.remoteID.index(first.remoteID.startIndex, offsetBy: 14)], "4")
     }
 
+    func testFingerprintReportsActualBytesThroughCompletion() throws {
+        let directory = temporaryDirectory()
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        let fileURL = directory.appendingPathComponent("large.mov")
+        let byteCount = 2 * 1024 * 1024 + 17
+        try Data(repeating: 7, count: byteCount).write(to: fileURL)
+        var updates: [(sent: Int64, total: Int64)] = []
+
+        _ = try UploadFileFingerprinter.fingerprint(fileURL: fileURL) { sent, total in
+            updates.append((sent, total))
+        }
+
+        XCTAssertEqual(updates.first?.sent, 0)
+        XCTAssertEqual(updates.last?.sent, Int64(byteCount))
+        XCTAssertTrue(updates.allSatisfy { $0.total == Int64(byteCount) })
+        XCTAssertEqual(updates.map(\.sent), updates.map(\.sent).sorted())
+    }
+
     private func temporaryDirectory() -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

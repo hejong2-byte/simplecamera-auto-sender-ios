@@ -217,6 +217,27 @@ final class ContentViewModelTests: XCTestCase {
         XCTAssertFalse(model.isManualTransferWorking)
     }
 
+    func testManualPreparationMessageShowsBytePercentWhenFingerprinting() async throws {
+        let feed = ManualProgressFeed()
+        let model = makeModel(manualUpdates: { feed.stream })
+        feed.yield(progress(
+            kind: .file,
+            stage: .preparing,
+            selected: 1,
+            currentIndex: 1,
+            uploaded: 0,
+            failed: 0,
+            totalBytes: 200,
+            confirmedBytes: 0,
+            taskBytesSent: 50,
+            preparationPhase: .fingerprinting
+        ))
+
+        await waitUntil { model.manualProgress?.percent == 25 }
+        XCTAssertEqual(model.manualStageTitle, "파일 무결성 확인 중")
+        XCTAssertEqual(model.manualTransferMessage, "파일 무결성 확인 중 · 25% · 1/1")
+    }
+
     func testCompletedProgressEndsManualWorkingState() async throws {
         let ledger = try UploadLedger(fileURL: temporaryLedgerURL())
         let credentials = InMemoryCredentialStore()
@@ -434,7 +455,8 @@ final class ContentViewModelTests: XCTestCase {
         confirmedBytes: Int64 = 0,
         taskBytesSent: Int64 = 0,
         retryAttempt: Int = 0,
-        failure: ManualTransferFailure? = nil
+        failure: ManualTransferFailure? = nil,
+        preparationPhase: ManualPreparationPhase? = nil
     ) -> ManualTransferProgress {
         ManualTransferProgress(
             batchID: UUID(),
@@ -448,7 +470,8 @@ final class ContentViewModelTests: XCTestCase {
             confirmedBytes: confirmedBytes,
             taskBytesSent: taskBytesSent,
             retryAttempt: retryAttempt,
-            failure: failure
+            failure: failure,
+            preparationPhase: preparationPhase
         )
     }
 

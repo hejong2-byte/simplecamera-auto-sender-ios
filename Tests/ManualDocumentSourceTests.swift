@@ -55,6 +55,27 @@ final class ManualDocumentSourceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: original).count, 6)
     }
 
+    func testCopyReportsMonotonicByteProgressThroughCompletion() async throws {
+        let root = try fixture()
+        let original = root.appendingPathComponent("large-document.bin")
+        let byteCount = 5 * 1024 * 1024 + 17
+        try Data(repeating: 9, count: byteCount).write(to: original)
+        var updates: [(copied: Int64, total: Int64)] = []
+
+        _ = try await ManualDocumentSource().exportOriginal(
+            fileURL: original,
+            identifier: "progress-test",
+            to: root.appendingPathComponent("staged"),
+            onProgress: { copied, total in updates.append((copied, total)) }
+        )
+
+        XCTAssertEqual(updates.first?.copied, 0)
+        XCTAssertEqual(updates.last?.copied, Int64(byteCount))
+        XCTAssertTrue(updates.allSatisfy { $0.total == Int64(byteCount) })
+        XCTAssertEqual(updates.map(\.copied), updates.map(\.copied).sorted())
+        XCTAssertTrue(updates.contains { $0.copied > 0 && $0.copied < $0.total })
+    }
+
     private func fixture() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

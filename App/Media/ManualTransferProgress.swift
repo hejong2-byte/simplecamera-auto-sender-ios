@@ -22,6 +22,11 @@ enum ManualTransferFailure: Codable, Sendable, Equatable {
     case other
 }
 
+enum ManualPreparationPhase: String, Codable, Sendable, Equatable {
+    case copyingDocument
+    case fingerprinting
+}
+
 struct ManualTransferProgress: Codable, Sendable, Equatable {
     let batchID: UUID
     let kind: ManualMediaKind
@@ -35,6 +40,37 @@ struct ManualTransferProgress: Codable, Sendable, Equatable {
     let taskBytesSent: Int64
     let retryAttempt: Int
     let failure: ManualTransferFailure?
+    let preparationPhase: ManualPreparationPhase?
+
+    init(
+        batchID: UUID,
+        kind: ManualMediaKind,
+        selectedCount: Int,
+        currentIndex: Int,
+        uploadedCount: Int,
+        failedCount: Int,
+        stage: ManualTransferStage,
+        totalBytes: Int64,
+        confirmedBytes: Int64,
+        taskBytesSent: Int64,
+        retryAttempt: Int,
+        failure: ManualTransferFailure?,
+        preparationPhase: ManualPreparationPhase? = nil
+    ) {
+        self.batchID = batchID
+        self.kind = kind
+        self.selectedCount = selectedCount
+        self.currentIndex = currentIndex
+        self.uploadedCount = uploadedCount
+        self.failedCount = failedCount
+        self.stage = stage
+        self.totalBytes = totalBytes
+        self.confirmedBytes = confirmedBytes
+        self.taskBytesSent = taskBytesSent
+        self.retryAttempt = retryAttempt
+        self.failure = failure
+        self.preparationPhase = preparationPhase
+    }
 
     var displayedBytesSent: Int64 {
         min(max(confirmedBytes + taskBytesSent, 0), max(totalBytes, 0))
