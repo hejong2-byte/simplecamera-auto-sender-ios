@@ -19,6 +19,22 @@ final class KakaoFilePickerModelTests: XCTestCase {
         XCTAssertNil(try store.resolve(), "File selection must not silently save a folder")
     }
 
+    func testFileSelectionSurvivesSystemSheetClearingItsBindingBeforeDelegateCallback() throws {
+        let (root, store) = try fixture()
+        let selected = root.appendingPathComponent("현장 파일.hwpx")
+        try Data("document".utf8).write(to: selected)
+        let model = KakaoFilePickerModel(store: store)
+        model.beginFileSelection()
+
+        model.request = nil
+
+        XCTAssertEqual(
+            model.accept([selected]),
+            [selected],
+            "iOS can clear the sheet binding before the picker delegate delivers the selected URLs"
+        )
+    }
+
     func testSavedFolderIsUsedOnNextLaunchAndSettingsReselectDoesNotSend() throws {
         let (root, store) = try fixture()
         try store.save(root)
