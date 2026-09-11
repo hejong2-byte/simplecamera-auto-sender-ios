@@ -246,7 +246,7 @@ final class ContentViewModel: ObservableObject {
         }
         var detail = "\(kind.title): \(summary.uploaded)개 완료, \(summary.failed)개 실패"
         if summary.failureCategories.contains(.tooLarge) {
-            detail += " (2GiB 초과 파일 포함)"
+            detail += " (500GiB 이상 파일 포함)"
         } else if summary.failureCategories.contains(.storage) {
             detail += " (iPhone 전송 준비 공간 부족)"
         } else if summary.failureCategories.contains(.fileAccess) {
@@ -405,7 +405,7 @@ final class ContentViewModel: ObservableObject {
         case .unsupported?:
             return prefix + " · 지원하지 않는 형식입니다."
         case .tooLarge?:
-            return prefix + " · 2GiB를 초과한 파일입니다."
+            return prefix + " · 500GiB 미만 파일만 전송할 수 있습니다."
         case .fileAccess?:
             return prefix + " · 파일 앱의 다운로드와 접근 권한을 확인해 주세요."
         case .storage?:

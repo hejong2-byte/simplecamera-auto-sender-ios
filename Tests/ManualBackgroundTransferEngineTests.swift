@@ -47,7 +47,8 @@ final class ManualBackgroundTransferEngineTests: XCTestCase {
         )
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: firstPartURL.path))
-        XCTAssertEqual(await scheduler.recorded().map(\.descriptor.operation), [.part(number: 2)])
+        let scheduled = await scheduler.recorded().map(\.descriptor.operation)
+        XCTAssertEqual(scheduled, [.part(number: 2)])
     }
 
     func testRestoredFileJobsKeepTheirDedicatedRouteOnRetry() async throws {

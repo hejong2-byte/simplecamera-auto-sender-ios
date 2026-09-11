@@ -65,7 +65,7 @@ final class ManualMediaTransferServiceTests: XCTestCase {
         let restored = try await ManualTransferJobStore(fileURL: stateURL).load()
         XCTAssertEqual(restored.jobs.first?.kind, .file)
         XCTAssertEqual(restored.jobs.first?.exportedFileURL, job.exportedFileURL)
-        XCTAssertTrue(job.parts.allSatisfy { FileManager.default.fileExists(atPath: $0.fileURL.path) })
+        XCTAssertTrue(job.parts.allSatisfy { !FileManager.default.fileExists(atPath: $0.fileURL.path) })
     }
 
     func testEmptyDocumentSelectionDoesNotCreateAnyBatchOrStagingFile() async throws {
@@ -122,7 +122,7 @@ final class ManualMediaTransferServiceTests: XCTestCase {
         })
     }
 
-    func testLargeVideoIsSplitIntoExactPersistentPartsBeforeEnqueue() async throws {
+    func testLargeVideoPlansExactPartsWithoutDuplicatingPayloadBeforeEnqueue() async throws {
         let directory = temporaryDirectory()
         let store = ManualTransferJobStore(fileURL: directory.appendingPathComponent("queue.json"))
         let source = FakeManualMediaSource(
@@ -151,7 +151,7 @@ final class ManualMediaTransferServiceTests: XCTestCase {
         XCTAssertEqual(job.parts.map(\.number), [1, 2, 3])
         XCTAssertEqual(job.parts.map(\.size), [4, 4, 2])
         XCTAssertTrue(job.parts.allSatisfy {
-            FileManager.default.fileExists(atPath: $0.fileURL.path)
+            !FileManager.default.fileExists(atPath: $0.fileURL.path)
         })
     }
 

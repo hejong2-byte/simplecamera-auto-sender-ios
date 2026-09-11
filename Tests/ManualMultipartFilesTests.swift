@@ -34,7 +34,11 @@ final class ManualMultipartFilesTests: XCTestCase {
             !FileManager.default.fileExists(atPath: $0.fileURL.path)
         })
 
-        try ManualMultipartFiles.materializePart(source: sourceURL, part: parts[1])
+        try ManualMultipartFiles.materializePart(
+            source: sourceURL,
+            part: parts[1],
+            allParts: parts
+        )
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: parts[0].fileURL.path))
         XCTAssertEqual(try Data(contentsOf: parts[1].fileURL), Data([4, 5, 6, 7]))

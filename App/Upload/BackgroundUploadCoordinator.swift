@@ -41,9 +41,23 @@ enum ManualMediaUploadError: Error, Equatable {
 }
 
 enum ManualMediaUploadLimit {
-    static let maxBytes: Int64 = 2 * 1024 * 1024 * 1024
+    static let maxBytes: Int64 = 500 * 1024 * 1024 * 1024 - 1
     static let singleRequestMaxBytes: Int64 = 95 * 1024 * 1024
-    static let multipartPartBytes = 32 * 1024 * 1024
+    static let defaultMultipartPartBytes = 32 * 1024 * 1024
+    static let maximumPartBytes = 95 * 1024 * 1024
+    static let maximumMultipartPartCount: Int64 = 10_000
+
+    static func multipartPartBytes(for fileBytes: Int64) -> Int {
+        guard fileBytes > 0 else { return defaultMultipartPartBytes }
+        let mebibyte = Int64(1024 * 1024)
+        let required = (fileBytes + maximumMultipartPartCount - 1)
+            / maximumMultipartPartCount
+        let roundedToMiB = ((required + mebibyte - 1) / mebibyte) * mebibyte
+        return Int(min(
+            max(Int64(defaultMultipartPartBytes), roundedToMiB),
+            Int64(maximumPartBytes)
+        ))
+    }
 }
 
 private final class URLSessionFileUploader: NSObject,

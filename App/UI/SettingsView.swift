@@ -6,7 +6,6 @@ struct SettingsView: View {
     @ObservedObject var receiverModel: USBReceiverViewModel
     @ObservedObject var filePickerModel: KakaoFilePickerModel
     @State private var credential = ""
-    @State private var showingResetConfirmation = false
 
     var body: some View {
         ScrollView {
@@ -18,31 +17,11 @@ struct SettingsView: View {
                 automationCard
                 receiverSettingsCard
                 storageManagementCard
-                statusCard
-                recoveryCard
             }
             .padding()
         }
         .background(Color(.systemGroupedBackground))
         .navigationTitle("설정")
-        .confirmationDialog(
-            "자동 전송 기록을 초기화할까요?",
-            isPresented: $showingResetConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("초기화", role: .destructive) {
-                Task { await model.resetMonitoring() }
-            }
-            Button("취소", role: .cancel) {}
-        } message: {
-            Text("초기화한 시점 이전 사진은 다시 전송되지 않습니다.")
-        }
-        .onChange(of: showingResetConfirmation) { _, showing in
-            receiverModel.isShowingSettingsConfirmation = showing
-        }
-        .onDisappear {
-            receiverModel.isShowingSettingsConfirmation = false
-        }
     }
 
     private var kakaoFolderCard: some View {
@@ -195,53 +174,6 @@ struct SettingsView: View {
         }
     }
 
-    private var statusCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("자동 전송 상태").font(.headline)
-            HStack {
-                statusValue("대기", model.queuedCount)
-                statusValue("완료", model.uploadedCount)
-                statusValue("실패", model.failedCount)
-            }
-            if let summary = model.lastSummary {
-                Text("최근 실행: \(summary.matched)장 확인, \(summary.uploaded)장 전송 완료")
-                    .font(.caption)
-            }
-            if let failure = model.automaticFailureMessage {
-                Label("실패 원인: \(failure)", systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-            if let error = model.lastError {
-                Text(error).font(.caption).foregroundStyle(.red)
-            }
-        }
-        .cardStyle()
-    }
-
-    private var recoveryCard: some View {
-        VStack(spacing: 10) {
-            Text("아래 기능은 자동화 오류 복구용입니다.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Button("지금 전송") {
-                Task { await model.sendNow() }
-            }
-            .buttonStyle(.borderedProminent)
-            .frame(maxWidth: .infinity)
-            .disabled(model.isWorking)
-            Button("실패 사진 재시도") {
-                Task { await model.retryFailed() }
-            }
-            .buttonStyle(.bordered)
-            .disabled(model.isWorking || model.failedCount == 0)
-            Button("자동 전송 초기화", role: .destructive) {
-                showingResetConfirmation = true
-            }
-        }
-        .cardStyle()
-    }
-
     private func setupCard<Content: View>(
         number: Int,
         title: String,
@@ -252,14 +184,6 @@ struct SettingsView: View {
             content()
         }
         .cardStyle()
-    }
-
-    private func statusValue(_ title: String, _ value: Int) -> some View {
-        VStack {
-            Text("\(value)").font(.title2.bold())
-            Text(title).font(.caption).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
     }
 
     private var photoAccessText: String {

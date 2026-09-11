@@ -41,7 +41,7 @@ actor ManualMediaTransferService: ManualMediaTransferring {
     private let exportDirectory: URL
     private let maxBytes: Int64
     private let singleRequestMaxBytes: Int64
-    private let multipartPartBytes: Int
+    private let multipartPartBytes: Int?
     private var continuations: [UUID: AsyncStream<ManualTransferProgress>.Continuation] = [:]
     private var engineBridgeTask: Task<Void, Never>?
 
@@ -52,7 +52,7 @@ actor ManualMediaTransferService: ManualMediaTransferring {
         exportDirectory: URL,
         maxBytes: Int64 = ManualMediaUploadLimit.maxBytes,
         singleRequestMaxBytes: Int64 = ManualMediaUploadLimit.singleRequestMaxBytes,
-        multipartPartBytes: Int = ManualMediaUploadLimit.multipartPartBytes
+        multipartPartBytes: Int? = nil
     ) {
         self.source = source
         self.jobStore = jobStore
@@ -166,24 +166,14 @@ actor ManualMediaTransferService: ManualMediaTransferring {
                         "Multipart-\(jobID.uuidString)",
                         isDirectory: true
                     )
-                    partURLs = try ManualMultipartFiles.makeParts(
+                    let selectedPartBytes = multipartPartBytes
+                        ?? ManualMediaUploadLimit.multipartPartBytes(for: fingerprint.size)
+                    parts = try ManualMultipartFiles.planParts(
                         source: exported.fileURL,
                         directory: partDirectory,
-                        partBytes: multipartPartBytes
+                        partBytes: selectedPartBytes
                     )
-                    parts = try partURLs.enumerated().map { offset, url in
-                        let values = try url.resourceValues(forKeys: [.fileSizeKey])
-                        guard let size = values.fileSize else {
-                            throw CocoaError(.fileReadUnknown)
-                        }
-                        return ManualTransferPart(
-                            number: offset + 1,
-                            fileURL: url,
-                            size: Int64(size),
-                            etag: nil,
-                            retryAttempt: 0
-                        )
-                    }
+                    partURLs = parts.map(\.fileURL)
                 }
 
                 batch = try await jobStore.advanceBatch(

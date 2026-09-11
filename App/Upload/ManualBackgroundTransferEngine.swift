@@ -214,6 +214,7 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
         let missing = job.parts
             .filter { $0.etag == nil }
             .sorted { $0.number < $1.number }
+            .prefix(1)
             .map { ManualUploadOperation.part(number: $0.number) }
         return missing.isEmpty ? [.complete] : missing
     }
@@ -314,6 +315,11 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
                   let part = job.parts.first(where: { $0.number == number }) else {
                 throw UploadHTTPError.invalidResponse
             }
+            try ManualMultipartFiles.materializePart(
+                source: job.exportedFileURL,
+                part: part,
+                allParts: job.parts
+            )
             return (
                 try requestFactory.makeMultipartPartRequest(
                     credential: credential,
@@ -455,7 +461,14 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
         state.jobs[jobIndex].parts[partIndex].etag = uploaded.etag
         state.jobs[jobIndex].parts[partIndex].retryAttempt = 0
         state.jobs[jobIndex].stage = .uploading
-        try? await jobStore.replace(state)
+        do {
+            try await jobStore.replace(state)
+        } catch {
+            return
+        }
+        try? FileManager.default.removeItem(
+            at: state.jobs[jobIndex].parts[partIndex].fileURL
+        )
         publish(progress(for: state.jobs[jobIndex], in: state))
     }
 
