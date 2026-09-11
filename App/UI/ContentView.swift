@@ -138,7 +138,10 @@ struct ContentView: View {
                 set: { if !$0 { filePickerModel.errorMessage = nil } }
             )) {
                 Button("폴더 다시 선택") { filePickerModel.reselectAfterError() }
-                Button("취소", role: .cancel) { filePickerModel.cancel() }
+                Button("취소", role: .cancel) {
+                    filePickerModel.cancel()
+                    selectedFileRecipientCode = nil
+                }
             } message: {
                 Text(filePickerModel.errorMessage ?? "")
             }
@@ -519,10 +522,10 @@ struct ContentView: View {
             selectedFileRecipientCode = nil
             return
         }
-        openFilePickerAfterRecipientChoice = false
         Task { @MainActor in
             await Task.yield()
             filePickerModel.beginFileSelection()
+            openFilePickerAfterRecipientChoice = false
         }
     }
 
