@@ -172,6 +172,21 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(source.contains("PCReceiveStatusView(status: receiverModel.receiveStatus"))
     }
 
+    func testSettingsDoNotDuplicateAutomaticTransferStatusOrRecoveryActions() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/SettingsView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertFalse(source.contains("자동 전송 상태"))
+        XCTAssertFalse(source.contains("지금 전송"))
+        XCTAssertFalse(source.contains("실패 사진 재시도"))
+        XCTAssertFalse(source.contains("자동 전송 초기화"))
+    }
+
     func testMainScreenLinksToTheTextTransferInterface() throws {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

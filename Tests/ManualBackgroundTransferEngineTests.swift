@@ -3,6 +3,53 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class ManualBackgroundTransferEngineTests: XCTestCase {
+    func testRestoreMaterializesAndSchedulesOnlyTheFirstMissingPart() async throws {
+        let fixture = try await makeFixture(
+            totalBytes: 10,
+            uploadID: "upload-1",
+            partSizes: [4, 4, 2]
+        )
+        for part in fixture.job.parts {
+            try FileManager.default.removeItem(at: part.fileURL)
+        }
+        let scheduler = FakeManualUploadScheduler()
+        let engine = makeEngine(fixture: fixture, scheduler: scheduler)
+
+        await engine.restore()
+
+        let scheduled = await scheduler.recorded()
+        XCTAssertEqual(scheduled.map(\.descriptor.operation), [.part(number: 1)])
+        XCTAssertEqual(try Data(contentsOf: scheduled[0].fileURL), Data(repeating: 1, count: 4))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.job.parts[1].fileURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.job.parts[2].fileURL.path))
+    }
+
+    func testSuccessfulPartDeletesItsTemporaryChunkBeforeSchedulingTheNextPart() async throws {
+        let fixture = try await makeFixture(
+            totalBytes: 10,
+            uploadID: "upload-1",
+            partSizes: [4, 6]
+        )
+        let firstPartURL = fixture.job.parts[0].fileURL
+        let scheduler = FakeManualUploadScheduler()
+        let engine = makeEngine(fixture: fixture, scheduler: scheduler)
+        let descriptor = ManualUploadTaskDescriptor(
+            batchID: fixture.batch.id,
+            jobID: fixture.job.id,
+            operation: .part(number: 1)
+        )
+
+        await engine.taskCompleted(
+            descriptor,
+            response: .success(),
+            body: Data(#"{"partNumber":1,"etag":"etag-1"}"#.utf8),
+            error: nil
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: firstPartURL.path))
+        XCTAssertEqual(await scheduler.recorded().map(\.descriptor.operation), [.part(number: 2)])
+    }
+
     func testRestoredFileJobsKeepTheirDedicatedRouteOnRetry() async throws {
         let cases: [(Int64, String?, [Int64], Set<Int>, String)] = [
             (10, nil, [], [], "/api/files/"),

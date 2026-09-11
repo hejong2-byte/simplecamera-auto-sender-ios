@@ -3,6 +3,44 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class ManualMultipartFilesTests: XCTestCase {
+    func testFiveHundredGiBLimitIsExclusiveAndFitsWithinR2PartLimit() {
+        let fiveHundredGiB = Int64(500) * 1024 * 1024 * 1024
+        let partBytes = ManualMediaUploadLimit.multipartPartBytes(
+            for: ManualMediaUploadLimit.maxBytes
+        )
+        let partCount = (ManualMediaUploadLimit.maxBytes + Int64(partBytes) - 1)
+            / Int64(partBytes)
+
+        XCTAssertEqual(ManualMediaUploadLimit.maxBytes, fiveHundredGiB - 1)
+        XCTAssertLessThanOrEqual(partCount, 10_000)
+        XCTAssertLessThanOrEqual(partBytes, ManualMediaUploadLimit.maximumPartBytes)
+    }
+
+    func testPlansPartsWithoutDuplicatingTheWholeSourceAndMaterializesOnlyRequestedPart() throws {
+        let directory = temporaryDirectory()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let sourceURL = directory.appendingPathComponent("source.bin")
+        let partsDirectory = directory.appendingPathComponent("parts", isDirectory: true)
+        try Data((0..<10).map(UInt8.init)).write(to: sourceURL)
+
+        let parts = try ManualMultipartFiles.planParts(
+            source: sourceURL,
+            directory: partsDirectory,
+            partBytes: 4
+        )
+
+        XCTAssertEqual(parts.map(\.size), [4, 4, 2])
+        XCTAssertTrue(parts.allSatisfy {
+            !FileManager.default.fileExists(atPath: $0.fileURL.path)
+        })
+
+        try ManualMultipartFiles.materializePart(source: sourceURL, part: parts[1])
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: parts[0].fileURL.path))
+        XCTAssertEqual(try Data(contentsOf: parts[1].fileURL), Data([4, 5, 6, 7]))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: parts[2].fileURL.path))
+    }
+
     func testCreatesExactSizedPartsAndPreservesEveryByte() throws {
         let directory = temporaryDirectory()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
