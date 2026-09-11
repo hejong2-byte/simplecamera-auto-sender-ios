@@ -442,7 +442,11 @@ final class USBReceiverViewModelTests: XCTestCase {
     func testCompletedLocalReceiveImmediatelyRefreshesSavedFiles() async throws {
         let file = try storedFile()
         let progress = USBReceiveProgressStore()
-        let model = try exportModel(files: [file], receiveProgressStore: progress) { _, _, _ in
+        let model = try exportModel(
+            files: [file],
+            receiveProgressStore: progress,
+            registeredReceiverID: UUID()
+        ) { _, _, _ in
             IPhoneUSBExportSummary(verified: [], failed: [])
         }
         XCTAssertTrue(model.storedFiles.isEmpty)
@@ -1054,6 +1058,7 @@ final class USBReceiverViewModelTests: XCTestCase {
         files: [IPhoneStoredFile],
         receiveProgressStore: USBReceiveProgressStore? = nil,
         exportProgressStore: USBReceiveProgressStore? = nil,
+        registeredReceiverID: UUID? = nil,
         pendingDeletionDecisions: @escaping USBReceiverViewModel.PendingDeletionDecisions = { [] },
         verifyCopies: @escaping USBReceiverViewModel.VerifyCopies = { _, _, _ in IPhoneUSBExportSummary(verified: [], failed: []) },
         keepOriginals: @escaping USBReceiverViewModel.KeepOriginals = { _ in },
@@ -1074,12 +1079,21 @@ final class USBReceiverViewModelTests: XCTestCase {
             codec: ViewModelBookmarkCodec(url: usb)
         )
         try bookmarkStore.save(folderURL: usb)
+        let registrationStore = IPhoneReceiverRegistrationStore(
+            identityStore: InMemoryCredentialStore(),
+            secretStore: InMemoryCredentialStore()
+        )
+        if let registeredReceiverID {
+            try registrationStore.save(IPhoneReceiverRegistration(
+                receiverID: registeredReceiverID,
+                code: "123456",
+                receiveSecret: "receive-secret",
+                deviceName: "테스트 iPhone"
+            ))
+        }
         return USBReceiverViewModel(
             uploadCredentialStore: InMemoryCredentialStore(),
-            registrationStore: IPhoneReceiverRegistrationStore(
-                identityStore: InMemoryCredentialStore(),
-                secretStore: InMemoryCredentialStore()
-            ),
+            registrationStore: registrationStore,
             bookmarkStore: bookmarkStore,
             registrar: StubReceiverRegistrar(),
             receiveOnce: { USBReceiveSummary(discovered: 0, completed: 0) },
