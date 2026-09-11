@@ -36,6 +36,24 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
         XCTAssertTrue(try context.store.destinations(receiverID: context.server.receiverID).isEmpty)
     }
 
+    func testImageAndVideoArrivalsRemainVisibleForReceiving() async throws {
+        let context = try makeContext(count: 0)
+        let media = [
+            file(index: 1, fileExtension: "jpg"),
+            file(index: 2, fileExtension: "png"),
+            file(index: 3, fileExtension: "heic"),
+            file(index: 4, fileExtension: "mov"),
+            file(index: 5, fileExtension: "mp4"),
+        ]
+        context.server.replace(media)
+
+        await activate(context)
+
+        XCTAssertEqual(context.model.pendingFiles.map(\.fileName), media.map(\.fileName))
+        context.model.showPendingFiles()
+        XCTAssertEqual(context.model.selectionBatch?.files.map(\.fileName), media.map(\.fileName))
+    }
+
     func testTwoArrivalsRequireSelectionAndApproveOnlyChosenFile() async throws {
         let context = try makeContext(count: 2)
         await activate(context)
@@ -352,7 +370,15 @@ final class IPhoneIncomingFilesViewModelTests: XCTestCase {
     }
 
     private func file(index: Int, state: IPhoneDeliveryState = .available, fileExtension: String = "txt") -> IPhoneDelivery {
-        IPhoneDelivery(deliveryID: UUID(), fileName: "시험-\(index).\(fileExtension)", contentType: fileExtension == "zip" ? "application/zip" : "text/plain", size: Int64(index * 1_000), sha256: String(repeating: "a", count: 64), state: state, createdAt: Date(timeIntervalSince1970: Double(index)), expiresAt: Date.distantFuture, deliveredAt: nil)
+        let contentType = [
+            "zip": "application/zip",
+            "jpg": "image/jpeg",
+            "png": "image/png",
+            "heic": "image/heic",
+            "mov": "video/quicktime",
+            "mp4": "video/mp4",
+        ][fileExtension] ?? "text/plain"
+        return IPhoneDelivery(deliveryID: UUID(), fileName: "시험-\(index).\(fileExtension)", contentType: contentType, size: Int64(index * 1_000), sha256: String(repeating: "a", count: 64), state: state, createdAt: Date(timeIntervalSince1970: Double(index)), expiresAt: Date.distantFuture, deliveredAt: nil)
     }
 
     private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async {
