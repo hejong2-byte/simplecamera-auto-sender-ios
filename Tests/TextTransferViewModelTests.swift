@@ -169,6 +169,20 @@ final class TextTransferViewModelTests: XCTestCase {
         XCTAssertEqual(model.statusMessage, "수신코드 선택 완료")
     }
 
+    func testSavingFileTransferComputerDoesNotReplaceTextDraftRecipient() async {
+        let probe = TextViewModelProbe(
+            draft: TextDraft(recipient: "123456", text: "작성 중")
+        )
+        let model = makeModel(probe: probe)
+        await model.refresh()
+
+        await model.saveRecipient(code: "709592", name: "행정망 PC")
+
+        XCTAssertEqual(model.recipient, "123456")
+        XCTAssertEqual(model.savedRecipients.map(\.displayLabel), ["행정망 PC · 709592"])
+        XCTAssertEqual(model.statusMessage, "수신코드 저장 완료")
+    }
+
     func testRenamingSavedRecipientDoesNotChangeCurrentDraftRecipient() async {
         let probe = TextViewModelProbe(
             draft: TextDraft(recipient: "123456", text: "작성 중"),
@@ -214,7 +228,7 @@ final class TextTransferViewModelTests: XCTestCase {
         await model.saveRecipient(name: "여섯째")
 
         XCTAssertEqual(model.lastErrorKind, .validation)
-        XCTAssertEqual(model.lastError, "수신코드는 최대 5개까지 저장할 수 있습니다.")
+        XCTAssertEqual(model.lastError, "수신코드는 최대 10개까지 저장할 수 있습니다.")
         model.setActive(true)
         XCTAssertTrue(model.isMonitoring)
         model.setActive(false)

@@ -21,22 +21,22 @@ final class TextSavedRecipientStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.selectedCode, "709592")
     }
 
-    func testSixthDistinctRecipientIsRejectedButExistingCodeCanBeRenamed() async throws {
+    func testEleventhDistinctRecipientIsRejectedButExistingCodeCanBeRenamed() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = TextSavedRecipientStore(
             fileURL: root.appendingPathComponent("saved-recipients.json")
         )
-        for number in 100000..<100005 {
+        for number in 100000..<100010 {
             _ = try await store.save(code: String(number), name: "기기 \(number)")
         }
 
         await assertStoreError(.limitReached) {
-            _ = try await store.save(code: "100005", name: "여섯째")
+            _ = try await store.save(code: "100010", name: "열한째")
         }
         let renamed = try await store.save(code: "100000", name: "첫 기기")
 
-        XCTAssertEqual(renamed.recipients.count, 5)
+        XCTAssertEqual(renamed.recipients.count, 10)
         XCTAssertEqual(renamed.recipients[0].displayLabel, "첫 기기 · 100000")
     }
 
@@ -58,7 +58,7 @@ final class TextSavedRecipientStoreTests: XCTestCase {
         }
     }
 
-    func testLoadKeepsOnlyFirstFiveValidUniqueRecipientsAndValidSelection() async throws {
+    func testLoadKeepsOnlyFirstTenValidUniqueRecipientsAndValidSelection() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let fileURL = root.appendingPathComponent("saved-recipients.json")
@@ -73,9 +73,14 @@ final class TextSavedRecipientStoreTests: XCTestCase {
                 ["code": "100003", "name": "셋째"],
                 ["code": "100004", "name": "넷째"],
                 ["code": "100005", "name": "다섯째"],
-                ["code": "100006", "name": "여섯째"]
+                ["code": "100006", "name": "여섯째"],
+                ["code": "100007", "name": "일곱째"],
+                ["code": "100008", "name": "여덟째"],
+                ["code": "100009", "name": "아홉째"],
+                ["code": "100010", "name": "열째"],
+                ["code": "100011", "name": "열한째"]
             ],
-            "selectedCode": "100005"
+            "selectedCode": "100010"
         ]
         try JSONSerialization.data(withJSONObject: raw).write(to: fileURL)
 
@@ -83,9 +88,12 @@ final class TextSavedRecipientStoreTests: XCTestCase {
 
         XCTAssertEqual(
             loaded.recipients.map(\.code),
-            ["100000", "100002", "100003", "100004", "100005"]
+            [
+                "100000", "100002", "100003", "100004", "100005",
+                "100006", "100007", "100008", "100009", "100010"
+            ]
         )
-        XCTAssertEqual(loaded.selectedCode, "100005")
+        XCTAssertEqual(loaded.selectedCode, "100010")
     }
 
     func testUndecodableFileLoadsEmptyWithoutRewritingIt() async throws {

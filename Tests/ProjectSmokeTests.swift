@@ -265,6 +265,9 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(source.contains("model.fileTransferReadinessMessage"))
         XCTAssertTrue(source.contains("FileTransferRecipientPicker("))
         XCTAssertTrue(source.contains("Section(\"저장된 수신코드\")"))
+        XCTAssertTrue(source.contains("TextField(\"컴퓨터 이름"))
+        XCTAssertTrue(source.contains("Button(\"컴퓨터 저장\")"))
+        XCTAssertTrue(source.contains("선택한 컴퓨터로 파일 고르기"))
         XCTAssertTrue(source.contains("recipientCode: recipientCode"))
     }
 
