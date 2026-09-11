@@ -112,6 +112,9 @@ final class ManualMultipartFilesTests: XCTestCase {
 
     private func temporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory
-            .appendingPathComponent("ManualMultipartFilesTests-(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent(
+                "ManualMultipartFilesTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
     }
 }
