@@ -36,15 +36,17 @@ final class DocumentSelectionLease {
 }
 
 struct DocumentFilePicker: UIViewControllerRepresentable {
+    typealias SelectionOperation = @MainActor () async -> Void
+
     let request: DocumentPickerRequest
     let selectionAccess: DocumentSelectionAccess
-    let onSelection: ([URL]) async -> Void
+    let onSelection: ([URL]) -> SelectionOperation?
     let onCancel: () -> Void
 
     init(
         request: DocumentPickerRequest,
         selectionAccess: DocumentSelectionAccess = .system,
-        onSelection: @escaping ([URL]) async -> Void,
+        onSelection: @escaping ([URL]) -> SelectionOperation?,
         onCancel: @escaping () -> Void
     ) {
         self.request = request
@@ -94,9 +96,13 @@ struct DocumentFilePicker: UIViewControllerRepresentable {
         }
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
             let lease = parent.selectionAccess.acquire(urls)
-            Task { @MainActor [parent] in
+            guard let operation = parent.onSelection(urls) else {
+                lease.release()
+                return
+            }
+            Task { @MainActor in
                 defer { lease.release() }
-                await parent.onSelection(urls)
+                await operation()
             }
         }
         func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { parent.onCancel() }

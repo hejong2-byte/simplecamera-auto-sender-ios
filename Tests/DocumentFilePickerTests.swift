@@ -14,7 +14,10 @@ final class DocumentFilePickerTests: XCTestCase {
                 startAccessing: { _ in false },
                 stopAccessing: { _ in }
             ),
-            onSelection: { capturedURLs = $0 },
+            onSelection: {
+                capturedURLs = $0
+                return nil
+            },
             onCancel: { XCTFail("Selection must not be treated as cancellation") }
         )
         let coordinator = picker.makeCoordinator()
@@ -48,7 +51,10 @@ final class DocumentFilePickerTests: XCTestCase {
                 startAccessing: { _ in false },
                 stopAccessing: { _ in }
             ),
-            onSelection: { _ = model.accept($0) },
+            onSelection: {
+                _ = model.accept($0)
+                return nil
+            },
             onCancel: { XCTFail("Selection must not be treated as cancellation") }
         )
         let coordinator = picker.makeCoordinator()
@@ -78,11 +84,13 @@ final class DocumentFilePickerTests: XCTestCase {
                 stopAccessing: probe.stop
             ),
             onSelection: { urls in
-                XCTAssertEqual(urls, [url])
-                XCTAssertTrue(probe.isActive(url))
-                await gate.wait()
-                XCTAssertTrue(probe.isActive(url))
-                callbackFinished.fulfill()
+                return {
+                    XCTAssertEqual(urls, [url])
+                    XCTAssertTrue(probe.isActive(url))
+                    await gate.wait()
+                    XCTAssertTrue(probe.isActive(url))
+                    callbackFinished.fulfill()
+                }
             },
             onCancel: { XCTFail("Selection must not be treated as cancellation") }
         )

@@ -102,7 +102,8 @@ struct ContentView: View {
                     request: request,
                     onSelection: { urls in
                         let selected = filePickerModel.accept(urls)
-                        if !selected.isEmpty { await model.sendSelectedFiles(selected) }
+                        guard !selected.isEmpty else { return nil }
+                        return { await model.sendSelectedFiles(selected) }
                     },
                     onCancel: filePickerModel.cancel
                 )
