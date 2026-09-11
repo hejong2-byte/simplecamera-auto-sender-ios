@@ -19,8 +19,8 @@ final class ProjectSmokeTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 42"))
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.31"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 43"))
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.32"))
         XCTAssertTrue(project.contains("exactVersion: 0.9.20"))
         XCTAssertTrue(project.contains("UIFileSharingEnabled: true"))
         XCTAssertTrue(
@@ -51,7 +51,7 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(install.contains("앱이 다시 활성화될 때마다"))
         XCTAssertTrue(install.contains("iPhone 내부 임시공간"))
         XCTAssertTrue(install.contains("검증된 압축 해제 폴더"))
-        XCTAssertTrue(readme.contains("현재 버전은 0.3.31(빌드 42)"))
+        XCTAssertTrue(readme.contains("현재 버전은 0.3.32(빌드 43)"))
     }
 
     func testReleaseDocumentsPriorityReceiveStoredZIPAndStorageManagement() throws {
