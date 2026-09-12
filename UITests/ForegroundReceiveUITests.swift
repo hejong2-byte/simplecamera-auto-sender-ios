@@ -269,6 +269,50 @@ final class ForegroundReceiveUITests: XCTestCase {
         keepScreenshot("storage-delete-completed", app: app)
     }
 
+    func testStorageExplorerSelectsFilesAndChoosesSavedReceiver() {
+        let app = launchSimulation(
+            delay: 3_600,
+            withSavedTextRecipient: true,
+            withStorageManagement: true
+        )
+        let settings = app.buttons["open-settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 20))
+        reveal(settings, in: app)
+        settings.tap()
+
+        let storage = app.buttons["storage-management"]
+        reveal(storage, in: app)
+        storage.tap()
+        XCTAssertTrue(app.navigationBars["SD/USB 저장장치 관리"].waitForExistence(timeout: 10))
+
+        let folder = app.buttons["storage-entry-nested"]
+        reveal(folder, in: app)
+        XCTAssertTrue(folder.waitForExistence(timeout: 10))
+        folder.tap()
+        XCTAssertTrue(app.buttons["storage-entry-nested/inside.bin"].waitForExistence(timeout: 10))
+        app.buttons["상위 폴더"].tap()
+
+        let file = app.buttons["storage-entry-visible.bin"]
+        XCTAssertTrue(file.waitForExistence(timeout: 10))
+        file.tap()
+        let send = app.buttons["storage-file-send"]
+        reveal(send, in: app)
+        XCTAssertTrue(send.isEnabled)
+        send.tap()
+
+        XCTAssertTrue(app.navigationBars["전송할 컴퓨터 선택"].waitForExistence(timeout: 10))
+        let recipient = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "행정망 PC")
+        ).firstMatch
+        XCTAssertTrue(recipient.exists)
+        XCTAssertTrue(app.staticTexts["709592"].exists)
+        keepScreenshot("storage-file-recipient-selection", app: app)
+        recipient.tap()
+
+        XCTAssertTrue(send.waitForExistence(timeout: 10))
+        XCTAssertFalse(send.isEnabled, "Prepared files must clear the finished selection")
+    }
+
     func testMainScreenCriticalActionsAreHittableWithoutInitialScroll() {
         let app = launchSimulation(delay: 60)
 

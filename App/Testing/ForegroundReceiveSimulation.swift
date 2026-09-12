@@ -252,7 +252,11 @@ final class ForegroundReceiveSimulation {
             saveOutcome: { try outcomeStore.save($0) },
             clearOutcome: { try outcomeStore.clear(receiverID: $0) },
             defaultDeviceName: "수신 테스트 iPhone",
-            preferences: preferences
+            preferences: preferences,
+            storageExplorer: USBStorageFileExplorer(
+                startAccessing: { _ in true },
+                stopAccessing: { _ in }
+            )
         )
         incoming = IPhoneIncomingFilesViewModel(
             loadPendingFiles: {
