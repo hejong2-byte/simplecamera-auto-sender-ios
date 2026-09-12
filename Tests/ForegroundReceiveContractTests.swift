@@ -86,6 +86,25 @@ final class ForegroundReceiveContractTests: XCTestCase {
         XCTAssertFalse(settings.contains("Button(\"SD/USB 전체 파일 삭제\""))
     }
 
+    func testStorageManagementBrowsesAndSendsSelectedFilesToSavedReceiver() throws {
+        let root = try source("App/UI/ContentView.swift")
+        let settings = try source("App/UI/SettingsView.swift")
+        let storage = try source("App/UI/USBStorageManagementView.swift")
+
+        XCTAssertTrue(root.contains("textModel: textModel"))
+        XCTAssertTrue(settings.contains("USBStorageManagementView("))
+        XCTAssertTrue(settings.contains("transferModel: model"))
+        XCTAssertTrue(settings.contains("textModel: textModel"))
+        XCTAssertTrue(storage.contains("저장장치 파일 탐색"))
+        XCTAssertTrue(storage.contains("model.storageEntries"))
+        XCTAssertTrue(storage.contains("model.openStorageDirectory"))
+        XCTAssertTrue(storage.contains("model.toggleStorageFileSelection"))
+        XCTAssertTrue(storage.contains("textModel.savedRecipients"))
+        XCTAssertTrue(storage.contains("model.sendSelectedStorageFiles"))
+        XCTAssertTrue(storage.contains("transferModel.sendSelectedFiles"))
+        XCTAssertTrue(storage.contains("storage-file-send"))
+    }
+
     private func source(_ path: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
