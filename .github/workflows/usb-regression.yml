@@ -24,6 +24,7 @@ jobs:
             -only-testing:SimpleCameraAutoSenderTests/USBZIPReceivePipelineTests \
             -only-testing:SimpleCameraAutoSenderTests/USBReceiveServiceTests \
             -only-testing:SimpleCameraAutoSenderTests/USBReceiverViewModelTests \
+            -only-testing:SimpleCameraAutoSenderTests/USBStorageFileExplorerTests \
             -only-testing:SimpleCameraAutoSenderTests/USBExportProgressRecoveryTests \
             -only-testing:SimpleCameraAutoSenderTests/USBFolderCleanupServiceTests \
             -only-testing:SimpleCameraAutoSenderTests/IPhoneReceiveErrorMessageTests \
