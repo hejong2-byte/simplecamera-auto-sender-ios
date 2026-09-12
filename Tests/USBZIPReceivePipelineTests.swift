@@ -1,9 +1,10 @@
 import Foundation
 import XCTest
+import ZIPFoundation
 @testable import SimpleCameraAutoSender
 
 final class USBZIPReceivePipelineTests: XCTestCase {
-    func testVerifiedZIPExtractsFromPrivateStagingAndCommitsFolder() throws {
+    func testVerifiedZIPExtractsFromPrivateStagingAndCommitsContentsToUSBRoot() throws {
         let context = try makeContext()
         let unrelated = context.usb.appendingPathComponent("keep.txt")
         try Data("keep".utf8).write(to: unrelated)
@@ -16,16 +17,18 @@ final class USBZIPReceivePipelineTests: XCTestCase {
             progress: { phases.append($0.phase) }
         )
 
-        XCTAssertEqual(result.finalFolderName, "업무자료")
+        XCTAssertEqual(result.finalFolderName, "")
         XCTAssertEqual(result.extractedBytes, 20)
         XCTAssertEqual(
-            try Data(contentsOf: context.usb.appendingPathComponent("업무자료/docs/report.txt")),
+            try Data(contentsOf: context.usb.appendingPathComponent("docs/report.txt")),
             Data("report-data".utf8)
         )
         XCTAssertEqual(
-            try Data(contentsOf: context.usb.appendingPathComponent("업무자료/root.txt")),
+            try Data(contentsOf: context.usb.appendingPathComponent("root.txt")),
             Data("root-data".utf8)
         )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: context.usb.appendingPathComponent("업무자료").path))
+        XCTAssertTrue(try context.pipeline.verify(zip: context.zip, committedFolder: context.usb))
         XCTAssertEqual(try Data(contentsOf: unrelated), Data("keep".utf8))
         XCTAssertTrue(FileManager.default.fileExists(atPath: context.zip.path))
         XCTAssertTrue(phases.contains(.extracting))
@@ -34,26 +37,55 @@ final class USBZIPReceivePipelineTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: context.work.path), [])
     }
 
-    func testCollisionUsesNumberedFolderAndPreservesExistingContents() throws {
+    func testRootCollisionFailsWithoutRenamingOrOverwritingExistingContents() throws {
         let context = try makeContext()
-        let existing = context.usb.appendingPathComponent("업무자료", isDirectory: true)
-        try FileManager.default.createDirectory(at: existing, withIntermediateDirectories: true)
-        let marker = existing.appendingPathComponent("existing.txt")
+        let marker = context.usb.appendingPathComponent("root.txt")
         try Data("existing".utf8).write(to: marker)
 
-        let result = try context.pipeline.commit(
+        XCTAssertThrowsError(try context.pipeline.commit(
             zip: context.zip,
             delivery: context.delivery,
             destination: context.usb,
             progress: { _ in }
+        ))
+
+        XCTAssertEqual(try Data(contentsOf: marker), Data("existing".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: context.usb.appendingPathComponent("업무자료").path))
+    }
+
+    func testArchiveNameAndSDCardRootWrappersAreRemovedForDirectUSBReceive() throws {
+        let root = temporaryDirectory()
+        let usb = root.appendingPathComponent("usb", isDirectory: true)
+        let work = root.appendingPathComponent("work", isDirectory: true)
+        let fixture = root.appendingPathComponent("fixture", isDirectory: true)
+        let archiveName = "싼타페_V11_전체본_SD카드용"
+        let map = fixture
+            .appendingPathComponent(archiveName)
+            .appendingPathComponent("SD_CARD_ROOT")
+            .appendingPathComponent("MAP")
+        try FileManager.default.createDirectory(at: usb, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: map, withIntermediateDirectories: true)
+        try Data("navigation".utf8).write(to: map.appendingPathComponent("data.bin"))
+        let zip = root.appendingPathComponent("\(archiveName).zip")
+        try FileManager.default.zipItem(at: fixture, to: zip, shouldKeepParent: false)
+        let data = try Data(contentsOf: zip)
+        let pipeline = USBZIPReceivePipeline(workingDirectory: work)
+
+        let result = try pipeline.commit(
+            zip: zip,
+            delivery: delivery(name: "\(archiveName).zip", data: data),
+            destination: usb,
+            progress: { _ in }
         )
 
-        XCTAssertEqual(result.finalFolderName, "업무자료 (1)")
-        XCTAssertEqual(try Data(contentsOf: marker), Data("existing".utf8))
+        XCTAssertEqual(result.finalFolderName, "")
         XCTAssertEqual(
-            try Data(contentsOf: context.usb.appendingPathComponent("업무자료 (1)/root.txt")),
-            Data("root-data".utf8)
+            try Data(contentsOf: usb.appendingPathComponent("MAP/data.bin")),
+            Data("navigation".utf8)
         )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: usb.appendingPathComponent(archiveName).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: usb.appendingPathComponent("SD_CARD_ROOT").path))
     }
 
     func testUnsafeZIPAndCommitFailurePreserveSourceAndUnrelatedUSBData() throws {
