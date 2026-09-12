@@ -50,6 +50,7 @@ final class USBReceiverViewModel: ObservableObject {
         USBFolderContentsSummary,
         @Sendable (FileDeletionProgress) -> Void
     ) async throws -> USBFolderDeletionSummary
+    typealias SendStorageFiles = @Sendable ([URL], String) async -> Void
     typealias RefreshFeatures = @Sendable () async throws -> Void
     typealias ProgressUpdates = @Sendable () -> AsyncStream<USBReceiveProgress>
     typealias LoadOutcome = @Sendable (UUID) -> IPhoneReceiveOutcome?
@@ -107,6 +108,12 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var usbFolderContentsPendingDeletion: USBFolderContentsSummary?
     @Published private(set) var usbFolderDeletionMessage: String?
     @Published private(set) var usbFolderDeletionError: String?
+    @Published private(set) var storageEntries: [USBStorageFileEntry] = []
+    @Published private(set) var storageRelativePath = ""
+    @Published private(set) var selectedStorageFilePaths: Set<String> = []
+    @Published private(set) var isLoadingStorageFiles = false
+    @Published private(set) var isSendingStorageFiles = false
+    @Published private(set) var storageExplorerError: String?
 
     private enum USBFallbackMode {
         case none
@@ -147,6 +154,7 @@ final class USBReceiverViewModel: ObservableObject {
     private let deleteOriginalFiles: DeleteOriginals
     private let inspectUSBFolder: InspectUSBFolder
     private let deleteUSBFolderContents: DeleteUSBFolderContents
+    private let storageExplorer: USBStorageFileExplorer
     private let refreshFeatures: RefreshFeatures
     private let loadOutcome: LoadOutcome
     private let saveOutcome: SaveOutcome
@@ -214,7 +222,8 @@ final class USBReceiverViewModel: ObservableObject {
         now: @escaping Now = { Date() },
         defaultDeviceName: String,
         preferences: USBReceiverPreferences = USBReceiverPreferences(),
-        sleep: @escaping Sleep = { try await Task.sleep(for: .seconds(2)) }
+        sleep: @escaping Sleep = { try await Task.sleep(for: .seconds(2)) },
+        storageExplorer: USBStorageFileExplorer = USBStorageFileExplorer()
     ) {
         self.uploadCredentialStore = uploadCredentialStore
         self.registrationStore = registrationStore
@@ -241,6 +250,7 @@ final class USBReceiverViewModel: ObservableObject {
         self.deleteOriginalFiles = deleteOriginals
         self.inspectUSBFolder = inspectUSBFolder
         self.deleteUSBFolderContents = deleteUSBFolderContents
+        self.storageExplorer = storageExplorer
         self.refreshFeatures = refreshFeatures
         self.loadOutcome = loadOutcome
         self.saveOutcome = saveOutcome
@@ -311,6 +321,13 @@ final class USBReceiverViewModel: ObservableObject {
         }
     }
     var hasStoredFileSelection: Bool { !selectedStoredFileIDs.isEmpty }
+    var hasStorageFileSelection: Bool { !selectedStorageFilePaths.isEmpty }
+    var selectedStorageFileCount: Int { selectedStorageFilePaths.count }
+    var selectedStorageFileBytes: Int64 {
+        storageEntries
+            .filter { selectedStorageFilePaths.contains($0.relativePath) }
+            .reduce(0) { $0 + $1.size }
+    }
     var needsStoredFileDeletionConfirmation: Bool { !storedFilesPendingDeletion.isEmpty }
     var needsStoredZIPExportChoice: Bool { !storedZIPExportFilesPendingChoice.isEmpty }
     var needsUSBFolderDeletionConfirmation: Bool {
@@ -527,6 +544,7 @@ final class USBReceiverViewModel: ObservableObject {
                 ? "USB 폴더 권한이 만료되었습니다. 다시 선택해 주세요."
                 : nil
             if destination != nil, destination?.isStale == false { resetFallback() }
+            await refreshStorageFiles()
         } catch {
             lastError = "선택한 USB 폴더를 저장하지 못했습니다."
         }
@@ -542,9 +560,117 @@ final class USBReceiverViewModel: ObservableObject {
             cancelUSBFolderDeletion()
             usbFolderDeletionMessage = nil
             usbFolderDeletionError = nil
+            storageEntries = []
+            storageRelativePath = ""
+            selectedStorageFilePaths = []
+            storageExplorerError = nil
             lastError = nil
         } catch {
             lastError = "USB 폴더 설정을 지우지 못했습니다."
+        }
+    }
+
+    func refreshStorageFiles() async {
+        guard !isLoadingStorageFiles, !isSendingStorageFiles else { return }
+        isLoadingStorageFiles = true
+        defer { isLoadingStorageFiles = false }
+
+        do {
+            let relativePath = storageRelativePath
+            let result = try await Task.detached(priority: .userInitiated) {
+                [bookmarkStore, storageExplorer] in
+                guard let destination = try bookmarkStore.resolve() else {
+                    throw USBStorageFileExplorerError.destinationMissing
+                }
+                return try storageExplorer.list(
+                    destination: destination,
+                    relativePath: relativePath
+                )
+            }.value
+            storageEntries = result
+            let visibleFiles = Set(
+                result.lazy
+                    .filter { $0.kind == .file }
+                    .map(\.relativePath)
+            )
+            selectedStorageFilePaths.formIntersection(visibleFiles)
+            storageExplorerError = nil
+        } catch {
+            storageEntries = []
+            selectedStorageFilePaths = []
+            storageExplorerError = Self.storageExplorerMessage(for: error)
+        }
+    }
+
+    func openStorageDirectory(_ entry: USBStorageFileEntry) async {
+        guard entry.kind == .directory, !isSendingStorageFiles else { return }
+        storageRelativePath = entry.relativePath
+        selectedStorageFilePaths = []
+        await refreshStorageFiles()
+    }
+
+    func openParentStorageDirectory() async {
+        guard !storageRelativePath.isEmpty, !isSendingStorageFiles else { return }
+        var components = storageRelativePath.split(separator: "/").map(String.init)
+        components.removeLast()
+        storageRelativePath = components.joined(separator: "/")
+        selectedStorageFilePaths = []
+        await refreshStorageFiles()
+    }
+
+    func toggleStorageFileSelection(_ relativePath: String) {
+        guard !isSendingStorageFiles,
+              storageEntries.contains(where: {
+                  $0.kind == .file && $0.relativePath == relativePath
+              }) else { return }
+        if selectedStorageFilePaths.contains(relativePath) {
+            selectedStorageFilePaths.remove(relativePath)
+        } else {
+            selectedStorageFilePaths.insert(relativePath)
+        }
+        storageExplorerError = nil
+    }
+
+    func clearStorageFileSelection() {
+        guard !isSendingStorageFiles else { return }
+        selectedStorageFilePaths = []
+    }
+
+    func sendSelectedStorageFiles(
+        to recipientCode: String,
+        send: @escaping SendStorageFiles
+    ) async {
+        guard hasStorageFileSelection, !isSendingStorageFiles else { return }
+        let code = recipientCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard code.count == 6, code.allSatisfy(\.isNumber) else {
+            storageExplorerError = "전송할 PC의 6자리 수신코드를 다시 확인해 주세요."
+            return
+        }
+
+        isSendingStorageFiles = true
+        storageExplorerError = nil
+        defer { isSendingStorageFiles = false }
+
+        do {
+            let destination = try await Task.detached(priority: .userInitiated) {
+                [bookmarkStore] in
+                guard let destination = try bookmarkStore.resolve() else {
+                    throw USBStorageFileExplorerError.destinationMissing
+                }
+                return destination
+            }.value
+            let selected = storageEntries
+                .filter { selectedStorageFilePaths.contains($0.relativePath) }
+                .map(\.relativePath)
+            try await storageExplorer.withFiles(
+                destination: destination,
+                relativePaths: selected
+            ) { urls in
+                await send(urls, code)
+            }
+            selectedStorageFilePaths = []
+        } catch {
+            storageExplorerError = Self.storageExplorerMessage(for: error)
         }
     }
 
@@ -1403,6 +1529,13 @@ final class USBReceiverViewModel: ObservableObject {
 
     private static func message(for error: Error) -> String {
         IPhoneReceiveErrorMessage.message(error)
+    }
+
+    private static func storageExplorerMessage(for error: Error) -> String {
+        if let message = (error as? USBStorageFileExplorerError)?.errorDescription {
+            return message
+        }
+        return "SD/USB 파일 목록을 불러오지 못했습니다. 저장장치를 다시 연결해 주세요."
     }
 
     private static func byteText(_ bytes: Int64) -> String {
