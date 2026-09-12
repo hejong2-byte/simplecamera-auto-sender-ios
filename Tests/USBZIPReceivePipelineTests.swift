@@ -193,7 +193,7 @@ private struct Context {
 
 private final class FailingZIPCommitFileManager: FileManager, @unchecked Sendable {
     override func moveItem(at srcURL: URL, to dstURL: URL) throws {
-        if srcURL.lastPathComponent.hasSuffix(".partial") {
+        if srcURL.path.contains(".partial/") {
             throw CocoaError(.fileWriteOutOfSpace)
         }
         try super.moveItem(at: srcURL, to: dstURL)

@@ -204,7 +204,7 @@ final class USBReceiveServiceTests: XCTestCase {
         XCTAssertNil(fixture.ledger.checkpoint(for: fixture.delivery.deliveryID))
     }
 
-    func testExtractDecisionDownloadsPrivatelyCommitsFolderThenAcknowledges() async throws {
+    func testExtractDecisionDownloadsPrivatelyCommitsContentsToUSBRootThenAcknowledges() async throws {
         let fixture = try makeFixture(
             payload: validZIPData(),
             fileName: "업무자료.zip",
@@ -220,15 +220,18 @@ final class USBReceiveServiceTests: XCTestCase {
             atPath: fixture.destination.appendingPathComponent("업무자료.zip").path
         ))
         XCTAssertEqual(
-            try Data(contentsOf: fixture.destination.appendingPathComponent("업무자료/docs/report.txt")),
+            try Data(contentsOf: fixture.destination.appendingPathComponent("docs/report.txt")),
             Data("report-data".utf8)
         )
         XCTAssertEqual(
-            try Data(contentsOf: fixture.destination.appendingPathComponent("업무자료/root.txt")),
+            try Data(contentsOf: fixture.destination.appendingPathComponent("root.txt")),
             Data("root-data".utf8)
         )
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.destination.appendingPathComponent("업무자료").path
+        ))
         let acknowledgementRecords = await fixture.client.acknowledgementRecords()
-        XCTAssertEqual(acknowledgementRecords.first?.storedName, "업무자료")
+        XCTAssertEqual(acknowledgementRecords.first?.storedName, "")
         XCTAssertNil(fixture.ledger.checkpoint(for: fixture.delivery.deliveryID))
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.stagedZIP.path))
 

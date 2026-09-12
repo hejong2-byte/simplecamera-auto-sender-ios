@@ -225,7 +225,8 @@ actor USBReceiveService {
                 finalMatches = sourceMatches
                     && ((try? zipPipeline.verify(
                         zip: sourceZIP,
-                        committedFolder: finalURL
+                        archiveName: checkpoint.fileName,
+                        committedFolder: destination.url
                     )) == true)
             } else {
                 finalMatches = try fileMatches(
@@ -726,9 +727,6 @@ actor USBReceiveService {
         try? fileManager.removeItem(at: partial)
         try? fileManager.removeItem(at: stagedZIPURL(for: delivery.deliveryID))
         if archiveMode == .extract {
-            let requestedName = (safeName as NSString)
-                .deletingPathExtension
-                .trimmingCharacters(in: .whitespacesAndNewlines)
             let checkpoint = USBReceiveCheckpoint(
                 deliveryID: delivery.deliveryID,
                 fileName: delivery.fileName,
@@ -736,7 +734,7 @@ actor USBReceiveService {
                 totalBytes: delivery.size,
                 confirmedOffset: 0,
                 destinationVolumeID: destination.volumeID,
-                finalFileName: requestedName.isEmpty ? "압축해제" : requestedName,
+                finalFileName: "",
                 state: .downloading,
                 archiveMode: archiveMode
             )

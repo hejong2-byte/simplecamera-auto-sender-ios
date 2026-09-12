@@ -74,7 +74,11 @@ struct USBZIPReceivePipeline {
         }
     }
 
-    func verify(zip: URL, committedFolder: URL) throws -> Bool {
+    func verify(
+        zip: URL,
+        archiveName: String? = nil,
+        committedFolder: URL
+    ) throws -> Bool {
         do {
             try fileManager.createDirectory(
                 at: workingDirectory,
@@ -85,9 +89,12 @@ struct USBZIPReceivePipeline {
                 isDirectory: true
             )
             defer { try? fileManager.removeItem(at: extractionRoot) }
-            let extraction = try extract(zip, to: extractionRoot)
+            let extraction = IPhoneUSBExportService.removingPackagingWrappers(
+                from: try extract(zip, to: extractionRoot),
+                archiveName: archiveName ?? zip.lastPathComponent
+            )
             let expected = try manifest(for: extraction)
-            return try tree(at: committedFolder, matches: expected)
+            return try layout(at: committedFolder, matches: expected)
         } catch let error as USBZIPReceivePipelineError {
             throw error
         } catch {
@@ -118,7 +125,20 @@ struct USBZIPReceivePipeline {
             completedBytes: 0,
             totalBytes: 0
         ))
-        let extraction = try extract(zip, to: extractionRoot)
+        let extraction = IPhoneUSBExportService.removingPackagingWrappers(
+            from: try extract(zip, to: extractionRoot),
+            archiveName: delivery.fileName
+        )
+
+        let topLevelNames = Set((extraction.directories + extraction.files.map(\.relativePath))
+            .compactMap { $0.split(separator: "/").first.map(String.init) }).sorted()
+        for name in topLevelNames {
+            let target = destination.appendingPathComponent(name)
+            guard name != USBReceiveService.partialDirectoryName,
+                  !fileManager.fileExists(atPath: target.path) else {
+                throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
+            }
+        }
 
         let partialDirectory = destination.appendingPathComponent(
             USBReceiveService.partialDirectoryName,
@@ -192,26 +212,27 @@ struct USBZIPReceivePipeline {
             throw USBZIPReceivePipelineError.shaMismatch
         }
 
-        let requestedName = (delivery.fileName as NSString)
-            .deletingPathExtension
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let finalFolderName = try IPhoneLocalFileNaming.availableName(
-            requestedName: requestedName.isEmpty ? "압축해제" : requestedName,
-            in: destination,
-            fileManager: fileManager
-        )
-        let finalURL = destination.appendingPathComponent(finalFolderName, isDirectory: true)
-        try coordinatedMove(from: partialURL, to: finalURL)
+        var publishedItems: [(source: URL, destination: URL)] = []
         do {
-            guard try tree(at: finalURL, matches: expected) else {
+            for name in topLevelNames {
+                let staged = partialURL.appendingPathComponent(name)
+                let target = destination.appendingPathComponent(name)
+                try coordinatedMove(from: staged, to: target)
+                publishedItems.append((staged, target))
+            }
+            guard try layout(at: destination, matches: expected) else {
                 throw USBZIPReceivePipelineError.shaMismatch
             }
         } catch {
-            try? fileManager.removeItem(at: finalURL)
+            for item in publishedItems.reversed()
+                where fileManager.fileExists(atPath: item.destination.path)
+                    && !fileManager.fileExists(atPath: item.source.path) {
+                try? fileManager.moveItem(at: item.destination, to: item.source)
+            }
             throw error
         }
         return USBZIPCommit(
-            finalFolderName: finalFolderName,
+            finalFolderName: "",
             extractedBytes: extraction.totalBytes
         )
     }
@@ -291,6 +312,22 @@ struct USBZIPReceivePipeline {
             files: files.sorted { $0.path < $1.path },
             directories: directories.sorted()
         ) == expected
+    }
+
+    private func layout(at root: URL, matches expected: Manifest) throws -> Bool {
+        for relativePath in expected.directories {
+            var isDirectory = ObjCBool(false)
+            guard fileManager.fileExists(
+                atPath: root.appendingPathComponent(relativePath).path,
+                isDirectory: &isDirectory
+            ), isDirectory.boolValue else { return false }
+        }
+        for file in expected.files {
+            let url = root.appendingPathComponent(file.path)
+            guard try regularFileSize(url) == file.size,
+                  try hashFile(url) == file.sha256 else { return false }
+        }
+        return true
     }
 
     private func copyAndHash(

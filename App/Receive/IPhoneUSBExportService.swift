@@ -967,7 +967,7 @@ actor IPhoneUSBExportService {
         }
     }
 
-    private static func removingPackagingWrappers(
+    static func removingPackagingWrappers(
         from original: SafeZIPExtraction,
         archiveName: String
     ) -> SafeZIPExtraction {
