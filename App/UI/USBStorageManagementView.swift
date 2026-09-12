@@ -3,11 +3,16 @@ import UniformTypeIdentifiers
 
 struct USBStorageManagementView: View {
     @ObservedObject var model: USBReceiverViewModel
+    @ObservedObject var transferModel: ContentViewModel
+    @ObservedObject var textModel: TextTransferViewModel
+    @State private var isChoosingStorageRecipient = false
+    @State private var recipientError: String?
 
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
                 destinationCard
+                fileExplorerCard
                 deletionCard
             }
             .padding()
@@ -15,7 +20,30 @@ struct USBStorageManagementView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle("SD/USB 저장장치 관리")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await model.refresh() }
+        .task {
+            await model.refresh()
+            await textModel.refreshRecipients()
+            if model.hasUSBDestination {
+                await model.refreshStorageFiles()
+            }
+        }
+        .sheet(isPresented: $isChoosingStorageRecipient) {
+            StorageFileRecipientPicker(
+                recipients: textModel.savedRecipients,
+                onSelect: sendStorageFiles
+            )
+        }
+        .alert(
+            "전송할 컴퓨터 확인",
+            isPresented: Binding(
+                get: { recipientError != nil },
+                set: { if !$0 { recipientError = nil } }
+            )
+        ) {
+            Button("확인", role: .cancel) {}
+        } message: {
+            Text(recipientError ?? "")
+        }
         .fileImporter(
             isPresented: $model.isChoosingUSBFolder,
             allowedContentTypes: [.folder],
@@ -47,6 +75,177 @@ struct USBStorageManagementView: View {
         .onDisappear {
             model.cancelUSBFolderDeletion()
             model.isShowingSettingsConfirmation = false
+        }
+    }
+
+    private var fileExplorerCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("저장장치 파일 탐색")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    Task { await model.refreshStorageFiles() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .accessibilityLabel("파일 목록 새로 고침")
+                .disabled(!model.hasUSBDestination || isBusy)
+            }
+
+            Label(storagePathText, systemImage: "folder.fill")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            if !model.storageRelativePath.isEmpty {
+                Button {
+                    Task { await model.openParentStorageDirectory() }
+                } label: {
+                    Label("상위 폴더", systemImage: "arrow.up.to.line")
+                }
+                .buttonStyle(.bordered)
+                .disabled(isBusy)
+            }
+
+            if model.isLoadingStorageFiles {
+                ProgressView("파일 목록 확인 중")
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 16)
+            } else if !model.hasUSBDestination {
+                Text("위에서 SD/USB 폴더를 먼저 선택하세요.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+            } else if model.storageEntries.isEmpty && model.storageExplorerError == nil {
+                Text("이 폴더에는 표시할 파일이 없습니다.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+            } else {
+                LazyVStack(spacing: 0) {
+                    ForEach(model.storageEntries) { entry in
+                        storageEntryRow(entry)
+                        if entry.id != model.storageEntries.last?.id {
+                            Divider()
+                        }
+                    }
+                }
+            }
+
+            if let error = model.storageExplorerError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.red)
+            }
+
+            Divider()
+            HStack {
+                Text("선택 \(model.selectedStorageFileCount)개")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(storageByteText(model.selectedStorageFileBytes))
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 10) {
+                Button("선택 해제") {
+                    model.clearStorageFileSelection()
+                }
+                .buttonStyle(.bordered)
+                .disabled(!model.hasStorageFileSelection || isBusy)
+
+                Button {
+                    chooseStorageRecipient()
+                } label: {
+                    Label("PC로 전송", systemImage: "paperplane.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("storage-file-send")
+                .disabled(!model.hasStorageFileSelection || isBusy)
+            }
+
+            if model.isSendingStorageFiles {
+                ProgressView("선택 파일 전송 준비 중")
+            } else if let message = transferModel.manualTransferMessage {
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle((transferModel.lastManualSummary?.failed ?? 0) > 0 ? Color.red : Color.secondary)
+            }
+        }
+        .cardStyle()
+    }
+
+    @ViewBuilder
+    private func storageEntryRow(_ entry: USBStorageFileEntry) -> some View {
+        Button {
+            if entry.kind == .directory {
+                Task { await model.openStorageDirectory(entry) }
+            } else {
+                model.toggleStorageFileSelection(entry.relativePath)
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: entry.kind == .directory
+                    ? "folder.fill"
+                    : model.selectedStorageFilePaths.contains(entry.relativePath)
+                        ? "checkmark.circle.fill"
+                        : "circle")
+                    .font(.title3)
+                    .foregroundStyle(entry.kind == .directory ? Color.cyan : Color.accentColor)
+                    .frame(width: 26)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(entry.name)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    Text(entry.kind == .directory ? "폴더" : storageByteText(entry.size))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if entry.kind == .directory {
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+            .padding(.vertical, 10)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("storage-entry-\(entry.relativePath)")
+        .disabled(isBusy)
+    }
+
+    private var storagePathText: String {
+        let root = model.usbDisplayName ?? "저장장치"
+        return model.storageRelativePath.isEmpty
+            ? root
+            : "\(root) / \(model.storageRelativePath)"
+    }
+
+    private func storageByteText(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    private func chooseStorageRecipient() {
+        guard !textModel.savedRecipients.isEmpty else {
+            recipientError = "저장된 수신코드가 없습니다. 텍스트 송수신에서 컴퓨터 이름과 수신코드를 먼저 저장해 주세요."
+            return
+        }
+        if let message = transferModel.fileTransferReadinessMessage {
+            recipientError = message
+            return
+        }
+        isChoosingStorageRecipient = true
+    }
+
+    private func sendStorageFiles(_ recipient: TextSavedRecipient) {
+        Task {
+            await textModel.selectRecipient(code: recipient.code)
+            await model.sendSelectedStorageFiles(to: recipient.code) { urls, code in
+                await transferModel.sendSelectedFiles(urls, recipientCode: code)
+            }
         }
     }
 
@@ -131,5 +330,43 @@ struct USBStorageManagementView: View {
             || model.isReceivingFile
             || model.isDeletingStoredFiles
             || model.isCleaningUSBFolder
+            || model.isLoadingStorageFiles
+            || model.isSendingStorageFiles
+    }
+}
+
+private struct StorageFileRecipientPicker: View {
+    let recipients: [TextSavedRecipient]
+    let onSelect: (TextSavedRecipient) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List(recipients) { recipient in
+                Button {
+                    onSelect(recipient)
+                    dismiss()
+                } label: {
+                    HStack {
+                        Image(systemName: "desktopcomputer")
+                            .foregroundStyle(.cyan)
+                        Text(recipient.name)
+                        Spacer()
+                        Text(recipient.code)
+                            .font(.body.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .foregroundStyle(.primary)
+            }
+            .navigationTitle("전송할 컴퓨터 선택")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("취소") { dismiss() }
+                }
+            }
+        }
     }
 }

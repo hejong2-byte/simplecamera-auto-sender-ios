@@ -5,6 +5,7 @@ struct SettingsView: View {
     @ObservedObject var model: ContentViewModel
     @ObservedObject var receiverModel: USBReceiverViewModel
     @ObservedObject var filePickerModel: KakaoFilePickerModel
+    @ObservedObject var textModel: TextTransferViewModel
     @State private var credential = ""
 
     var body: some View {
@@ -82,7 +83,11 @@ struct SettingsView: View {
 
     private var storageManagementCard: some View {
         NavigationLink {
-            USBStorageManagementView(model: receiverModel)
+            USBStorageManagementView(
+                model: receiverModel,
+                transferModel: model,
+                textModel: textModel
+            )
         } label: {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {

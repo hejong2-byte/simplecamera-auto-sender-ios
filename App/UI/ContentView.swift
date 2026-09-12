@@ -70,7 +70,12 @@ struct ContentView: View {
                 case .text:
                     TextTransferView(model: textModel)
                 case .settings:
-                    SettingsView(model: model, receiverModel: receiverModel, filePickerModel: filePickerModel)
+                    SettingsView(
+                        model: model,
+                        receiverModel: receiverModel,
+                        filePickerModel: filePickerModel,
+                        textModel: textModel
+                    )
                 }
             }
             .sheet(item: $pickerKind) { kind in
