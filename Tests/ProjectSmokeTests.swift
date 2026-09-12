@@ -19,8 +19,8 @@ final class ProjectSmokeTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 48"))
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.37"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 49"))
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.38"))
         XCTAssertTrue(project.contains("INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription"))
         XCTAssertTrue(project.contains("exactVersion: 0.9.20"))
         XCTAssertTrue(project.contains("UIFileSharingEnabled: true"))
@@ -52,7 +52,7 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(install.contains("앱이 다시 활성화될 때마다"))
         XCTAssertTrue(install.contains("iPhone 내부 임시공간"))
         XCTAssertTrue(install.contains("검증된 압축 해제 폴더"))
-        XCTAssertTrue(readme.contains("현재 버전은 0.3.37(빌드 48)"))
+        XCTAssertTrue(readme.contains("현재 버전은 0.3.38(빌드 49)"))
     }
 
     func testReleaseDocumentsPriorityReceiveStoredZIPAndStorageManagement() throws {
@@ -88,6 +88,25 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(install.contains("ZIP 그대로 복사"))
         XCTAssertTrue(readme.contains("선택 파일 먼저 받기"))
         XCTAssertTrue(readme.contains("설정 → SD/USB 저장장치 관리"))
+    }
+
+    func testReleaseDocumentsStorageExplorerPCTransfer() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let install = try String(
+            contentsOf: repository.appendingPathComponent("docs/install.md"),
+            encoding: .utf8
+        )
+        let readme = try String(
+            contentsOf: repository.appendingPathComponent("README.md"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(install.contains("저장장치 파일 탐색"))
+        XCTAssertTrue(install.contains("저장된 수신코드"))
+        XCTAssertTrue(readme.contains("저장장치 파일 탐색"))
+        XCTAssertTrue(readme.contains("저장된 수신코드"))
     }
 
     func testReleaseDeclaresModernLaunchScreen() throws {
