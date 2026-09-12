@@ -116,7 +116,7 @@ final class USBStorageFileExplorerTests: XCTestCase {
             isStale: true
         )
 
-        XCTAssertThrowsError(try explorer.list(destination: stale, relativePath: "")) {
+        XCTAssertThrowsError(try explorer.list(destination: stale, relativePath: "")) { error in
             XCTAssertEqual(error as? USBStorageFileExplorerError, .permissionExpired)
         }
         XCTAssertEqual(scope.startCount, 0)
