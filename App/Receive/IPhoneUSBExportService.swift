@@ -955,7 +955,7 @@ actor IPhoneUSBExportService {
                 defer { try? fileManager.removeItem(at: backup) }
                 try USBStagedTreeCommitter(
                     fileManager: fileManager,
-                    moveItem: { try fileManager.moveItem(at: $0, to: $1) }
+                    moveItem: { try self.fileManager.moveItem(at: $0, to: $1) }
                 ).commit(
                     stagedRoot: partialURL,
                     destinationRoot: destination.url,
