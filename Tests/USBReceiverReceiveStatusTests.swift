@@ -82,8 +82,9 @@ final class USBReceiverReceiveStatusTests: XCTestCase {
         )
         await context.model.refresh()
         let polling = Task { await context.model.pollOnce() }
-        await gate.waitUntilStarted()
+        let started = await gate.waitUntilStarted()
 
+        XCTAssertTrue(started)
         XCTAssertTrue(context.model.isPerformingReceive)
         XCTAssertTrue(context.model.canDismissReceiveOutcome)
 
@@ -311,6 +312,9 @@ final class USBReceiverReceiveStatusTests: XCTestCase {
         let outcomes = ReceiveOutcomeHarness(outcome)
         let directory = temporaryDirectory()
         let now = fixedNow
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
+        let preferences = USBReceiverPreferences(defaults: defaults)
+        preferences.selectedDestination = .iphoneLocal
         let model = USBReceiverViewModel(
             uploadCredentialStore: InMemoryCredentialStore(),
             registrationStore: registrationStore,
@@ -336,7 +340,8 @@ final class USBReceiverReceiveStatusTests: XCTestCase {
                 else { try outcomes.clear(receiverID: id) }
             },
             now: { now },
-            defaultDeviceName: "테스트 iPhone"
+            defaultDeviceName: "테스트 iPhone",
+            preferences: preferences
         )
         return (model, progress, outcomes)
     }
@@ -412,8 +417,12 @@ private actor ReceivePollGate {
         await withCheckedContinuation { continuation = $0 }
     }
 
-    func waitUntilStarted() async {
-        while !started { await Task.yield() }
+    func waitUntilStarted() async -> Bool {
+        for _ in 0..<1_000 {
+            if started { return true }
+            await Task.yield()
+        }
+        return started
     }
 
     func release() {
