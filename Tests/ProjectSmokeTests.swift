@@ -19,8 +19,8 @@ final class ProjectSmokeTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 49"))
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.38"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 50"))
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.39"))
         XCTAssertTrue(project.contains("INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription"))
         XCTAssertTrue(project.contains("exactVersion: 0.9.20"))
         XCTAssertTrue(project.contains("UIFileSharingEnabled: true"))
@@ -52,7 +52,7 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(install.contains("앱이 다시 활성화될 때마다"))
         XCTAssertTrue(install.contains("iPhone 내부 임시공간"))
         XCTAssertTrue(install.contains("검증된 압축 해제 폴더"))
-        XCTAssertTrue(readme.contains("현재 버전은 0.3.38(빌드 49)"))
+        XCTAssertTrue(readme.contains("현재 버전은 0.3.39(빌드 50)"))
     }
 
     func testReleaseDocumentsPriorityReceiveStoredZIPAndStorageManagement() throws {
@@ -105,8 +105,11 @@ final class ProjectSmokeTests: XCTestCase {
 
         XCTAssertTrue(install.contains("저장장치 파일 탐색"))
         XCTAssertTrue(install.contains("저장된 수신코드"))
+        XCTAssertTrue(install.contains("모두 선택/선택 해제"))
+        XCTAssertTrue(install.contains("덮어쓰기 여부를 먼저 묻습니다"))
         XCTAssertTrue(readme.contains("저장장치 파일 탐색"))
         XCTAssertTrue(readme.contains("저장된 수신코드"))
+        XCTAssertTrue(readme.contains("파일과 폴더를 여러 개 선택해 삭제"))
     }
 
     func testReleaseDeclaresModernLaunchScreen() throws {
