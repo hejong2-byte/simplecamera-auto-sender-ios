@@ -603,7 +603,14 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             reported.append(progress)
         }
         XCTAssertTrue(reported.contains { $0.stage == .extracting && $0.totalBytes > 0 })
-        XCTAssertFalse(reported.contains { $0.stage == .verifying || $0.stage == .checkingSource }, "Default ZIP export must not perform full SHA passes")
+        XCTAssertTrue(
+            reported.contains {
+                $0.stage == .verifying
+                    && $0.detail?.contains("기존 파일 비교") == true
+            },
+            "ZIP export must report the comparison pass used for new/replaced/unchanged counts"
+        )
+        XCTAssertFalse(reported.contains { $0.stage == .checkingSource })
         XCTAssertEqual(reported.last(where: { $0.stage == .completed })?.bytesReceived, 20)
         XCTAssertEqual(reported.last(where: { $0.stage == .completed })?.totalBytes, 20)
 
@@ -778,7 +785,8 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
 
         let summary = await context.service.export(
             [good, bad],
-            to: context.destination
+            to: context.destination,
+            overwriteExisting: true
         )
 
         XCTAssertEqual(summary.verified.map(\.sourceID), [good.id])
@@ -787,7 +795,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: good.url.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: bad.url.path))
         let storedName = try XCTUnwrap(summary.verified.first?.usbStoredName)
-        XCTAssertNotEqual(storedName, good.name)
+        XCTAssertEqual(storedName, good.name)
         XCTAssertEqual(
             try Data(contentsOf: context.usbDirectory.appendingPathComponent(storedName)),
             Data("verified-data".utf8)
