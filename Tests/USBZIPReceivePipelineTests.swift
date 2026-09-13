@@ -37,19 +37,28 @@ final class USBZIPReceivePipelineTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: context.work.path), [])
     }
 
-    func testRootCollisionFailsWithoutRenamingOrOverwritingExistingContents() throws {
+    func testRootCollisionOverwritesFilesAndMergesExistingDirectories() throws {
         let context = try makeContext()
         let marker = context.usb.appendingPathComponent("root.txt")
         try Data("existing".utf8).write(to: marker)
+        let existingDirectory = context.usb.appendingPathComponent("docs", isDirectory: true)
+        try FileManager.default.createDirectory(at: existingDirectory, withIntermediateDirectories: true)
+        let existingReport = existingDirectory.appendingPathComponent("report.txt")
+        let unrelated = existingDirectory.appendingPathComponent("keep.txt")
+        try Data("old-report".utf8).write(to: existingReport)
+        try Data("keep".utf8).write(to: unrelated)
 
-        XCTAssertThrowsError(try context.pipeline.commit(
+        let result = try context.pipeline.commit(
             zip: context.zip,
             delivery: context.delivery,
             destination: context.usb,
             progress: { _ in }
-        ))
+        )
 
-        XCTAssertEqual(try Data(contentsOf: marker), Data("existing".utf8))
+        XCTAssertEqual(result.finalFolderName, "")
+        XCTAssertEqual(try Data(contentsOf: marker), Data("root-data".utf8))
+        XCTAssertEqual(try Data(contentsOf: existingReport), Data("report-data".utf8))
+        XCTAssertEqual(try Data(contentsOf: unrelated), Data("keep".utf8))
         XCTAssertFalse(FileManager.default.fileExists(atPath: context.usb.appendingPathComponent("업무자료").path))
     }
 

@@ -39,6 +39,60 @@ final class USBStorageFileSelectionTests: XCTestCase {
         XCTAssertTrue(model.hasStorageFileSelection)
     }
 
+    func testSelectAllButtonTogglesAllVisibleFilesAndFolders() async throws {
+        let root = temporaryDirectory()
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("MAP", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try Data("one".utf8).write(to: root.appendingPathComponent("one.bin"))
+        try Data("two".utf8).write(to: root.appendingPathComponent("two.bin"))
+        let model = try makeModel(root: root)
+
+        await model.refreshStorageFiles()
+        XCTAssertFalse(model.areAllVisibleStorageEntriesSelected)
+        model.toggleAllVisibleStorageEntries()
+        XCTAssertTrue(model.areAllVisibleStorageEntriesSelected)
+        XCTAssertEqual(model.selectedStorageFileCount, 3)
+        model.toggleAllVisibleStorageEntries()
+        XCTAssertFalse(model.hasStorageFileSelection)
+    }
+
+    func testDeletesSelectedStorageFilesThenRefreshesAndClearsSelection() async throws {
+        let root = temporaryDirectory()
+        let selected = root.appendingPathComponent("delete.bin")
+        let kept = root.appendingPathComponent("keep.bin")
+        try Data("delete".utf8).write(to: selected)
+        try Data("keep".utf8).write(to: kept)
+        let model = try makeModel(root: root)
+
+        await model.refreshStorageFiles()
+        model.toggleStorageFileSelection("delete.bin")
+        await model.deleteSelectedStorageFiles()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: selected.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: kept.path))
+        XCTAssertFalse(model.hasStorageFileSelection)
+        XCTAssertEqual(model.storageEntries.map(\.name), ["keep.bin"])
+        XCTAssertEqual(model.storageExplorerMessage, "선택한 파일 1개를 삭제했습니다.")
+    }
+
+    func testDeletesSelectedStorageFolderRecursively() async throws {
+        let root = temporaryDirectory()
+        let folder = root.appendingPathComponent("old", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("nested".utf8).write(to: folder.appendingPathComponent("nested.bin"))
+        let model = try makeModel(root: root)
+
+        await model.refreshStorageFiles()
+        model.toggleStorageEntrySelection("old")
+        await model.deleteSelectedStorageFiles()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
+        XCTAssertTrue(model.storageEntries.isEmpty)
+        XCTAssertEqual(model.storageExplorerMessage, "선택한 항목 1개를 삭제했습니다.")
+    }
+
     func testRefreshRemovesSelectionForFileDeletedOutsideApp() async throws {
         let root = temporaryDirectory()
         let file = root.appendingPathComponent("gone.bin")

@@ -122,6 +122,29 @@ final class USBStorageFileExplorerTests: XCTestCase {
         XCTAssertEqual(scope.startCount, 0)
     }
 
+    func testDeletesSelectedFilesAndFoldersAndKeepsOtherContents() async throws {
+        let root = temporaryDirectory()
+        let nested = root.appendingPathComponent("MAP", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let first = root.appendingPathComponent("first.bin")
+        let second = nested.appendingPathComponent("second.bin")
+        let kept = root.appendingPathComponent("keep.bin")
+        try Data("first".utf8).write(to: first)
+        try Data("second".utf8).write(to: second)
+        try Data("keep".utf8).write(to: kept)
+
+        let deleted = try await makeExplorer().deleteFiles(
+            destination: destination(root),
+            relativePaths: ["first.bin", "MAP"]
+        )
+
+        XCTAssertEqual(deleted, 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: kept.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: nested.path))
+    }
+
     private func makeExplorer() -> USBStorageFileExplorer {
         USBStorageFileExplorer(startAccessing: { _ in true }, stopAccessing: { _ in })
     }

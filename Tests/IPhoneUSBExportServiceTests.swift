@@ -113,7 +113,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         )
     }
 
-    func testRootExportConflictDoesNotOverwriteOrRenameExistingNavigationFolder() async throws {
+    func testRootExportConflictOverwritesFilesAndMergesExistingNavigationFolder() async throws {
         let context = try makeContext()
         let fixture = temporaryDirectory()
         try FileManager.default.createDirectory(at: fixture.appendingPathComponent("MAP"), withIntermediateDirectories: true)
@@ -123,10 +123,12 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         let file = try makeStoredFile(name: "received.zip", data: Data(contentsOf: zip), in: context.sourceDirectory)
         try FileManager.default.createDirectory(at: context.usbDirectory.appendingPathComponent("MAP"), withIntermediateDirectories: true)
         try Data("old".utf8).write(to: context.usbDirectory.appendingPathComponent("MAP/data.bin"))
+        try Data("keep".utf8).write(to: context.usbDirectory.appendingPathComponent("MAP/keep.bin"))
         let result = await context.service.export([file], to: context.destination)
-        XCTAssertTrue(result.verified.isEmpty)
-        XCTAssertTrue(result.errorMessage?.contains("MAP") == true)
-        XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent("MAP/data.bin")), Data("old".utf8))
+        XCTAssertTrue(result.failed.isEmpty, result.errorMessage ?? "ZIP overwrite failed")
+        XCTAssertEqual(result.verified.count, 1)
+        XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent("MAP/data.bin")), Data("new".utf8))
+        XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent("MAP/keep.bin")), Data("keep".utf8))
         XCTAssertFalse(FileManager.default.fileExists(atPath: context.usbDirectory.appendingPathComponent("received").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
     }
