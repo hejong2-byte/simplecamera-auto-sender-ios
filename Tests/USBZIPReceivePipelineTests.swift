@@ -75,7 +75,40 @@ final class USBZIPReceivePipelineTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: marker), Data("root-data".utf8))
         XCTAssertEqual(try Data(contentsOf: existingReport), Data("report-data".utf8))
         XCTAssertEqual(try Data(contentsOf: unrelated), Data("keep".utf8))
+        XCTAssertEqual(result.changeSummary.totalFiles, 2)
+        XCTAssertEqual(result.changeSummary.newFiles, 0)
+        XCTAssertEqual(result.changeSummary.replacedFiles, 2)
+        XCTAssertEqual(result.changeSummary.unchangedFiles, 0)
+        XCTAssertEqual(result.changeSummary.failedFiles, 0)
         XCTAssertFalse(FileManager.default.fileExists(atPath: context.usb.appendingPathComponent("업무자료").path))
+    }
+
+    func testOverwriteResultSeparatesNewReplacedAndUnchangedFiles() throws {
+        let context = try makeContext()
+        try FileManager.default.createDirectory(
+            at: context.usb.appendingPathComponent("docs"),
+            withIntermediateDirectories: true
+        )
+        let unchanged = context.usb.appendingPathComponent("root.txt")
+        let replaced = context.usb.appendingPathComponent("docs/report.txt")
+        try Data("root-data".utf8).write(to: unchanged)
+        try Data("old-report".utf8).write(to: replaced)
+
+        let result = try context.pipeline.commit(
+            zip: context.zip,
+            delivery: context.delivery,
+            destination: context.usb,
+            overwriteExisting: true,
+            progress: { _ in }
+        )
+
+        XCTAssertEqual(result.changeSummary.totalFiles, 2)
+        XCTAssertEqual(result.changeSummary.newFiles, 0)
+        XCTAssertEqual(result.changeSummary.replacedFiles, 1)
+        XCTAssertEqual(result.changeSummary.unchangedFiles, 1)
+        XCTAssertEqual(result.changeSummary.failedFiles, 0)
+        XCTAssertEqual(try Data(contentsOf: unchanged), Data("root-data".utf8))
+        XCTAssertEqual(try Data(contentsOf: replaced), Data("report-data".utf8))
     }
 
     func testArchiveNameAndSDCardRootWrappersAreRemovedForDirectUSBReceive() throws {

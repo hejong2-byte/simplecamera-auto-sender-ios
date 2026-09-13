@@ -74,6 +74,23 @@ final class USBReceiverReceiveStatusTests: XCTestCase {
         XCTAssertEqual(context.model.receiveStatus.kind, .active)
     }
 
+    func testPassivePollingDoesNotHideDismissButtonForCompletedOutcome() async throws {
+        let gate = ReceivePollGate()
+        let context = try makeContext(
+            outcome: outcome(receiverID: receiverID, kind: .saved),
+            receiveLocalOnce: { try await gate.wait() }
+        )
+        await context.model.refresh()
+        let polling = Task { await context.model.pollOnce() }
+        await gate.waitUntilStarted()
+
+        XCTAssertTrue(context.model.isPerformingReceive)
+        XCTAssertTrue(context.model.canDismissReceiveOutcome)
+
+        await gate.release()
+        await polling.value
+    }
+
     func testDismissPersistenceFailureKeepsNoticeVisible() async throws {
         let warning = outcome(receiverID: receiverID, kind: .savedWithoutReceipt)
         let context = try makeContext(outcome: warning, clearFails: true)
@@ -271,7 +288,8 @@ final class USBReceiverReceiveStatusTests: XCTestCase {
         outcome: IPhoneReceiveOutcome? = nil,
         storedFiles: [IPhoneStoredFile] = [],
         outcomeStore: IPhoneReceiveOutcomeStore? = nil,
-        clearFails: Bool = false
+        clearFails: Bool = false,
+        receiveLocalOnce: @escaping USBReceiverViewModel.ReceiveLocalOnce = {}
     ) throws -> (
         model: USBReceiverViewModel,
         progress: USBReceiveProgressStore,
@@ -300,6 +318,7 @@ final class USBReceiverReceiveStatusTests: XCTestCase {
                 fileURL: directory.appendingPathComponent("destination.json")
             ),
             registrar: ReceiveStatusRegistrar(),
+            receiveLocalOnce: receiveLocalOnce,
             receiveOnce: { USBReceiveSummary(discovered: 0, completed: 0) },
             storedFiles: { storedFiles },
             progressUpdates: { progress.updates() },
@@ -379,6 +398,25 @@ final class USBReceiverReceiveStatusTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(5))
         }
         XCTFail("수신 상태가 시간 안에 반영되지 않았습니다.")
+    }
+}
+
+private actor ReceivePollGate {
+    private var started = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func wait() async throws {
+        started = true
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func waitUntilStarted() async {
+        while !started { await Task.yield() }
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
     }
 }
 

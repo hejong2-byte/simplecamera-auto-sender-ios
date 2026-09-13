@@ -136,10 +136,69 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         )
         XCTAssertTrue(result.failed.isEmpty, result.errorMessage ?? "ZIP overwrite failed")
         XCTAssertEqual(result.verified.count, 1)
+        XCTAssertEqual(result.changeSummary.totalFiles, 1)
+        XCTAssertEqual(result.changeSummary.replacedFiles, 1)
+        XCTAssertEqual(result.changeSummary.unchangedFiles, 0)
         XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent("MAP/data.bin")), Data("new".utf8))
         XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent("MAP/keep.bin")), Data("keep".utf8))
         XCTAssertFalse(FileManager.default.fileExists(atPath: context.usbDirectory.appendingPathComponent("received").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
+
+    func testRegularFileCollisionRequiresConfirmationAndThenReplacesExactName() async throws {
+        let context = try makeContext()
+        let file = try makeStoredFile(
+            name: "보고서.pdf",
+            data: Data("new report".utf8),
+            in: context.sourceDirectory
+        )
+        let destination = context.usbDirectory.appendingPathComponent(file.name)
+        try Data("old report".utf8).write(to: destination)
+
+        let first = await context.service.export([file], to: context.destination)
+        XCTAssertEqual(first.failed.map(\.error), [.overwriteConfirmationRequired])
+        XCTAssertEqual(try Data(contentsOf: destination), Data("old report".utf8))
+
+        let second = await context.service.export(
+            [file],
+            to: context.destination,
+            overwriteExisting: true
+        )
+        XCTAssertTrue(second.failed.isEmpty, second.errorMessage ?? "regular overwrite failed")
+        XCTAssertEqual(second.changeSummary.totalFiles, 1)
+        XCTAssertEqual(second.changeSummary.newFiles, 0)
+        XCTAssertEqual(second.changeSummary.replacedFiles, 1)
+        XCTAssertEqual(second.changeSummary.unchangedFiles, 0)
+        XCTAssertEqual(try Data(contentsOf: destination), Data("new report".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: context.usbDirectory.appendingPathComponent("보고서 (1).pdf").path
+        ))
+    }
+
+    func testRegularIdenticalFileIsReportedAndLeftUnchangedAfterApproval() async throws {
+        let context = try makeContext()
+        let bytes = Data("same report".utf8)
+        let file = try makeStoredFile(name: "동일.pdf", data: bytes, in: context.sourceDirectory)
+        let destination = context.usbDirectory.appendingPathComponent(file.name)
+        try bytes.write(to: destination)
+        let attributes = [FileAttributeKey.modificationDate: Date(timeIntervalSince1970: 10)]
+        try FileManager.default.setAttributes(attributes, ofItemAtPath: destination.path)
+
+        let first = await context.service.export([file], to: context.destination)
+        XCTAssertEqual(first.failed.map(\.error), [.overwriteConfirmationRequired])
+        let second = await context.service.export(
+            [file],
+            to: context.destination,
+            overwriteExisting: true
+        )
+
+        XCTAssertTrue(second.failed.isEmpty)
+        XCTAssertEqual(second.changeSummary.unchangedFiles, 1)
+        XCTAssertEqual(second.changeSummary.replacedFiles, 0)
+        XCTAssertEqual(
+            try FileManager.default.attributesOfItem(atPath: destination.path)[.modificationDate] as? Date,
+            Date(timeIntervalSince1970: 10)
+        )
     }
 
     func testCancelAfterUSBDisappearsReportsUnconfirmedCleanupAndPreservesSource() async throws {

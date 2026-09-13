@@ -346,28 +346,34 @@ final class USBReceiveServiceTests: XCTestCase {
         )
     }
 
-    func testExistingDifferentFileGetsNumberedNameWithoutOverwrite() async throws {
+    func testExistingDifferentRegularFileRequiresOverwriteConfirmation() async throws {
         let fixture = try makeFixture(payload: zipPayload(count: 25), chunkSize: 8)
         let existing = fixture.destination.appendingPathComponent("업무.zip")
         let existingBytes = Data("do-not-overwrite".utf8)
         try existingBytes.write(to: existing)
 
-        _ = try await fixture.service.runOnce()
+        do {
+            _ = try await fixture.service.runOnce()
+            XCTFail("Expected overwrite confirmation")
+        } catch let USBZIPReceivePipelineError.overwriteRequired(request) {
+            XCTAssertEqual(request.deliveryID, fixture.delivery.deliveryID)
+            XCTAssertEqual(request.paths, ["업무.zip"])
+        }
 
         XCTAssertEqual(try Data(contentsOf: existing), existingBytes)
-        XCTAssertEqual(
-            try Data(contentsOf: fixture.destination.appendingPathComponent("업무 (1).zip")),
-            fixture.payload
-        )
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.destination.appendingPathComponent("업무 (1).zip").path
+        ))
     }
 
-    func testExtensionlessFileCollisionUsesNumberedNameWithoutTrailingDot() async throws {
+    func testApprovedRegularFileOverwriteReplacesExactNameWithoutNumberedCopy() async throws {
         let payload = Data("new-readme".utf8)
         let fixture = try makeFixture(
             payload: payload,
             fileName: "README",
             contentType: "text/plain",
-            chunkSize: 4
+            chunkSize: 4,
+            overwriteExisting: true
         )
         let existing = fixture.destination.appendingPathComponent("README")
         let existingBytes = Data("do-not-overwrite".utf8)
@@ -375,19 +381,15 @@ final class USBReceiveServiceTests: XCTestCase {
 
         _ = try await fixture.service.runOnce()
 
-        XCTAssertEqual(try Data(contentsOf: existing), existingBytes)
-        XCTAssertEqual(
-            try Data(contentsOf: fixture.destination.appendingPathComponent("README (1)")),
-            payload
-        )
+        XCTAssertEqual(try Data(contentsOf: existing), payload)
         XCTAssertFalse(
             FileManager.default.fileExists(
-                atPath: fixture.destination.appendingPathComponent("README (1).").path
+                atPath: fixture.destination.appendingPathComponent("README (1)").path
             )
         )
     }
 
-    func testMaximumLengthCollisionPreservesExtensionWithinUTF8Limit() async throws {
+    func testMaximumLengthCollisionAlsoRequiresConfirmation() async throws {
         let requestedName = String(repeating: "a", count: 236) + ".zip"
         let payload = zipPayload(count: 12)
         let fixture = try makeFixture(
@@ -399,18 +401,12 @@ final class USBReceiveServiceTests: XCTestCase {
             to: fixture.destination.appendingPathComponent(requestedName)
         )
 
-        _ = try await fixture.service.runOnce()
-
-        let names = try FileManager.default.contentsOfDirectory(
-            atPath: fixture.destination.path
-        ).filter { !$0.hasPrefix(".") && $0 != requestedName }
-        let storedName = try XCTUnwrap(names.first)
-        XCTAssertLessThanOrEqual(storedName.lengthOfBytes(using: .utf8), 240)
-        XCTAssertEqual((storedName as NSString).pathExtension, "zip")
-        XCTAssertEqual(
-            try Data(contentsOf: fixture.destination.appendingPathComponent(storedName)),
-            payload
-        )
+        do {
+            _ = try await fixture.service.runOnce()
+            XCTFail("Expected overwrite confirmation")
+        } catch let USBZIPReceivePipelineError.overwriteRequired(request) {
+            XCTAssertEqual(request.paths, [requestedName])
+        }
     }
 
     func testStaleDestinationFailsWithoutAcknowledgement() async throws {
@@ -527,7 +523,8 @@ final class USBReceiveServiceTests: XCTestCase {
         destinationIsStale: Bool = false,
         canAccessSecurityScope: Bool = true,
         currentVolumeID: String = "test-volume",
-        archiveMode: IPhoneReceiveArchiveMode = .keepArchive
+        archiveMode: IPhoneReceiveArchiveMode = .keepArchive,
+        overwriteExisting: Bool = false
     ) throws -> Fixture {
         let destination = temporaryDirectory()
         let delivery = IPhoneDelivery(
@@ -579,7 +576,11 @@ final class USBReceiveServiceTests: XCTestCase {
             progressStore: progressStore,
             receiveDecision: { _, deliveryID in
                 deliveryID == delivery.deliveryID
-                    ? IPhoneReceiveDecision(destination: .usb, archiveMode: archiveMode)
+                    ? IPhoneReceiveDecision(
+                        destination: .usb,
+                        archiveMode: archiveMode,
+                        overwriteExisting: overwriteExisting
+                    )
                     : nil
             },
             zipStagingDirectory: zipStagingDirectory
