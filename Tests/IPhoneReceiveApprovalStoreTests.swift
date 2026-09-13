@@ -2,6 +2,29 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneReceiveApprovalStoreTests: XCTestCase {
+    func testOverwriteApprovalPreservesDestinationAndArchiveMode() throws {
+        let url = location()
+        let store = IPhoneReceiveApprovalStore(fileURL: url)
+        let receiverID = UUID()
+        let deliveryID = UUID()
+        try store.approve(
+            [deliveryID],
+            receiverID: receiverID,
+            decision: IPhoneReceiveDecision(destination: .usb, archiveMode: .extract)
+        )
+
+        try store.approveOverwrite(deliveryID: deliveryID, receiverID: receiverID)
+
+        XCTAssertEqual(
+            try store.decisions(receiverID: receiverID)[deliveryID],
+            IPhoneReceiveDecision(
+                destination: .usb,
+                archiveMode: .extract,
+                overwriteExisting: true
+            )
+        )
+    }
+
     func testDecisionPersistsDestinationAndZIPMode() throws {
         let url = location()
         let receiver = UUID()

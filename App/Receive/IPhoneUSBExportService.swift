@@ -14,6 +14,7 @@ enum IPhoneUSBExportError: String, Error, Codable, Equatable, Sendable {
     case zipExtractionFailed
     case copyFailed
     case verificationRecordMissing
+    case overwriteConfirmationRequired
 }
 
 struct IPhoneUSBExportFailure: Equatable, Sendable {
@@ -292,7 +293,8 @@ actor IPhoneUSBExportService {
         _ files: [IPhoneStoredFile],
         to destination: USBBookmarkDestination,
         archiveMode: IPhoneReceiveArchiveMode = .extract,
-        preservePartialOnCancellation: Bool = false
+        preservePartialOnCancellation: Bool = false,
+        overwriteExisting: Bool = false
     ) -> IPhoneUSBExportSummary {
         guard !files.isEmpty else {
             return IPhoneUSBExportSummary(verified: [], failed: [])
@@ -313,7 +315,8 @@ actor IPhoneUSBExportService {
                     totalCount: files.count,
                     completedCount: verified.count,
                     archiveMode: archiveMode,
-                    preservePartialOnCancellation: preservePartialOnCancellation
+                    preservePartialOnCancellation: preservePartialOnCancellation,
+                    overwriteExisting: overwriteExisting
                 )
                 verified.append(decision)
             } catch is CancellationError {
@@ -485,7 +488,8 @@ actor IPhoneUSBExportService {
         totalCount: Int,
         completedCount: Int,
         archiveMode: IPhoneReceiveArchiveMode,
-        preservePartialOnCancellation: Bool
+        preservePartialOnCancellation: Bool,
+        overwriteExisting: Bool
     ) throws -> IPhoneUSBDeletionDecision {
         let startedAt = now()
         publish(
@@ -520,7 +524,8 @@ actor IPhoneUSBExportService {
                 totalCount: totalCount,
                 completedCount: completedCount,
                 startedAt: startedAt,
-                preservePartialOnCancellation: preservePartialOnCancellation
+                preservePartialOnCancellation: preservePartialOnCancellation,
+                overwriteExisting: overwriteExisting
             )
         }
         // Actual writes, close errors and size checks gate completion. Full USB
@@ -647,7 +652,8 @@ actor IPhoneUSBExportService {
         totalCount: Int,
         completedCount: Int,
         startedAt: Date,
-        preservePartialOnCancellation: Bool
+        preservePartialOnCancellation: Bool,
+        overwriteExisting: Bool
     ) throws -> IPhoneUSBDeletionDecision {
         var phaseStartedAt = startedAt
         func report(_ stage: USBReceiveStage, _ bytes: Int64, _ total: Int64, _ detail: String) {
@@ -726,10 +732,18 @@ actor IPhoneUSBExportService {
             .compactMap { $0.split(separator: "/").first.map(String.init) }).sorted()
         func checkRootConflicts() throws {
             for name in topLevelNames {
-                let target = destination.url.appendingPathComponent(name)
-                if name == Self.partialDirectoryName || fileManager.fileExists(atPath: target.path) {
-                    throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
+                if name == Self.partialDirectoryName {
+                    throw IPhoneUSBExportError.destinationNotWritable
                 }
+            }
+            let conflicts = USBStagedTreeCommitter.conflictingPaths(
+                destinationRoot: destination.url,
+                directories: extraction.directories,
+                files: extraction.files.map(\.relativePath),
+                fileManager: fileManager
+            )
+            if !overwriteExisting, !conflicts.isEmpty {
+                throw IPhoneUSBExportError.overwriteConfirmationRequired
             }
         }
         func topLevelName(_ relativePath: String) -> String? {
@@ -780,8 +794,8 @@ actor IPhoneUSBExportService {
                 let staged = partialURL.appendingPathComponent(name)
                 let target = destination.url.appendingPathComponent(name)
                 guard fileManager.fileExists(atPath: target.path) else { continue }
-                guard !fileManager.fileExists(atPath: staged.path),
-                      try finalizedRootItemMatches(name) else {
+                if fileManager.fileExists(atPath: staged.path) { continue }
+                guard try finalizedRootItemMatches(name) else {
                     throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
                 }
                 finalizedTopLevelNames.insert(name)
@@ -926,11 +940,32 @@ actor IPhoneUSBExportService {
                 }
                 continue
             }
-            guard fileManager.fileExists(atPath: staged.path),
-                  !fileManager.fileExists(atPath: target.path) else {
+            guard fileManager.fileExists(atPath: staged.path) else {
                 throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
             }
-            try fileManager.moveItem(at: staged, to: target)
+            if fileManager.fileExists(atPath: target.path) {
+                let directories = extraction.directories.filter { topLevelName($0) == name }
+                let files = extraction.files
+                    .filter { topLevelName($0.relativePath) == name }
+                    .map(\.relativePath)
+                let backup = partialDirectory.appendingPathComponent(
+                    "overwrite-\(UUID().uuidString.lowercased()).backup",
+                    isDirectory: true
+                )
+                defer { try? fileManager.removeItem(at: backup) }
+                try USBStagedTreeCommitter(
+                    fileManager: fileManager,
+                    moveItem: { try fileManager.moveItem(at: $0, to: $1) }
+                ).commit(
+                    stagedRoot: partialURL,
+                    destinationRoot: destination.url,
+                    directories: directories,
+                    files: files,
+                    backupRoot: backup
+                )
+            } else {
+                try fileManager.moveItem(at: staged, to: target)
+            }
         }
         // Cleanup trouble must not turn successfully placed data into a copy
         // failure. Report it separately and retain the original ZIP.

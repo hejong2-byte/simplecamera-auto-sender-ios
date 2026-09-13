@@ -226,6 +226,15 @@ final class USBReceiverDependencies: @unchecked Sendable {
                 }
                 try approvalStore.approve(ids, receiverID: credentials.identity.receiverID, destination: .iphoneLocal)
             },
+            approveUSBOverwrite: { [approvalStore, registrationStore] deliveryID in
+                guard let credentials = try registrationStore.load() else {
+                    throw USBReceiveServiceError.missingRegistration
+                }
+                try approvalStore.approveOverwrite(
+                    deliveryID: deliveryID,
+                    receiverID: credentials.identity.receiverID
+                )
+            },
             storedFiles: { [catalog] in try catalog.refresh() },
             previewStoredFile: { [catalog] in try catalog.previewURL(for: $0) },
             deleteStoredFiles: { [catalog, jobStore] files, progress in
@@ -240,6 +249,15 @@ final class USBReceiverDependencies: @unchecked Sendable {
                     to: destination,
                     archiveMode: archiveMode,
                     preservePartialOnCancellation: true
+                )
+            },
+            overwriteExportFiles: { [exporter] files, destination, archiveMode in
+                await exporter.export(
+                    files,
+                    to: destination,
+                    archiveMode: archiveMode,
+                    preservePartialOnCancellation: true,
+                    overwriteExisting: true
                 )
             },
             cleanupExportTemps: { [exporter] destination, progress in

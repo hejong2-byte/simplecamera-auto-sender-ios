@@ -23,12 +23,14 @@ final class USBReceiverViewModel: ObservableObject {
     private struct USBExportRequest {
         let files: [IPhoneStoredFile]
         let archiveMode: IPhoneReceiveArchiveMode
+        let overwriteExisting: Bool
     }
 
     typealias ReceiveOnce = @Sendable () async throws -> USBReceiveSummary
     typealias ReceiveLocalOnce = @Sendable () async throws -> Void
     typealias PendingDeliveryIDs = @Sendable () async throws -> Set<UUID>
     typealias ApproveLocalFallback = @Sendable (Set<UUID>) throws -> Void
+    typealias ApproveUSBOverwrite = @Sendable (UUID) throws -> Void
     typealias StoredFilesProvider = @Sendable () throws -> [IPhoneStoredFile]
     typealias StoredFilePreviewAction = @Sendable (IPhoneStoredFile) throws -> URL
     typealias DeleteStoredFiles = @Sendable ([IPhoneStoredFile], @Sendable (FileDeletionProgress) -> Void) async throws -> IPhoneStoredFileDeletionSummary
@@ -37,6 +39,7 @@ final class USBReceiverViewModel: ObservableObject {
         USBBookmarkDestination,
         IPhoneReceiveArchiveMode
     ) async -> IPhoneUSBExportSummary
+    typealias OverwriteExportFiles = ExportFiles
     typealias PendingDeletionDecisions = @Sendable () -> [IPhoneUSBDeletionDecision]
     typealias VerifyCopies = @Sendable ([IPhoneStoredFile], USBBookmarkDestination, @Sendable (USBReceiveProgress) -> Void) async -> IPhoneUSBExportSummary
     typealias KeepOriginals = @Sendable (Set<UUID>) async throws -> Void
@@ -91,6 +94,8 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var selectedStoredFileIDs: Set<String> = []
     @Published private(set) var storedFilesPendingDeletion: [IPhoneStoredFile] = []
     @Published private(set) var storedZIPExportFilesPendingChoice: [IPhoneStoredFile] = []
+    @Published private(set) var storedFilesPendingOverwriteConfirmation: [IPhoneStoredFile] = []
+    @Published private(set) var usbReceiveOverwriteRequest: USBZIPOverwriteRequest?
     @Published private(set) var isDeletingStoredFiles = false
     @Published private(set) var storedFileDeletionProgress: FileDeletionProgress?
     @Published private(set) var usbFolderDeletionProgress: FileDeletionProgress?
@@ -113,7 +118,9 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var selectedStorageFilePaths: Set<String> = []
     @Published private(set) var isLoadingStorageFiles = false
     @Published private(set) var isSendingStorageFiles = false
+    @Published private(set) var isDeletingStorageFiles = false
     @Published private(set) var storageExplorerError: String?
+    @Published private(set) var storageExplorerMessage: String?
 
     private enum USBFallbackMode {
         case none
@@ -130,11 +137,13 @@ final class USBReceiverViewModel: ObservableObject {
     private let receiveLocalOnce: ReceiveLocalOnce
     private let pendingDeliveryIDs: PendingDeliveryIDs
     private let approveLocalFallback: ApproveLocalFallback
+    private let approveUSBOverwrite: ApproveUSBOverwrite
     private let storedFilesProvider: StoredFilesProvider
     private let previewStoredFile: StoredFilePreviewAction
     private let canPreviewFile: @MainActor (URL) -> Bool
     private let deleteStoredFiles: DeleteStoredFiles
     private let exportFiles: ExportFiles
+    private let overwriteExportFiles: OverwriteExportFiles
     private let cleanupExportTemps: CleanupExportTemps
     private var usbCopyTask: Task<IPhoneUSBExportSummary, Never>?
     private let copyBackgroundTask = USBCopyBackgroundTask()
@@ -168,6 +177,8 @@ final class USBReceiverViewModel: ObservableObject {
     private var pollingTask: Task<Void, Never>?
     private var fallbackMode: USBFallbackMode = .none
     private var promptedDeliveryIDs: Set<UUID> = []
+    private var declinedOverwriteDeliveryIDs: Set<UUID> = []
+    private var pendingStoredOverwriteArchiveMode: IPhoneReceiveArchiveMode?
     private var receiverID: UUID?
     private var usbDestinationPendingDeletion: USBBookmarkDestination?
 
@@ -181,6 +192,7 @@ final class USBReceiverViewModel: ObservableObject {
         receiveLocalOnce: @escaping ReceiveLocalOnce = {},
         pendingDeliveryIDs: @escaping PendingDeliveryIDs = { [] },
         approveLocalFallback: @escaping ApproveLocalFallback = { _ in },
+        approveUSBOverwrite: @escaping ApproveUSBOverwrite = { _ in },
         storedFiles: @escaping StoredFilesProvider = { [] },
         previewStoredFile: @escaping StoredFilePreviewAction = { _ in
             throw IPhoneStoredFilePreviewError.unavailable
@@ -190,6 +202,9 @@ final class USBReceiverViewModel: ObservableObject {
             throw CocoaError(.featureUnsupported)
         },
         exportFiles: @escaping ExportFiles = { _, _, _ in
+            IPhoneUSBExportSummary(verified: [], failed: [])
+        },
+        overwriteExportFiles: @escaping OverwriteExportFiles = { _, _, _ in
             IPhoneUSBExportSummary(verified: [], failed: [])
         },
         cleanupExportTemps: @escaping CleanupExportTemps = { _, _ in USBExportTemporaryCleanupSummary() },
@@ -234,11 +249,13 @@ final class USBReceiverViewModel: ObservableObject {
         self.receiveLocalOnce = receiveLocalOnce
         self.pendingDeliveryIDs = pendingDeliveryIDs
         self.approveLocalFallback = approveLocalFallback
+        self.approveUSBOverwrite = approveUSBOverwrite
         self.storedFilesProvider = storedFiles
         self.previewStoredFile = previewStoredFile
         self.canPreviewFile = canPreviewFile
         self.deleteStoredFiles = deleteStoredFiles
         self.exportFiles = exportFiles
+        self.overwriteExportFiles = overwriteExportFiles
         self.beginExportProgress = beginExportProgress
         self.interruptExportProgress = interruptExportProgress
         self.clearInterruptedExportProgress = clearInterruptedExportProgress
@@ -322,6 +339,15 @@ final class USBReceiverViewModel: ObservableObject {
     }
     var hasStoredFileSelection: Bool { !selectedStoredFileIDs.isEmpty }
     var hasStorageFileSelection: Bool { !selectedStorageFilePaths.isEmpty }
+    var hasSelectedStorageFilesForTransfer: Bool {
+        storageEntries.contains {
+            $0.kind == .file && selectedStorageFilePaths.contains($0.relativePath)
+        }
+    }
+    var areAllVisibleStorageEntriesSelected: Bool {
+        !storageEntries.isEmpty
+            && storageEntries.allSatisfy { selectedStorageFilePaths.contains($0.relativePath) }
+    }
     var selectedStorageFileCount: Int { selectedStorageFilePaths.count }
     var selectedStorageFileBytes: Int64 {
         storageEntries
@@ -330,6 +356,10 @@ final class USBReceiverViewModel: ObservableObject {
     }
     var needsStoredFileDeletionConfirmation: Bool { !storedFilesPendingDeletion.isEmpty }
     var needsStoredZIPExportChoice: Bool { !storedZIPExportFilesPendingChoice.isEmpty }
+    var needsStoredOverwriteConfirmation: Bool {
+        !storedFilesPendingOverwriteConfirmation.isEmpty
+    }
+    var needsUSBReceiveOverwriteConfirmation: Bool { usbReceiveOverwriteRequest != nil }
     var needsUSBFolderDeletionConfirmation: Bool {
         usbFolderContentsPendingDeletion != nil
     }
@@ -564,6 +594,7 @@ final class USBReceiverViewModel: ObservableObject {
             storageRelativePath = ""
             selectedStorageFilePaths = []
             storageExplorerError = nil
+            storageExplorerMessage = nil
             lastError = nil
         } catch {
             lastError = "USB 폴더 설정을 지우지 못했습니다."
@@ -571,7 +602,7 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     func refreshStorageFiles() async {
-        guard !isLoadingStorageFiles, !isSendingStorageFiles else { return }
+        guard !isLoadingStorageFiles, !isSendingStorageFiles, !isDeletingStorageFiles else { return }
         isLoadingStorageFiles = true
         defer { isLoadingStorageFiles = false }
 
@@ -588,12 +619,7 @@ final class USBReceiverViewModel: ObservableObject {
                 )
             }.value
             storageEntries = result
-            let visibleFiles = Set(
-                result.lazy
-                    .filter { $0.kind == .file }
-                    .map(\.relativePath)
-            )
-            selectedStorageFilePaths.formIntersection(visibleFiles)
+            selectedStorageFilePaths.formIntersection(Set(result.map(\.relativePath)))
             storageExplorerError = nil
         } catch {
             storageEntries = []
@@ -603,14 +629,14 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     func openStorageDirectory(_ entry: USBStorageFileEntry) async {
-        guard entry.kind == .directory, !isSendingStorageFiles else { return }
+        guard entry.kind == .directory, !isSendingStorageFiles, !isDeletingStorageFiles else { return }
         storageRelativePath = entry.relativePath
         selectedStorageFilePaths = []
         await refreshStorageFiles()
     }
 
     func openParentStorageDirectory() async {
-        guard !storageRelativePath.isEmpty, !isSendingStorageFiles else { return }
+        guard !storageRelativePath.isEmpty, !isSendingStorageFiles, !isDeletingStorageFiles else { return }
         var components = storageRelativePath.split(separator: "/").map(String.init)
         components.removeLast()
         storageRelativePath = components.joined(separator: "/")
@@ -619,28 +645,76 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     func toggleStorageFileSelection(_ relativePath: String) {
-        guard !isSendingStorageFiles,
-              storageEntries.contains(where: {
-                  $0.kind == .file && $0.relativePath == relativePath
-              }) else { return }
+        toggleStorageEntrySelection(relativePath)
+    }
+
+    func toggleStorageEntrySelection(_ relativePath: String) {
+        guard !isSendingStorageFiles, !isDeletingStorageFiles,
+              storageEntries.contains(where: { $0.relativePath == relativePath }) else { return }
         if selectedStorageFilePaths.contains(relativePath) {
             selectedStorageFilePaths.remove(relativePath)
         } else {
             selectedStorageFilePaths.insert(relativePath)
         }
         storageExplorerError = nil
+        storageExplorerMessage = nil
+    }
+
+    func toggleAllVisibleStorageEntries() {
+        guard !isSendingStorageFiles, !isDeletingStorageFiles, !storageEntries.isEmpty else { return }
+        let visible = Set(storageEntries.map(\.relativePath))
+        if areAllVisibleStorageEntriesSelected {
+            selectedStorageFilePaths.subtract(visible)
+        } else {
+            selectedStorageFilePaths.formUnion(visible)
+        }
+        storageExplorerError = nil
+        storageExplorerMessage = nil
     }
 
     func clearStorageFileSelection() {
-        guard !isSendingStorageFiles else { return }
+        guard !isSendingStorageFiles, !isDeletingStorageFiles else { return }
         selectedStorageFilePaths = []
+    }
+
+    func deleteSelectedStorageFiles() async {
+        guard hasStorageFileSelection, !isSendingStorageFiles, !isDeletingStorageFiles else { return }
+        let selectedEntries = storageEntries.filter {
+            selectedStorageFilePaths.contains($0.relativePath)
+        }
+        guard !selectedEntries.isEmpty else { return }
+
+        isDeletingStorageFiles = true
+        storageExplorerError = nil
+        storageExplorerMessage = nil
+        do {
+            let destination = try await Task.detached(priority: .userInitiated) {
+                [bookmarkStore] in
+                guard let destination = try bookmarkStore.resolve() else {
+                    throw USBStorageFileExplorerError.destinationMissing
+                }
+                return destination
+            }.value
+            let deleted = try await storageExplorer.deleteFiles(
+                destination: destination,
+                relativePaths: selectedEntries.map(\.relativePath)
+            )
+            let noun = selectedEntries.allSatisfy { $0.kind == .file } ? "파일" : "항목"
+            selectedStorageFilePaths = []
+            isDeletingStorageFiles = false
+            await refreshStorageFiles()
+            storageExplorerMessage = "선택한 \(noun) \(deleted)개를 삭제했습니다."
+        } catch {
+            isDeletingStorageFiles = false
+            storageExplorerError = Self.storageExplorerMessage(for: error)
+        }
     }
 
     func sendSelectedStorageFiles(
         to recipientCode: String,
         send: @escaping SendStorageFiles
     ) async {
-        guard hasStorageFileSelection, !isSendingStorageFiles else { return }
+        guard hasSelectedStorageFilesForTransfer, !isSendingStorageFiles, !isDeletingStorageFiles else { return }
         let code = recipientCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard code.count == 6, code.allSatisfy(\.isNumber) else {
             storageExplorerError = "전송할 PC의 6자리 수신코드를 다시 확인해 주세요."
@@ -660,7 +734,9 @@ final class USBReceiverViewModel: ObservableObject {
                 return destination
             }.value
             let selected = storageEntries
-                .filter { selectedStorageFilePaths.contains($0.relativePath) }
+                .filter {
+                    $0.kind == .file && selectedStorageFilePaths.contains($0.relativePath)
+                }
                 .map(\.relativePath)
             try await storageExplorer.withFiles(
                 destination: destination,
@@ -712,7 +788,8 @@ final class USBReceiverViewModel: ObservableObject {
         guard !isExportingToUSB, !isPerformingReceive, !isChoosingUSBFolder,
               !needsLocalFallbackDecision, !needsDeletionDecision,
               !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation,
-              !isCleaningUSBFolder else { return }
+              !isCleaningUSBFolder, !needsUSBReceiveOverwriteConfirmation,
+              !needsStoredOverwriteConfirmation else { return }
         isPerformingReceive = true
         defer { isPerformingReceive = false }
         do {
@@ -858,6 +935,40 @@ final class USBReceiverViewModel: ObservableObject {
         await exportStoredFiles(selected, archiveMode: archiveMode)
     }
 
+    func confirmStoredFileOverwrite() async {
+        let files = storedFilesPendingOverwriteConfirmation
+        guard !files.isEmpty, let mode = pendingStoredOverwriteArchiveMode else { return }
+        storedFilesPendingOverwriteConfirmation = []
+        pendingStoredOverwriteArchiveMode = nil
+        await exportStoredFiles(files, archiveMode: mode, overwriteExisting: true)
+    }
+
+    func cancelStoredFileOverwrite() {
+        storedFilesPendingOverwriteConfirmation = []
+        pendingStoredOverwriteArchiveMode = nil
+        usbExportCompletionMessage = "덮어쓰기를 취소했습니다. 기존 USB 파일과 iPhone 원본을 유지했습니다."
+    }
+
+    func confirmUSBReceiveOverwrite() async {
+        guard let request = usbReceiveOverwriteRequest else { return }
+        do {
+            try approveUSBOverwrite(request.deliveryID)
+            declinedOverwriteDeliveryIDs.remove(request.deliveryID)
+            usbReceiveOverwriteRequest = nil
+            lastError = nil
+            try await pollUSB()
+        } catch {
+            lastError = Self.message(for: error)
+        }
+    }
+
+    func cancelUSBReceiveOverwrite() {
+        guard let request = usbReceiveOverwriteRequest else { return }
+        declinedOverwriteDeliveryIDs.insert(request.deliveryID)
+        usbReceiveOverwriteRequest = nil
+        lastError = "덮어쓰기를 취소했습니다. USB의 기존 항목은 유지되고 수신 파일은 서버에 대기합니다."
+    }
+
     var canCancelUSBCopy: Bool {
         isExportingToUSB && !isVerifyingUSBCopies && usbCopyTask != nil && !isCancellingUSBCopy
     }
@@ -883,7 +994,7 @@ final class USBReceiverViewModel: ObservableObject {
         selectedStoredFileIDs = Set(files.map(\.id))
         let mode = progress.archiveMode
             ?? (files.contains(where: Self.isZIP) ? .extract : .keepArchive)
-        await exportStoredFiles(files, archiveMode: mode)
+        await exportStoredFiles(files, archiveMode: mode, overwriteExisting: false)
     }
 
     func dismissInterruptedUSBCopy() {
@@ -988,12 +1099,17 @@ final class USBReceiverViewModel: ObservableObject {
 
     private func exportStoredFiles(
         _ selected: [IPhoneStoredFile],
-        archiveMode: IPhoneReceiveArchiveMode
+        archiveMode: IPhoneReceiveArchiveMode,
+        overwriteExisting: Bool = false
     ) async {
         guard !isExportingToUSB, !isReceivingFile,
               !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation,
               !isCleaningUSBFolder else { return }
-        let request = USBExportRequest(files: selected, archiveMode: archiveMode)
+        let request = USBExportRequest(
+            files: selected,
+            archiveMode: archiveMode,
+            overwriteExisting: overwriteExisting
+        )
         currentExportRequest = request
         isExportingToUSB = true
         usbCopyBackgroundExpired = false
@@ -1033,7 +1149,12 @@ final class USBReceiverViewModel: ObservableObject {
                 usbExportCompletionMessage = "USB 복사 중단 · 백그라운드 실행 시간 종료"
                 return
             }
-            let task = Task { [exportFiles] in await exportFiles(selected, destination, archiveMode) }
+            let task = Task { [exportFiles, overwriteExportFiles] in
+                if overwriteExisting {
+                    return await overwriteExportFiles(selected, destination, archiveMode)
+                }
+                return await exportFiles(selected, destination, archiveMode)
+            }
             usbCopyTask = task
             let summary = await task.value
             selectedStoredFileIDs.subtract(summary.verified.map(\.sourceID))
@@ -1044,7 +1165,11 @@ final class USBReceiverViewModel: ObservableObject {
                     let remaining = selected.filter { !completedIDs.contains($0.id) }
                     interruptedExportRequest = remaining.isEmpty
                         ? nil
-                        : USBExportRequest(files: remaining, archiveMode: archiveMode)
+                        : USBExportRequest(
+                            files: remaining,
+                            archiveMode: archiveMode,
+                            overwriteExisting: overwriteExisting
+                        )
                     usbExportCompletionMessage = remaining.isEmpty
                         ? "USB 복사 완료"
                         : "USB 복사 중단 · 앱으로 돌아오면 중단 지점부터 이어받습니다."
@@ -1059,9 +1184,18 @@ final class USBReceiverViewModel: ObservableObject {
             } else {
                 interruptedExportRequest = nil
             }
+            let overwriteIDs = Set(summary.failed.compactMap {
+                $0.error == .overwriteConfirmationRequired ? $0.sourceID : nil
+            })
+            if !overwriteExisting, !overwriteIDs.isEmpty {
+                storedFilesPendingOverwriteConfirmation = selected.filter {
+                    overwriteIDs.contains($0.id)
+                }
+                pendingStoredOverwriteArchiveMode = archiveMode
+            }
             storedFiles = try storedFilesProvider()
             needsDeletionDecision = !pendingDeletionDecisions().isEmpty
-            lastUSBExportError = summary.errorMessage
+            lastUSBExportError = overwriteIDs.isEmpty ? summary.errorMessage : nil
             lastOriginalCleanupError = summary.cleanupWarning
         } catch {
             lastUSBExportError = Self.message(for: error)
@@ -1082,7 +1216,11 @@ final class USBReceiverViewModel: ObservableObject {
         guard isAppActive, !isExportingToUSB, let request = interruptedExportRequest else { return }
         interruptedExportRequest = nil
         Task { [weak self] in
-            await self?.exportStoredFiles(request.files, archiveMode: request.archiveMode)
+            await self?.exportStoredFiles(
+                request.files,
+                archiveMode: request.archiveMode,
+                overwriteExisting: request.overwriteExisting
+            )
         }
     }
 
@@ -1500,8 +1638,14 @@ final class USBReceiverViewModel: ObservableObject {
             break
         }
 
+        let pending = try await pendingDeliveryIDs()
+        if !pending.isEmpty, pending.isSubset(of: declinedOverwriteDeliveryIDs) { return }
         do {
             _ = try await receiveOnce()
+        } catch let USBZIPReceivePipelineError.overwriteRequired(request) {
+            guard !declinedOverwriteDeliveryIDs.contains(request.deliveryID) else { return }
+            usbReceiveOverwriteRequest = request
+            lastError = nil
         } catch let error as USBReceiveServiceError where Self.isDestinationError(error) {
             let pending = try await pendingDeliveryIDs()
             guard !pending.isEmpty else { throw error }

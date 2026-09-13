@@ -7,6 +7,7 @@ struct USBStorageManagementView: View {
     @ObservedObject var textModel: TextTransferViewModel
     @State private var isChoosingStorageRecipient = false
     @State private var recipientError: String?
+    @State private var isConfirmingSelectedDeletion = false
 
     var body: some View {
         ScrollView {
@@ -68,6 +69,18 @@ struct USBStorageManagementView: View {
             }
         } message: {
             Text(model.usbFolderDeletionConfirmationMessage)
+        }
+        .confirmationDialog(
+            "선택한 항목을 삭제하시겠습니까?",
+            isPresented: $isConfirmingSelectedDeletion,
+            titleVisibility: .visible
+        ) {
+            Button("취소", role: .cancel) {}
+            Button("삭제", role: .destructive) {
+                Task { await model.deleteSelectedStorageFiles() }
+            }
+        } message: {
+            Text("선택한 폴더 안의 모든 파일과 하위 폴더도 함께 삭제됩니다.")
         }
         .onChange(of: model.needsUSBFolderDeletionConfirmation) { _, showing in
             model.isShowingSettingsConfirmation = showing
@@ -137,6 +150,11 @@ struct USBStorageManagementView: View {
                     .font(.subheadline)
                     .foregroundStyle(.red)
             }
+            if let message = model.storageExplorerMessage {
+                Label(message, systemImage: "checkmark.circle.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.green)
+            }
 
             Divider()
             HStack {
@@ -149,11 +167,11 @@ struct USBStorageManagementView: View {
             }
 
             HStack(spacing: 10) {
-                Button("선택 해제") {
-                    model.clearStorageFileSelection()
+                Button(model.areAllVisibleStorageEntriesSelected ? "선택 해제" : "모두 선택") {
+                    model.toggleAllVisibleStorageEntries()
                 }
                 .buttonStyle(.bordered)
-                .disabled(!model.hasStorageFileSelection || isBusy)
+                .disabled(model.storageEntries.isEmpty || isBusy)
 
                 Button {
                     chooseStorageRecipient()
@@ -162,11 +180,20 @@ struct USBStorageManagementView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("storage-file-send")
+                .disabled(!model.hasSelectedStorageFilesForTransfer || isBusy)
+
+                Button("삭제", role: .destructive) {
+                    isConfirmingSelectedDeletion = true
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("storage-entry-delete")
                 .disabled(!model.hasStorageFileSelection || isBusy)
             }
 
             if model.isSendingStorageFiles {
                 ProgressView("선택 파일 전송 준비 중")
+            } else if model.isDeletingStorageFiles {
+                ProgressView("선택한 항목 삭제 중")
             } else if let message = transferModel.manualTransferMessage {
                 Text(message)
                     .font(.subheadline)
@@ -178,41 +205,50 @@ struct USBStorageManagementView: View {
 
     @ViewBuilder
     private func storageEntryRow(_ entry: USBStorageFileEntry) -> some View {
-        Button {
-            if entry.kind == .directory {
-                Task { await model.openStorageDirectory(entry) }
-            } else {
-                model.toggleStorageFileSelection(entry.relativePath)
-            }
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: entry.kind == .directory
-                    ? "folder.fill"
-                    : model.selectedStorageFilePaths.contains(entry.relativePath)
-                        ? "checkmark.circle.fill"
-                        : "circle")
+        HStack(spacing: 8) {
+            Button {
+                model.toggleStorageEntrySelection(entry.relativePath)
+            } label: {
+                Image(systemName: model.selectedStorageFilePaths.contains(entry.relativePath)
+                    ? "checkmark.circle.fill"
+                    : "circle")
                     .font(.title3)
-                    .foregroundStyle(entry.kind == .directory ? Color.cyan : Color.accentColor)
+                    .foregroundStyle(Color.accentColor)
                     .frame(width: 26)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(entry.name)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    Text(entry.kind == .directory ? "폴더" : storageByteText(entry.size))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                if entry.kind == .directory {
-                    Image(systemName: "chevron.right")
-                        .foregroundStyle(.secondary)
-                }
             }
-            .contentShape(Rectangle())
-            .padding(.vertical, 10)
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(entry.name) 선택")
+
+            Button {
+                if entry.kind == .directory {
+                    Task { await model.openStorageDirectory(entry) }
+                } else {
+                    model.toggleStorageEntrySelection(entry.relativePath)
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: entry.kind == .directory ? "folder.fill" : "doc.fill")
+                        .foregroundStyle(entry.kind == .directory ? Color.cyan : Color.secondary)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(entry.name)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        Text(entry.kind == .directory ? "폴더" : storageByteText(entry.size))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if entry.kind == .directory {
+                        Image(systemName: "chevron.right")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, 10)
         .accessibilityIdentifier("storage-entry-\(entry.relativePath)")
         .disabled(isBusy)
     }
@@ -332,6 +368,7 @@ struct USBStorageManagementView: View {
             || model.isCleaningUSBFolder
             || model.isLoadingStorageFiles
             || model.isSendingStorageFiles
+            || model.isDeletingStorageFiles
     }
 }
 

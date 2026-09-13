@@ -98,6 +98,10 @@ actor USBReceiveService {
             return try await performRunOnce()
         } catch let error where IPhoneReceiveErrorMessage.isCancellation(error) {
             throw CancellationError()
+        } catch let error as USBZIPReceivePipelineError {
+            if case .overwriteRequired = error { throw error }
+            progressStore.publishFailure(Self.errorMessage(error))
+            throw error
         } catch {
             progressStore.publishFailure(Self.errorMessage(error))
             throw error
@@ -650,7 +654,11 @@ actor USBReceiveService {
             commit = try zipPipeline.commit(
                 zip: sourceZIP,
                 delivery: delivery,
-                destination: destination.url
+                destination: destination.url,
+                overwriteExisting: (try receiveDecision(
+                    credentials.identity.receiverID,
+                    delivery.deliveryID
+                ))?.overwriteExisting == true
             ) { update in
                 let stage: USBReceiveStage
                 let bytes: Int64
@@ -680,6 +688,11 @@ actor USBReceiveService {
                     startedAt: startedAt
                 )
             }
+        } catch let error as USBZIPReceivePipelineError {
+            if case .overwriteRequired = error { throw error }
+            checkpoint.state = .failed
+            try? ledger.save(checkpoint)
+            throw error
         } catch {
             checkpoint.state = .failed
             try? ledger.save(checkpoint)

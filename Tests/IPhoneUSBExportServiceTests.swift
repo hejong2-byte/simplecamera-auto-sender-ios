@@ -124,7 +124,16 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         try FileManager.default.createDirectory(at: context.usbDirectory.appendingPathComponent("MAP"), withIntermediateDirectories: true)
         try Data("old".utf8).write(to: context.usbDirectory.appendingPathComponent("MAP/data.bin"))
         try Data("keep".utf8).write(to: context.usbDirectory.appendingPathComponent("MAP/keep.bin"))
-        let result = await context.service.export([file], to: context.destination)
+        let first = await context.service.export([file], to: context.destination)
+        XCTAssertEqual(first.failed.map(\.error), [.overwriteConfirmationRequired])
+        XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent("MAP/data.bin")), Data("old".utf8))
+        XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent("MAP/keep.bin")), Data("keep".utf8))
+
+        let result = await context.service.export(
+            [file],
+            to: context.destination,
+            overwriteExisting: true
+        )
         XCTAssertTrue(result.failed.isEmpty, result.errorMessage ?? "ZIP overwrite failed")
         XCTAssertEqual(result.verified.count, 1)
         XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent("MAP/data.bin")), Data("new".utf8))

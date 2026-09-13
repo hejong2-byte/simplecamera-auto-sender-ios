@@ -78,6 +78,10 @@ enum IPhoneReceiveErrorMessage {
             return "ZIP 압축 해제에 실패했습니다. 손상 또는 암호화 여부를 확인해 주세요. 원본은 유지했습니다."
         case USBZIPReceivePipelineError.destinationNotWritable:
             return "USB에 압축 해제 파일을 쓸 수 없습니다. 연결과 폴더 권한을 확인해 주세요."
+        case IPhoneUSBExportError.overwriteConfirmationRequired:
+            return "USB에 같은 이름의 항목이 있습니다. 덮어쓰기 여부를 선택해 주세요."
+        case USBZIPReceivePipelineError.overwriteRequired:
+            return "USB에 같은 이름의 항목이 있습니다. 덮어쓰기 여부를 선택해 주세요."
         case let IPhoneReceiverClientError.server(statusCode, code):
             if statusCode == 401 || statusCode == 403 {
                 return "인증 오류 (HTTP \(statusCode)) · 수신 기기 등록과 인증값을 확인해 주세요."

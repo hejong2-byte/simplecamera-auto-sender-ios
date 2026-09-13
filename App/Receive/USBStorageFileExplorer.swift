@@ -21,6 +21,7 @@ enum USBStorageFileExplorerError: LocalizedError, Equatable {
     case unavailable
     case invalidPath
     case invalidFile
+    case deleteFailed
 
     var errorDescription: String? {
         switch self {
@@ -34,6 +35,8 @@ enum USBStorageFileExplorerError: LocalizedError, Equatable {
             return "선택한 저장장치 안의 폴더만 열 수 있습니다."
         case .invalidFile:
             return "선택한 파일을 읽을 수 없습니다. 목록을 새로 고친 뒤 다시 선택해 주세요."
+        case .deleteFailed:
+            return "선택한 파일 또는 폴더를 삭제하지 못했습니다. 저장장치 연결과 권한을 확인해 주세요."
         }
     }
 }
@@ -146,6 +149,55 @@ struct USBStorageFileExplorer: @unchecked Sendable {
         }
     }
 
+    func deleteFiles(
+        destination: USBBookmarkDestination,
+        relativePaths: [String]
+    ) async throws -> Int {
+        try withAccess(to: destination) {
+            var seen = Set<String>()
+            var items: [(path: String, url: URL)] = []
+            for relativePath in relativePaths {
+                let components = try validatedComponents(relativePath)
+                guard let first = components.first,
+                      first != Self.internalDirectoryName else {
+                    throw USBStorageFileExplorerError.invalidPath
+                }
+                let url = try validatedURL(root: destination.url, relativePath: relativePath)
+                let attributes = try fileManager.attributesOfItem(atPath: url.path)
+                let type = attributes[.type] as? FileAttributeType
+                guard type == .typeRegular || type == .typeDirectory else {
+                    throw USBStorageFileExplorerError.invalidFile
+                }
+                let key = url.standardizedFileURL.path
+                if seen.insert(key).inserted {
+                    items.append((components.joined(separator: "/"), url))
+                }
+            }
+            guard !items.isEmpty else { throw USBStorageFileExplorerError.invalidFile }
+
+            items.sort {
+                let lhsDepth = $0.path.split(separator: "/").count
+                let rhsDepth = $1.path.split(separator: "/").count
+                return lhsDepth == rhsDepth ? $0.path < $1.path : lhsDepth < rhsDepth
+            }
+            var selectedRoots: [String] = []
+            let roots = items.filter { item in
+                let isNested = selectedRoots.contains { item.path.hasPrefix($0 + "/") }
+                if !isNested { selectedRoots.append(item.path) }
+                return !isNested
+            }
+
+            do {
+                for item in roots {
+                    try coordinatedDelete(item.url)
+                }
+            } catch {
+                throw USBStorageFileExplorerError.deleteFailed
+            }
+            return roots.count
+        }
+    }
+
     private func withAccess<T>(
         to destination: USBBookmarkDestination,
         operation: () throws -> T
@@ -204,5 +256,23 @@ struct USBStorageFileExplorer: @unchecked Sendable {
             throw USBStorageFileExplorerError.invalidPath
         }
         return components
+    }
+
+    private func coordinatedDelete(_ url: URL) throws {
+        var coordinationError: NSError?
+        var operationError: Error?
+        NSFileCoordinator(filePresenter: nil).coordinate(
+            writingItemAt: url,
+            options: .forDeleting,
+            error: &coordinationError
+        ) { coordinatedURL in
+            do {
+                try fileManager.removeItem(at: coordinatedURL)
+            } catch {
+                operationError = error
+            }
+        }
+        if let operationError { throw operationError }
+        if let coordinationError { throw coordinationError }
     }
 }

@@ -77,6 +77,25 @@ struct USBReceiverView: View {
         } message: {
             Text("현재 PC 대기 파일 묶음에 적용됩니다.")
         }
+        .alert(
+            "USB에 기존 항목이 있습니다",
+            isPresented: Binding(
+                get: { model.needsUSBReceiveOverwriteConfirmation },
+                set: { _ in }
+            )
+        ) {
+            Button("취소", role: .cancel) { model.cancelUSBReceiveOverwrite() }
+            Button("덮어쓰기", role: .destructive) {
+                Task { await model.confirmUSBReceiveOverwrite() }
+            }
+        } message: {
+            let paths = model.usbReceiveOverwriteRequest?.paths ?? []
+            let preview = paths.prefix(3).joined(separator: "\n")
+            let remaining = max(0, paths.count - 3)
+            Text("같은 경로의 항목 \(paths.count)개가 있습니다.\n\(preview)"
+                + (remaining > 0 ? "\n외 \(remaining)개" : "")
+                + "\n\n덮어쓰면 같은 경로의 항목만 교체하고 다른 USB 파일은 유지합니다.")
+        }
         .confirmationDialog(
             "USB 전송이 완료되었습니다. iPhone 원본을 삭제할까요?",
             isPresented: Binding(
@@ -128,6 +147,20 @@ struct USBReceiverView: View {
             Button("취소", role: .cancel) { model.cancelStoredZIPExportChoice() }
         } message: {
             Text("선택한 \(model.storedZIPExportFilesPendingChoice.count)개 파일에 적용합니다. 복사가 끝난 뒤에도 iPhone 원본은 별도 확인 전까지 유지됩니다.")
+        }
+        .alert(
+            "USB에 기존 항목이 있습니다",
+            isPresented: Binding(
+                get: { model.needsStoredOverwriteConfirmation },
+                set: { _ in }
+            )
+        ) {
+            Button("취소", role: .cancel) { model.cancelStoredFileOverwrite() }
+            Button("덮어쓰기", role: .destructive) {
+                Task { await model.confirmStoredFileOverwrite() }
+            }
+        } message: {
+            Text("압축을 풀면 같은 경로에 이미 있는 항목이 교체됩니다. 관계없는 USB 파일과 iPhone의 ZIP 원본은 유지합니다.")
         }
     }
 

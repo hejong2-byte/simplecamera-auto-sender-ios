@@ -48,10 +48,26 @@ final class USBZIPReceivePipelineTests: XCTestCase {
         try Data("old-report".utf8).write(to: existingReport)
         try Data("keep".utf8).write(to: unrelated)
 
+        XCTAssertThrowsError(try context.pipeline.commit(
+            zip: context.zip,
+            delivery: context.delivery,
+            destination: context.usb,
+            progress: { _ in }
+        )) { error in
+            guard case let USBZIPReceivePipelineError.overwriteRequired(request) = error else {
+                return XCTFail("expected overwrite confirmation, got \(error)")
+            }
+            XCTAssertEqual(request.deliveryID, context.delivery.deliveryID)
+            XCTAssertEqual(request.paths, ["docs/report.txt", "root.txt"])
+        }
+        XCTAssertEqual(try Data(contentsOf: marker), Data("existing".utf8))
+        XCTAssertEqual(try Data(contentsOf: existingReport), Data("old-report".utf8))
+
         let result = try context.pipeline.commit(
             zip: context.zip,
             delivery: context.delivery,
             destination: context.usb,
+            overwriteExisting: true,
             progress: { _ in }
         )
 

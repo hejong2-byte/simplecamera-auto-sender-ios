@@ -18,6 +18,11 @@ struct USBZIPCommit: Sendable, Equatable {
     let extractedBytes: Int64
 }
 
+struct USBZIPOverwriteRequest: Sendable, Equatable {
+    let deliveryID: UUID
+    let paths: [String]
+}
+
 enum USBZIPReceivePipelineError: Error, Equatable {
     case unsafeArchive
     case extractionFailed
@@ -26,6 +31,7 @@ enum USBZIPReceivePipelineError: Error, Equatable {
     case sizeMismatch
     case shaMismatch
     case copyFailed
+    case overwriteRequired(USBZIPOverwriteRequest)
 }
 
 struct USBZIPReceivePipeline {
@@ -55,6 +61,7 @@ struct USBZIPReceivePipeline {
         zip: URL,
         delivery: IPhoneDelivery,
         destination: URL,
+        overwriteExisting: Bool = false,
         progress: (USBZIPReceiveProgress) -> Void
     ) throws -> USBZIPCommit {
         do {
@@ -62,6 +69,7 @@ struct USBZIPReceivePipeline {
                 zip: zip,
                 delivery: delivery,
                 destination: destination,
+                overwriteExisting: overwriteExisting,
                 progress: progress
             )
         } catch let error as USBZIPReceivePipelineError {
@@ -108,6 +116,7 @@ struct USBZIPReceivePipeline {
         zip: URL,
         delivery: IPhoneDelivery,
         destination: URL,
+        overwriteExisting: Bool,
         progress: (USBZIPReceiveProgress) -> Void
     ) throws -> USBZIPCommit {
         try fileManager.createDirectory(
@@ -133,11 +142,23 @@ struct USBZIPReceivePipeline {
         let topLevelNames = Set((extraction.directories + extraction.files.map(\.relativePath))
             .compactMap { $0.split(separator: "/").first.map(String.init) }).sorted()
         for name in topLevelNames {
-            let target = destination.appendingPathComponent(name)
-            guard name != USBReceiveService.partialDirectoryName,
-                  !fileManager.fileExists(atPath: target.path) else {
-                throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
+            guard name != USBReceiveService.partialDirectoryName else {
+                throw USBZIPReceivePipelineError.destinationNotWritable
             }
+        }
+        let conflicts = USBStagedTreeCommitter.conflictingPaths(
+            destinationRoot: destination,
+            directories: extraction.directories,
+            files: extraction.files.map(\.relativePath),
+            fileManager: fileManager
+        )
+        if !overwriteExisting, !conflicts.isEmpty {
+            throw USBZIPReceivePipelineError.overwriteRequired(
+                USBZIPOverwriteRequest(
+                    deliveryID: delivery.deliveryID,
+                    paths: conflicts
+                )
+            )
         }
 
         let partialDirectory = destination.appendingPathComponent(
@@ -212,24 +233,23 @@ struct USBZIPReceivePipeline {
             throw USBZIPReceivePipelineError.shaMismatch
         }
 
-        var publishedItems: [(source: URL, destination: URL)] = []
-        do {
-            for name in topLevelNames {
-                let staged = partialURL.appendingPathComponent(name)
-                let target = destination.appendingPathComponent(name)
-                try coordinatedMove(from: staged, to: target)
-                publishedItems.append((staged, target))
-            }
-            guard try layout(at: destination, matches: expected) else {
-                throw USBZIPReceivePipelineError.shaMismatch
-            }
-        } catch {
-            for item in publishedItems.reversed()
-                where fileManager.fileExists(atPath: item.destination.path)
-                    && !fileManager.fileExists(atPath: item.source.path) {
-                try? fileManager.moveItem(at: item.destination, to: item.source)
-            }
-            throw error
+        let backupURL = partialDirectory.appendingPathComponent(
+            "overwrite-\(UUID().uuidString.lowercased()).backup",
+            isDirectory: true
+        )
+        defer { try? fileManager.removeItem(at: backupURL) }
+        try USBStagedTreeCommitter(
+            fileManager: fileManager,
+            moveItem: coordinatedMove
+        ).commit(
+            stagedRoot: partialURL,
+            destinationRoot: destination,
+            directories: expected.directories,
+            files: expected.files.map(\.path),
+            backupRoot: backupURL
+        )
+        guard try layout(at: destination, matches: expected) else {
+            throw USBZIPReceivePipelineError.shaMismatch
         }
         return USBZIPCommit(
             finalFolderName: "",
@@ -419,5 +439,124 @@ struct USBZIPReceivePipeline {
             && value.code == CocoaError.Code.fileWriteOutOfSpace.rawValue)
             || (value.domain == NSPOSIXErrorDomain
                 && value.code == Int(POSIXErrorCode.ENOSPC.rawValue))
+    }
+}
+
+struct USBStagedTreeCommitter {
+    typealias MoveItem = (URL, URL) throws -> Void
+
+    private let fileManager: FileManager
+    private let moveItem: MoveItem
+
+    init(fileManager: FileManager, moveItem: @escaping MoveItem) {
+        self.fileManager = fileManager
+        self.moveItem = moveItem
+    }
+
+    static func conflictingPaths(
+        destinationRoot: URL,
+        directories: [String],
+        files: [String],
+        fileManager: FileManager
+    ) -> [String] {
+        var conflicts = Set<String>()
+        for relativePath in directories {
+            let target = destinationRoot.appendingPathComponent(relativePath, isDirectory: true)
+            var isDirectory = ObjCBool(false)
+            if fileManager.fileExists(atPath: target.path, isDirectory: &isDirectory),
+               !isDirectory.boolValue {
+                conflicts.insert(relativePath)
+            }
+        }
+        for relativePath in files {
+            let target = destinationRoot.appendingPathComponent(relativePath)
+            if fileManager.fileExists(atPath: target.path) {
+                conflicts.insert(relativePath)
+            }
+        }
+        return conflicts.sorted()
+    }
+
+    func commit(
+        stagedRoot: URL,
+        destinationRoot: URL,
+        directories: [String],
+        files: [String],
+        backupRoot: URL
+    ) throws {
+        let directoryPaths = allDirectoryPaths(directories: directories, files: files)
+        var backups: [(original: URL, backup: URL)] = []
+        var installedFiles: [URL] = []
+        var createdDirectories: [URL] = []
+
+        do {
+            for relativePath in directoryPaths {
+                let target = destinationRoot.appendingPathComponent(relativePath, isDirectory: true)
+                var isDirectory = ObjCBool(false)
+                if fileManager.fileExists(atPath: target.path, isDirectory: &isDirectory) {
+                    if isDirectory.boolValue { continue }
+                    let backup = backupRoot.appendingPathComponent(relativePath)
+                    try fileManager.createDirectory(
+                        at: backup.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                    try moveItem(target, backup)
+                    backups.append((target, backup))
+                }
+                try fileManager.createDirectory(at: target, withIntermediateDirectories: false)
+                createdDirectories.append(target)
+            }
+
+            for relativePath in files.sorted() {
+                let staged = stagedRoot.appendingPathComponent(relativePath)
+                let target = destinationRoot.appendingPathComponent(relativePath)
+                if fileManager.fileExists(atPath: target.path) {
+                    let backup = backupRoot.appendingPathComponent(relativePath)
+                    try fileManager.createDirectory(
+                        at: backup.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                    try moveItem(target, backup)
+                    backups.append((target, backup))
+                }
+                try moveItem(staged, target)
+                installedFiles.append(target)
+            }
+        } catch {
+            for url in installedFiles.reversed() where fileManager.fileExists(atPath: url.path) {
+                try? fileManager.removeItem(at: url)
+            }
+            for url in createdDirectories.reversed() where fileManager.fileExists(atPath: url.path) {
+                try? fileManager.removeItem(at: url)
+            }
+            for item in backups.reversed() where fileManager.fileExists(atPath: item.backup.path) {
+                if fileManager.fileExists(atPath: item.original.path) {
+                    try? fileManager.removeItem(at: item.original)
+                }
+                try? fileManager.createDirectory(
+                    at: item.original.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try? moveItem(item.backup, item.original)
+            }
+            throw error
+        }
+    }
+
+    private func allDirectoryPaths(directories: [String], files: [String]) -> [String] {
+        var result = Set(directories)
+        for file in files {
+            var components = file.split(separator: "/").map(String.init)
+            if !components.isEmpty { components.removeLast() }
+            while !components.isEmpty {
+                result.insert(components.joined(separator: "/"))
+                components.removeLast()
+            }
+        }
+        return result.sorted {
+            let lhsDepth = $0.split(separator: "/").count
+            let rhsDepth = $1.split(separator: "/").count
+            return lhsDepth == rhsDepth ? $0 < $1 : lhsDepth < rhsDepth
+        }
     }
 }

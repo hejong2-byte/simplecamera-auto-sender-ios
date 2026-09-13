@@ -8,6 +8,30 @@ enum IPhoneReceiveArchiveMode: String, Codable, Sendable, Equatable {
 struct IPhoneReceiveDecision: Codable, Sendable, Equatable {
     let destination: IPhoneReceiveDestination
     let archiveMode: IPhoneReceiveArchiveMode
+    let overwriteExisting: Bool
+
+    init(
+        destination: IPhoneReceiveDestination,
+        archiveMode: IPhoneReceiveArchiveMode,
+        overwriteExisting: Bool = false
+    ) {
+        self.destination = destination
+        self.archiveMode = archiveMode
+        self.overwriteExisting = overwriteExisting
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case destination
+        case archiveMode
+        case overwriteExisting
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        destination = try container.decode(IPhoneReceiveDestination.self, forKey: .destination)
+        archiveMode = try container.decode(IPhoneReceiveArchiveMode.self, forKey: .archiveMode)
+        overwriteExisting = try container.decodeIfPresent(Bool.self, forKey: .overwriteExisting) ?? false
+    }
 }
 
 final class IPhoneReceiveApprovalStore: @unchecked Sendable {
@@ -77,6 +101,33 @@ final class IPhoneReceiveApprovalStore: @unchecked Sendable {
                 Approval(receiverID: receiverID, deliveryID: $0, decision: decision)
             })
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(next).write(to: fileURL, options: .atomic)
+            state = next
+        }
+    }
+
+    func approveOverwrite(deliveryID: UUID, receiverID: UUID) throws {
+        try lock.withLock {
+            var next = try load()
+            guard let index = next.approvals.lastIndex(where: {
+                $0.receiverID == receiverID && $0.deliveryID == deliveryID
+            }) else {
+                throw CocoaError(.fileReadNoSuchFile)
+            }
+            let stored = next.approvals[index]
+            next.approvals[index] = Approval(
+                receiverID: receiverID,
+                deliveryID: deliveryID,
+                decision: IPhoneReceiveDecision(
+                    destination: stored.decision.destination,
+                    archiveMode: stored.decision.archiveMode,
+                    overwriteExisting: true
+                )
+            )
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
             try JSONEncoder().encode(next).write(to: fileURL, options: .atomic)
             state = next
         }
