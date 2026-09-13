@@ -791,6 +791,10 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
 
         XCTAssertEqual(summary.verified.map(\.sourceID), [good.id])
         XCTAssertEqual(summary.failed.map(\.sourceID), [bad.id])
+        XCTAssertEqual(summary.changeSummary.totalFiles, 2)
+        XCTAssertEqual(summary.changeSummary.replacedFiles, 1)
+        XCTAssertEqual(summary.changeSummary.unchangedFiles, 0)
+        XCTAssertEqual(summary.changeSummary.failedFiles, 1)
         XCTAssertEqual(context.deletionStore.pending().map(\.sourceID), [good.id])
         XCTAssertTrue(FileManager.default.fileExists(atPath: good.url.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: bad.url.path))

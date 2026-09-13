@@ -64,7 +64,7 @@ struct IPhoneUSBExportSummary: Equatable, Sendable {
     }
 
     var changeSummary: USBTransferChangeSummary {
-        verified.reduce(.zero) { result, decision in
+        let completed = verified.reduce(.zero) { result, decision in
             let fallbackCount = decision.copiedFiles?.count ?? 1
             let value = decision.changeSummary ?? USBTransferChangeSummary(
                 totalFiles: fallbackCount,
@@ -75,6 +75,13 @@ struct IPhoneUSBExportSummary: Equatable, Sendable {
             )
             return result.adding(value)
         }
+        return completed.adding(USBTransferChangeSummary(
+            totalFiles: failed.count,
+            newFiles: 0,
+            replacedFiles: 0,
+            unchangedFiles: 0,
+            failedFiles: failed.count
+        ))
     }
 }
 
@@ -389,7 +396,8 @@ actor IPhoneUSBExportService {
                 totalBytes: failedFile.size,
                 startedAt: nil,
                 expiresAt: nil,
-                errorMessage: summary.errorMessage
+                errorMessage: summary.errorMessage,
+                detail: summary.changeSummary.displayText
             ))
         }
         return summary
