@@ -218,6 +218,7 @@ struct USBStorageManagementView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(entry.name) 선택")
+            .accessibilityIdentifier("storage-entry-select-\(entry.relativePath)")
 
             Button {
                 if entry.kind == .directory {
@@ -247,9 +248,9 @@ struct USBStorageManagementView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("storage-entry-\(entry.relativePath)")
         }
         .padding(.vertical, 10)
-        .accessibilityIdentifier("storage-entry-\(entry.relativePath)")
         .disabled(isBusy)
     }
 
