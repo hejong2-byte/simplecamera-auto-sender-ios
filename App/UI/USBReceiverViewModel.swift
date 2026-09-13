@@ -179,6 +179,7 @@ final class USBReceiverViewModel: ObservableObject {
     private var promptedDeliveryIDs: Set<UUID> = []
     private var declinedOverwriteDeliveryIDs: Set<UUID> = []
     private var pendingStoredOverwriteArchiveMode: IPhoneReceiveArchiveMode?
+    private var lastUSBTransferSummaryText: String?
     private var receiverID: UUID?
     private var usbDestinationPendingDeletion: USBBookmarkDestination?
 
@@ -359,6 +360,14 @@ final class USBReceiverViewModel: ObservableObject {
     var needsStoredOverwriteConfirmation: Bool {
         !storedFilesPendingOverwriteConfirmation.isEmpty
     }
+    var storedOverwriteConfirmationMessage: String {
+        let names = storedFilesPendingOverwriteConfirmation.map(\.name)
+        let preview = names.prefix(3).joined(separator: "\n")
+        let remaining = max(0, names.count - 3)
+        return "덮어쓰기 확인 대상 \(names.count)개\n\(preview)"
+            + (remaining > 0 ? "\n외 \(remaining)개" : "")
+            + "\n\n확인 전에는 SD/USB를 변경하지 않습니다. 내용이 다른 파일만 교체하고 같은 파일은 그대로 유지합니다. 완료 후 새로 저장·교체·동일 유지·실패 개수를 표시합니다."
+    }
     var needsUSBReceiveOverwriteConfirmation: Bool { usbReceiveOverwriteRequest != nil }
     var needsUSBFolderDeletionConfirmation: Bool {
         usbFolderContentsPendingDeletion != nil
@@ -453,7 +462,7 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     var canDismissReceiveOutcome: Bool {
-        receiveOutcome != nil && !isReceivingFile && !isPerformingReceive
+        receiveOutcome != nil && !isReceivingFile
     }
 
     func dismissReceiveOutcome() {
@@ -1006,6 +1015,7 @@ final class USBReceiverViewModel: ObservableObject {
         usbExportLastUpdatedAt = nil
         lastUSBExportError = nil
         usbExportCompletionMessage = nil
+        lastUSBTransferSummaryText = nil
     }
 
     private func interruptedStoredFiles() -> [IPhoneStoredFile] {
@@ -1122,6 +1132,7 @@ final class USBReceiverViewModel: ObservableObject {
         usbExportProgress = nil
         lastUSBExportError = nil
         usbExportCompletionMessage = nil
+        lastUSBTransferSummaryText = nil
         usbVerificationMessage = nil
         lastOriginalCleanupError = nil
         defer {
@@ -1157,6 +1168,9 @@ final class USBReceiverViewModel: ObservableObject {
             }
             usbCopyTask = task
             let summary = await task.value
+            if summary.changeSummary.totalFiles > 0 {
+                lastUSBTransferSummaryText = summary.changeSummary.displayText
+            }
             selectedStoredFileIDs.subtract(summary.verified.map(\.sourceID))
             if summary.cancelled {
                 try await keepOriginalFiles(Set(summary.verified.map(\.id)))
@@ -1292,7 +1306,10 @@ final class USBReceiverViewModel: ObservableObject {
             needsDeletionDecision = !pendingDeletionDecisions().isEmpty
             if !needsDeletionDecision, lastUSBExportError == nil {
                 usbExportProgress = nil
-                usbExportCompletionMessage = "USB 복사 완료 · iPhone 원본 \(ids.count)개 유지됨"
+                usbExportCompletionMessage = [
+                    "USB 복사 완료 · iPhone 원본 \(ids.count)개 유지됨",
+                    lastUSBTransferSummaryText
+                ].compactMap { $0 }.joined(separator: "\n")
             }
         } catch {
             lastOriginalCleanupError = "원본 유지 결정을 저장하지 못했습니다. 원본은 삭제하지 않았습니다."
@@ -1316,7 +1333,10 @@ final class USBReceiverViewModel: ObservableObject {
             lastOriginalCleanupError = "iPhone 원본 \(summary.failed.count)개를 삭제하지 못했습니다. USB에 복사된 파일은 유지됩니다."
         } else if !needsDeletionDecision, lastUSBExportError == nil {
             usbExportProgress = nil
-            usbExportCompletionMessage = "USB 복사 완료 · iPhone 원본 \(summary.deletedSourceIDs.count)개 삭제됨"
+            usbExportCompletionMessage = [
+                "USB 복사 완료 · iPhone 원본 \(summary.deletedSourceIDs.count)개 삭제됨",
+                lastUSBTransferSummaryText
+            ].compactMap { $0 }.joined(separator: "\n")
         }
     }
 
@@ -1426,7 +1446,7 @@ final class USBReceiverViewModel: ObservableObject {
         case .checkingSource: return "ZIP 원본 검사 중\(position)"
         case .extracting: return "ZIP 압축 해제 중\(position)"
         case .copyingToUSB: return "USB로 복사 중\(position)"
-        case .verifying: return "USB 복사 검증 중\(position)"
+        case .verifying: return "기존 파일 비교·검증 중\(position)"
         case .finalizing: return "복사 결과 정리 중\(position)"
         case .completed: return "USB 복사 완료"
         case .cancelled: return "USB 복사 취소 완료"
@@ -1463,7 +1483,8 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     func usbExportRemainingTimeText(at date: Date) -> String? {
-        guard let progress = visibleUSBExportProgress, progress.stage == .copyingToUSB else { return nil }
+        guard let progress = visibleUSBExportProgress,
+              progress.stage == .copyingToUSB || progress.stage == .verifying else { return nil }
         if progress.totalBytes > 0, progress.bytesReceived >= progress.totalBytes {
             return "파일 기록 마무리 중"
         }
@@ -1615,7 +1636,7 @@ final class USBReceiverViewModel: ObservableObject {
             totalCount: max(progress.totalCount, progress.completedCount),
             completedCount: progress.completedCount,
             message: kind == .saved
-                ? (progress.errorMessage ?? "\(destination) 저장 완료")
+                ? (progress.detail ?? progress.errorMessage ?? "\(destination) 저장 완료")
                 : (progress.errorMessage ?? "\(destination) 수신에 실패했습니다."),
             occurredAt: now()
         )

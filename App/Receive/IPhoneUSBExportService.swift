@@ -49,6 +49,7 @@ struct IPhoneUSBDeletionDecision: Codable, Equatable, Sendable, Identifiable {
     var copiedFiles: [USBCopyFileDigest]? = nil
     var usbVolumeID: String? = nil
     var sourceModifiedAt: Date? = nil
+    var changeSummary: USBTransferChangeSummary? = nil
 }
 
 struct IPhoneUSBExportSummary: Equatable, Sendable {
@@ -60,6 +61,20 @@ struct IPhoneUSBExportSummary: Equatable, Sendable {
     var errorMessage: String? {
         guard let first = failed.first else { return nil }
         return "USB 복사 완료 \(verified.count)개, 실패 \(failed.count)개\n\(first.message)"
+    }
+
+    var changeSummary: USBTransferChangeSummary {
+        verified.reduce(.zero) { result, decision in
+            let fallbackCount = decision.copiedFiles?.count ?? 1
+            let value = decision.changeSummary ?? USBTransferChangeSummary(
+                totalFiles: fallbackCount,
+                newFiles: fallbackCount,
+                replacedFiles: 0,
+                unchangedFiles: 0,
+                failedFiles: 0
+            )
+            return result.adding(value)
+        }
     }
 }
 
@@ -356,7 +371,8 @@ actor IPhoneUSBExportService {
                 totalBytes: copiedBytes,
                 startedAt: nil,
                 expiresAt: nil,
-                errorMessage: nil
+                errorMessage: nil,
+                detail: summary.changeSummary.displayText
             ))
         } else {
             let failedIndex = files.firstIndex { $0.id == failed[0].sourceID } ?? 0
@@ -514,8 +530,15 @@ actor IPhoneUSBExportService {
         if let record = file.receivedRecord, record.size != sourceSize {
             throw IPhoneUSBExportError.sourceChanged
         }
-        if file.url.pathExtension.caseInsensitiveCompare("zip") == .orderedSame,
-           archiveMode == .extract {
+        let isExtractedZIP = file.url.pathExtension.caseInsensitiveCompare("zip") == .orderedSame
+            && archiveMode == .extract
+        let requestedFinalURL = destination.url.appendingPathComponent(file.name)
+        if !isExtractedZIP,
+           fileManager.fileExists(atPath: requestedFinalURL.path),
+           !overwriteExisting {
+            throw IPhoneUSBExportError.overwriteConfirmationRequired
+        }
+        if isExtractedZIP {
             return try exportZIP(
                 file,
                 to: destination,
@@ -605,14 +628,57 @@ actor IPhoneUSBExportService {
             throw IPhoneUSBExportError.sourceChanged
         }
 
-        let storedName = try IPhoneLocalFileNaming.availableName(
-            requestedName: file.name,
-            in: destination.url,
-            fileManager: fileManager
-        )
+        let storedName = file.name
         let finalURL = destination.url.appendingPathComponent(storedName)
         try Task.checkCancellation()
-        try fileManager.moveItem(at: partialURL, to: finalURL)
+        let changeSummary: USBTransferChangeSummary
+        var isDirectory = ObjCBool(false)
+        if !fileManager.fileExists(atPath: finalURL.path, isDirectory: &isDirectory) {
+            changeSummary = USBTransferChangeSummary(
+                totalFiles: 1,
+                newFiles: 1,
+                replacedFiles: 0,
+                unchangedFiles: 0,
+                failedFiles: 0
+            )
+            try fileManager.moveItem(at: partialURL, to: finalURL)
+        } else if !isDirectory.boolValue,
+                  try fileSize(finalURL) == sourceSize,
+                  try hashFile(finalURL, progress: { bytes in
+                      self.publish(
+                          file: file,
+                          currentIndex: currentIndex,
+                          totalCount: totalCount,
+                          completedCount: completedCount,
+                          bytes: bytes,
+                          totalBytes: sourceSize,
+                          startedAt: startedAt,
+                          stage: .verifying,
+                          detail: "기존 파일 내용 비교 중 · 1/1\n\(storedName)"
+                      )
+                  }) == sourceSHA {
+            changeSummary = USBTransferChangeSummary(
+                totalFiles: 1,
+                newFiles: 0,
+                replacedFiles: 0,
+                unchangedFiles: 1,
+                failedFiles: 0
+            )
+            try fileManager.removeItem(at: partialURL)
+        } else {
+            changeSummary = USBTransferChangeSummary(
+                totalFiles: 1,
+                newFiles: 0,
+                replacedFiles: 1,
+                unchangedFiles: 0,
+                failedFiles: 0
+            )
+            try replaceItemTransactionally(
+                staged: partialURL,
+                destination: finalURL,
+                backupDirectory: partialDirectory
+            )
+        }
         publish(
             file: file,
             currentIndex: currentIndex,
@@ -621,7 +687,7 @@ actor IPhoneUSBExportService {
             bytes: sourceSize,
             startedAt: startedAt,
             stage: .finalizing,
-            detail: "복사 결과 파일 크기 확인 중"
+            detail: "저장 결과 · \(changeSummary.displayText)"
         )
         guard try fileSize(finalURL) == sourceSize else {
             throw IPhoneUSBExportError.sizeMismatch
@@ -637,7 +703,8 @@ actor IPhoneUSBExportService {
             verifiedAt: now(),
             copiedFiles: [USBCopyFileDigest(path: "", size: sourceSize, sha256: sourceSHA)],
             usbVolumeID: destination.volumeID,
-            sourceModifiedAt: sourceModifiedAt
+            sourceModifiedAt: sourceModifiedAt,
+            changeSummary: changeSummary
         )
         try deletionStore.save(decision)
         return decision
@@ -925,6 +992,32 @@ actor IPhoneUSBExportService {
         }
 
         try Task.checkCancellation()
+        phaseStartedAt = now()
+        let committer = USBStagedTreeCommitter(
+            fileManager: fileManager,
+            moveItem: { try self.fileManager.moveItem(at: $0, to: $1) }
+        )
+        let analysis = try committer.analyzeChanges(
+            destinationRoot: destination.url,
+            files: copiedFiles
+        ) { update in
+            report(
+                .verifying,
+                update.completedBytes,
+                update.totalBytes,
+                "기존 파일 비교 \(update.completedFiles)/\(update.totalFiles)개\n\(update.currentPath)"
+            )
+        }
+        for name in finalizedTopLevelNames {
+            let paths = copiedFiles
+                .filter { topLevelName($0.path) == name }
+                .map(\.path)
+            guard paths.allSatisfy(analysis.unchangedPaths.contains) else {
+                throw CocoaError(.fileWriteFileExists, userInfo: [
+                    NSFilePathErrorKey: destination.url.appendingPathComponent(name).path
+                ])
+            }
+        }
         // All bytes are written and sized before publishing the exact top-level
         // names. Never add a ZIP-name wrapper or rename navigation directories.
         for (index, name) in topLevelNames.enumerated() {
@@ -953,15 +1046,13 @@ actor IPhoneUSBExportService {
                     isDirectory: true
                 )
                 defer { try? fileManager.removeItem(at: backup) }
-                try USBStagedTreeCommitter(
-                    fileManager: fileManager,
-                    moveItem: { try self.fileManager.moveItem(at: $0, to: $1) }
-                ).commit(
+                try committer.commit(
                     stagedRoot: partialURL,
                     destinationRoot: destination.url,
                     directories: directories,
                     files: files,
-                    backupRoot: backup
+                    backupRoot: backup,
+                    unchangedPaths: analysis.unchangedPaths
                 )
             } else {
                 try fileManager.moveItem(at: staged, to: target)
@@ -982,7 +1073,7 @@ actor IPhoneUSBExportService {
             totalBytes: extraction.totalBytes,
             startedAt: startedAt,
             stage: .finalizing,
-            detail: "복사 결과 저장·임시 압축해제 파일 정리 중"
+            detail: "저장 결과 · \(analysis.summary.displayText)\n임시 압축해제 파일 정리 중"
         )
 
         let decision = IPhoneUSBDeletionDecision(
@@ -995,7 +1086,8 @@ actor IPhoneUSBExportService {
             verifiedAt: now(),
             copiedFiles: copiedFiles,
             usbVolumeID: destination.volumeID,
-            sourceModifiedAt: sourceModifiedAt
+            sourceModifiedAt: sourceModifiedAt,
+            changeSummary: analysis.summary
         )
         try deletionStore.save(decision)
         return decision
@@ -1088,6 +1180,27 @@ actor IPhoneUSBExportService {
         } catch {
             try? fileManager.removeItem(at: probe)
             throw IPhoneUSBExportError.destinationNotWritable
+        }
+    }
+
+    private func replaceItemTransactionally(
+        staged: URL,
+        destination: URL,
+        backupDirectory: URL
+    ) throws {
+        let backup = backupDirectory.appendingPathComponent(
+            "overwrite-\(UUID().uuidString.lowercased()).backup"
+        )
+        try fileManager.moveItem(at: destination, to: backup)
+        do {
+            try fileManager.moveItem(at: staged, to: destination)
+            try? fileManager.removeItem(at: backup)
+        } catch {
+            if fileManager.fileExists(atPath: destination.path) {
+                try? fileManager.removeItem(at: destination)
+            }
+            try? fileManager.moveItem(at: backup, to: destination)
+            throw error
         }
     }
 

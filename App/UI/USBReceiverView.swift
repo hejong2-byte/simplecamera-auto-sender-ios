@@ -160,7 +160,7 @@ struct USBReceiverView: View {
                 Task { await model.confirmStoredFileOverwrite() }
             }
         } message: {
-            Text("압축을 풀면 같은 경로에 이미 있는 항목이 교체됩니다. 관계없는 USB 파일과 iPhone의 ZIP 원본은 유지합니다.")
+            Text(model.storedOverwriteConfirmationMessage)
         }
     }
 

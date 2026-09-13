@@ -5,17 +5,68 @@ enum USBZIPReceivePhase: Sendable, Equatable {
     case extracting
     case copying
     case verifying
+    case comparing
 }
 
 struct USBZIPReceiveProgress: Sendable, Equatable {
     let phase: USBZIPReceivePhase
     let completedBytes: Int64
     let totalBytes: Int64
+    let completedFiles: Int
+    let totalFiles: Int
+    let currentPath: String?
+
+    init(
+        phase: USBZIPReceivePhase,
+        completedBytes: Int64,
+        totalBytes: Int64,
+        completedFiles: Int = 0,
+        totalFiles: Int = 0,
+        currentPath: String? = nil
+    ) {
+        self.phase = phase
+        self.completedBytes = completedBytes
+        self.totalBytes = totalBytes
+        self.completedFiles = completedFiles
+        self.totalFiles = totalFiles
+        self.currentPath = currentPath
+    }
+}
+
+struct USBTransferChangeSummary: Codable, Equatable, Sendable {
+    var totalFiles: Int
+    var newFiles: Int
+    var replacedFiles: Int
+    var unchangedFiles: Int
+    var failedFiles: Int
+
+    static let zero = Self(
+        totalFiles: 0,
+        newFiles: 0,
+        replacedFiles: 0,
+        unchangedFiles: 0,
+        failedFiles: 0
+    )
+
+    func adding(_ other: Self) -> Self {
+        Self(
+            totalFiles: totalFiles + other.totalFiles,
+            newFiles: newFiles + other.newFiles,
+            replacedFiles: replacedFiles + other.replacedFiles,
+            unchangedFiles: unchangedFiles + other.unchangedFiles,
+            failedFiles: failedFiles + other.failedFiles
+        )
+    }
+
+    var displayText: String {
+        "전체 \(totalFiles)개 · 새로 저장 \(newFiles)개 · 덮어써 교체 \(replacedFiles)개 · 동일하여 유지 \(unchangedFiles)개 · 실패 \(failedFiles)개"
+    }
 }
 
 struct USBZIPCommit: Sendable, Equatable {
     let finalFolderName: String
     let extractedBytes: Int64
+    let changeSummary: USBTransferChangeSummary
 }
 
 struct USBZIPOverwriteRequest: Sendable, Equatable {
@@ -238,22 +289,40 @@ struct USBZIPReceivePipeline {
             isDirectory: true
         )
         defer { try? fileManager.removeItem(at: backupURL) }
-        try USBStagedTreeCommitter(
+        let committer = USBStagedTreeCommitter(
             fileManager: fileManager,
             moveItem: coordinatedMove
-        ).commit(
+        )
+        let analysis = try committer.analyzeChanges(
+            destinationRoot: destination,
+            files: expected.files.map {
+                USBCopyFileDigest(path: $0.path, size: $0.size, sha256: $0.sha256)
+            }
+        ) { update in
+            progress(USBZIPReceiveProgress(
+                phase: .comparing,
+                completedBytes: update.completedBytes,
+                totalBytes: update.totalBytes,
+                completedFiles: update.completedFiles,
+                totalFiles: update.totalFiles,
+                currentPath: update.currentPath
+            ))
+        }
+        try committer.commit(
             stagedRoot: partialURL,
             destinationRoot: destination,
             directories: expected.directories,
             files: expected.files.map(\.path),
-            backupRoot: backupURL
+            backupRoot: backupURL,
+            unchangedPaths: analysis.unchangedPaths
         )
         guard try layout(at: destination, matches: expected) else {
             throw USBZIPReceivePipelineError.shaMismatch
         }
         return USBZIPCommit(
             finalFolderName: "",
-            extractedBytes: extraction.totalBytes
+            extractedBytes: extraction.totalBytes,
+            changeSummary: analysis.summary
         )
     }
 
@@ -445,6 +514,19 @@ struct USBZIPReceivePipeline {
 struct USBStagedTreeCommitter {
     typealias MoveItem = (URL, URL) throws -> Void
 
+    struct ChangeProgress: Equatable, Sendable {
+        let completedFiles: Int
+        let totalFiles: Int
+        let completedBytes: Int64
+        let totalBytes: Int64
+        let currentPath: String
+    }
+
+    struct ChangeAnalysis: Equatable, Sendable {
+        let summary: USBTransferChangeSummary
+        let unchangedPaths: Set<String>
+    }
+
     private let fileManager: FileManager
     private let moveItem: MoveItem
 
@@ -477,12 +559,65 @@ struct USBStagedTreeCommitter {
         return conflicts.sorted()
     }
 
+    func analyzeChanges(
+        destinationRoot: URL,
+        files: [USBCopyFileDigest],
+        progress: (ChangeProgress) -> Void = { _ in }
+    ) throws -> ChangeAnalysis {
+        let ordered = files.sorted { $0.path < $1.path }
+        let totalBytes = ordered.reduce(Int64(0)) { $0 + $1.size }
+        var completedBytes: Int64 = 0
+        var summary = USBTransferChangeSummary.zero
+        var unchangedPaths = Set<String>()
+
+        for (index, file) in ordered.enumerated() {
+            if Task.isCancelled { throw CancellationError() }
+            let target = destinationRoot.appendingPathComponent(file.path)
+            var isDirectory = ObjCBool(false)
+            let exists = fileManager.fileExists(atPath: target.path, isDirectory: &isDirectory)
+            if !exists {
+                summary.newFiles += 1
+            } else if isDirectory.boolValue {
+                summary.replacedFiles += 1
+            } else {
+                let attributes = try fileManager.attributesOfItem(atPath: target.path)
+                let size = (attributes[.size] as? NSNumber)?.int64Value ?? -1
+                if size == file.size,
+                   try Self.hashFile(target, progress: { hashedBytes in
+                       progress(ChangeProgress(
+                           completedFiles: index,
+                           totalFiles: ordered.count,
+                           completedBytes: completedBytes + min(file.size, hashedBytes),
+                           totalBytes: totalBytes,
+                           currentPath: file.path
+                       ))
+                   }) == file.sha256.lowercased() {
+                    summary.unchangedFiles += 1
+                    unchangedPaths.insert(file.path)
+                } else {
+                    summary.replacedFiles += 1
+                }
+            }
+            summary.totalFiles += 1
+            completedBytes += file.size
+            progress(ChangeProgress(
+                completedFiles: index + 1,
+                totalFiles: ordered.count,
+                completedBytes: completedBytes,
+                totalBytes: totalBytes,
+                currentPath: file.path
+            ))
+        }
+        return ChangeAnalysis(summary: summary, unchangedPaths: unchangedPaths)
+    }
+
     func commit(
         stagedRoot: URL,
         destinationRoot: URL,
         directories: [String],
         files: [String],
-        backupRoot: URL
+        backupRoot: URL,
+        unchangedPaths: Set<String> = []
     ) throws {
         let directoryPaths = allDirectoryPaths(directories: directories, files: files)
         var backups: [(original: URL, backup: URL)] = []
@@ -508,6 +643,7 @@ struct USBStagedTreeCommitter {
             }
 
             for relativePath in files.sorted() {
+                if unchangedPaths.contains(relativePath) { continue }
                 let staged = stagedRoot.appendingPathComponent(relativePath)
                 let target = destinationRoot.appendingPathComponent(relativePath)
                 if fileManager.fileExists(atPath: target.path) {
@@ -558,5 +694,27 @@ struct USBStagedTreeCommitter {
             let rhsDepth = $1.split(separator: "/").count
             return lhsDepth == rhsDepth ? $0 < $1 : lhsDepth < rhsDepth
         }
+    }
+
+
+    private static func hashFile(
+        _ url: URL,
+        progress: (Int64) -> Void = { _ in }
+    ) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        var completedBytes: Int64 = 0
+        while try autoreleasepool(invoking: {
+            guard let data = try handle.read(upToCount: 1_024 * 1_024), !data.isEmpty else {
+                return false
+            }
+            hasher.update(data: data)
+            completedBytes += Int64(data.count)
+            progress(completedBytes)
+            return true
+        }) {
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

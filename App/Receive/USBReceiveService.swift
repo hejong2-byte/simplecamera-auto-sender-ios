@@ -142,6 +142,7 @@ actor USBReceiveService {
             destination: destination
         )
         var completed = acknowledged.count
+        var changeSummary = USBTransferChangeSummary.zero
         for (offset, delivery) in deliveries.enumerated()
             where !acknowledged.contains(delivery.deliveryID) {
             try Task.checkCancellation()
@@ -152,7 +153,7 @@ actor USBReceiveService {
                 receiveSecret: credentials.secret,
                 mode: .foreground
             )
-            try await receive(
+            let receivedChanges = try await receive(
                 delivery,
                 credentials: credentials,
                 destination: destination,
@@ -160,6 +161,7 @@ actor USBReceiveService {
                 totalCount: deliveries.count,
                 completedCount: completed
             )
+            changeSummary = changeSummary.adding(receivedChanges)
             completed += 1
         }
         if completed > 0 {
@@ -174,7 +176,8 @@ actor USBReceiveService {
                 totalBytes: 0,
                 startedAt: nil,
                 expiresAt: nil,
-                errorMessage: nil
+                errorMessage: nil,
+                detail: changeSummary.totalFiles > 0 ? changeSummary.displayText : nil
             ))
         }
         return USBReceiveSummary(discovered: deliveries.count, completed: completed)
@@ -283,7 +286,7 @@ actor USBReceiveService {
         currentIndex: Int,
         totalCount: Int,
         completedCount: Int
-    ) async throws {
+    ) async throws -> USBTransferChangeSummary {
         let startedAt = now()
         let safeName = try validatedFileName(delivery)
         let storedDecision = try receiveDecision(
@@ -294,6 +297,17 @@ actor USBReceiveService {
             .pathExtension.lowercased() == "zip"
             ? (storedDecision?.archiveMode ?? .keepArchive)
             : .keepArchive
+        let overwriteExisting = storedDecision?.overwriteExisting == true
+        let requestedFinalURL = destination.url.appendingPathComponent(safeName)
+        let requestedNameExists = fileManager.fileExists(atPath: requestedFinalURL.path)
+        if archiveMode == .keepArchive, requestedNameExists, !overwriteExisting {
+            throw USBZIPReceivePipelineError.overwriteRequired(
+                USBZIPOverwriteRequest(
+                    deliveryID: delivery.deliveryID,
+                    paths: [safeName]
+                )
+            )
+        }
         try USBVolumePolicy.validate(
             fileSize: delivery.size,
             formatDescription: try volumeFormat(destination.url)
@@ -305,7 +319,7 @@ actor USBReceiveService {
             archiveMode: archiveMode
         )
         if checkpoint.archiveMode == .extract {
-            try await receiveExtractedZIP(
+            return try await receiveExtractedZIP(
                 delivery,
                 credentials: credentials,
                 destination: destination,
@@ -315,11 +329,27 @@ actor USBReceiveService {
                 completedCount: completedCount,
                 startedAt: startedAt
             )
-            return
         }
-        var finalURL = destination.url.appendingPathComponent(checkpoint.finalFileName)
+        let finalURL = destination.url.appendingPathComponent(checkpoint.finalFileName)
 
-        if try fileMatches(finalURL, size: delivery.size, sha256: delivery.sha256) {
+        if try fileMatches(
+            finalURL,
+            size: delivery.size,
+            sha256: delivery.sha256,
+            progress: { bytes in
+                publish(
+                    .verifying,
+                    delivery: delivery,
+                    currentIndex: currentIndex,
+                    totalCount: totalCount,
+                    completedCount: completedCount,
+                    bytesReceived: bytes,
+                    totalBytes: delivery.size,
+                    startedAt: startedAt,
+                    detail: "기존 파일 내용 비교 중 · 1/1\n\(safeName)"
+                )
+            }
+        ) {
             checkpoint.confirmedOffset = delivery.size
             checkpoint.state = .ackPending
             try ledger.save(checkpoint)
@@ -338,7 +368,13 @@ actor USBReceiveService {
                 storedName: checkpoint.finalFileName
             )
             try ledger.remove(deliveryID: delivery.deliveryID)
-            return
+            return USBTransferChangeSummary(
+                totalFiles: 1,
+                newFiles: 0,
+                replacedFiles: 0,
+                unchangedFiles: 1,
+                failedFiles: 0
+            )
         }
 
         let partialURL = partialURL(for: delivery.deliveryID, in: destination.url)
@@ -460,18 +496,14 @@ actor USBReceiveService {
             throw USBReceiveServiceError.shaMismatch
         }
 
-        if fileManager.fileExists(atPath: finalURL.path) {
-            let selected = try availableFinalName(
-                requestedName: safeName,
-                delivery: delivery,
-                in: destination.url
+        let finalExistsAtCommit = fileManager.fileExists(atPath: finalURL.path)
+        if finalExistsAtCommit, !overwriteExisting {
+            throw USBZIPReceivePipelineError.overwriteRequired(
+                USBZIPOverwriteRequest(
+                    deliveryID: delivery.deliveryID,
+                    paths: [safeName]
+                )
             )
-            checkpoint.finalFileName = selected.name
-            finalURL = destination.url.appendingPathComponent(selected.name)
-            try ledger.save(checkpoint)
-            if selected.reusesExistingFile {
-                try fileManager.removeItem(at: partialURL)
-            }
         }
 
         checkpoint.state = .finalizing
@@ -486,7 +518,15 @@ actor USBReceiveService {
             startedAt: startedAt
         )
         if fileManager.fileExists(atPath: partialURL.path) {
-            try coordinatedMove(from: partialURL, to: finalURL)
+            if finalExistsAtCommit {
+                try replaceItemTransactionally(
+                    staged: partialURL,
+                    destination: finalURL,
+                    backupDirectory: partialDirectory(in: destination.url)
+                )
+            } else {
+                try coordinatedMove(from: partialURL, to: finalURL)
+            }
         }
         guard try fileMatches(finalURL, size: delivery.size, sha256: delivery.sha256) else {
             try? fileManager.removeItem(at: finalURL)
@@ -513,6 +553,13 @@ actor USBReceiveService {
             storedName: checkpoint.finalFileName
         )
         try ledger.remove(deliveryID: delivery.deliveryID)
+        return USBTransferChangeSummary(
+            totalFiles: 1,
+            newFiles: finalExistsAtCommit ? 0 : 1,
+            replacedFiles: finalExistsAtCommit ? 1 : 0,
+            unchangedFiles: 0,
+            failedFiles: 0
+        )
     }
 
     private func receiveExtractedZIP(
@@ -524,7 +571,7 @@ actor USBReceiveService {
         totalCount: Int,
         completedCount: Int,
         startedAt: Date
-    ) async throws {
+    ) async throws -> USBTransferChangeSummary {
         try fileManager.createDirectory(
             at: zipStagingDirectory,
             withIntermediateDirectories: true
@@ -676,7 +723,14 @@ actor USBReceiveService {
                     stage = .verifying
                     bytes = update.completedBytes
                     total = update.totalBytes
+                case .comparing:
+                    stage = .verifying
+                    bytes = update.completedBytes
+                    total = update.totalBytes
                 }
+                let detail = update.phase == .comparing
+                    ? "기존 파일 비교 \(update.completedFiles)/\(update.totalFiles)개\n\(update.currentPath ?? "")"
+                    : nil
                 publish(
                     stage,
                     delivery: delivery,
@@ -685,7 +739,8 @@ actor USBReceiveService {
                     completedCount: completedCount,
                     bytesReceived: bytes,
                     totalBytes: total,
-                    startedAt: startedAt
+                    startedAt: startedAt,
+                    detail: detail
                 )
             }
         } catch let error as USBZIPReceivePipelineError {
@@ -711,7 +766,8 @@ actor USBReceiveService {
             completedCount: completedCount,
             bytesReceived: commit.extractedBytes,
             totalBytes: commit.extractedBytes,
-            startedAt: startedAt
+            startedAt: startedAt,
+            detail: "저장 결과 · \(commit.changeSummary.displayText)"
         )
         try await acknowledge(
             delivery,
@@ -720,6 +776,7 @@ actor USBReceiveService {
         )
         try ledger.remove(deliveryID: delivery.deliveryID)
         try? fileManager.removeItem(at: sourceZIP)
+        return commit.changeSummary
     }
 
     private func checkpoint(
@@ -728,12 +785,16 @@ actor USBReceiveService {
         destination: USBBookmarkDestination,
         archiveMode: IPhoneReceiveArchiveMode
     ) throws -> USBReceiveCheckpoint {
-        if let stored = ledger.checkpoint(for: delivery.deliveryID),
+        if var stored = ledger.checkpoint(for: delivery.deliveryID),
            stored.fileName == delivery.fileName,
            stored.sha256 == delivery.sha256,
            stored.totalBytes == delivery.size,
            stored.destinationVolumeID == destination.volumeID,
            stored.archiveMode == archiveMode {
+            if archiveMode == .keepArchive, stored.finalFileName != safeName {
+                stored.finalFileName = safeName
+                try ledger.save(stored)
+            }
             return stored
         }
         let partial = partialURL(for: delivery.deliveryID, in: destination.url)
@@ -754,11 +815,6 @@ actor USBReceiveService {
             try ledger.save(checkpoint)
             return checkpoint
         }
-        let selected = try availableFinalName(
-            requestedName: safeName,
-            delivery: delivery,
-            in: destination.url
-        )
         let checkpoint = USBReceiveCheckpoint(
             deliveryID: delivery.deliveryID,
             fileName: delivery.fileName,
@@ -766,33 +822,12 @@ actor USBReceiveService {
             totalBytes: delivery.size,
             confirmedOffset: 0,
             destinationVolumeID: destination.volumeID,
-            finalFileName: selected.name,
-            state: selected.reusesExistingFile ? .ackPending : .downloading,
+            finalFileName: safeName,
+            state: .downloading,
             archiveMode: archiveMode
         )
         try ledger.save(checkpoint)
         return checkpoint
-    }
-
-    private func availableFinalName(
-        requestedName: String,
-        delivery: IPhoneDelivery,
-        in directory: URL
-    ) throws -> (name: String, reusesExistingFile: Bool) {
-        for suffix in 0...9_999 {
-            let candidate = try IPhoneLocalFileNaming.candidateName(
-                requestedName,
-                suffix: suffix
-            )
-            let url = directory.appendingPathComponent(candidate)
-            if !fileManager.fileExists(atPath: url.path) {
-                return (candidate, false)
-            }
-            if try fileMatches(url, size: delivery.size, sha256: delivery.sha256) {
-                return (candidate, true)
-            }
-        }
-        throw USBReceiveServiceError.destinationNotWritable
     }
 
     private func validatedFileName(_ delivery: IPhoneDelivery) throws -> String {
@@ -824,10 +859,17 @@ actor USBReceiveService {
         }
     }
 
-    private func fileMatches(_ url: URL, size: Int64, sha256: String) throws -> Bool {
-        guard fileManager.fileExists(atPath: url.path),
+    private func fileMatches(
+        _ url: URL,
+        size: Int64,
+        sha256: String,
+        progress: (Int64) -> Void = { _ in }
+    ) throws -> Bool {
+        var isDirectory = ObjCBool(false)
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue,
               try fileSize(url) == size else { return false }
-        return try hashFile(url) == sha256.lowercased()
+        return try hashFile(url, progress: progress) == sha256.lowercased()
     }
 
     private func fileSize(_ url: URL) throws -> Int64 {
@@ -835,15 +877,21 @@ actor USBReceiveService {
         return (attributes[.size] as? NSNumber)?.int64Value ?? 0
     }
 
-    private func hashFile(_ url: URL) throws -> String {
+    private func hashFile(
+        _ url: URL,
+        progress: (Int64) -> Void = { _ in }
+    ) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         var hasher = SHA256()
         // FileHandle can retain autoreleased buffers until this long operation returns.
         // Drain each chunk so verifying multi-GB files uses bounded memory.
+        var completedBytes: Int64 = 0
         while try autoreleasepool(invoking: {
             guard let data = try handle.read(upToCount: 1_024 * 1_024), !data.isEmpty else { return false }
             hasher.update(data: data)
+            completedBytes += Int64(data.count)
+            progress(completedBytes)
             return true
         }) {
         }
@@ -901,6 +949,27 @@ actor USBReceiveService {
         if let coordinationError { throw coordinationError }
     }
 
+    private func replaceItemTransactionally(
+        staged: URL,
+        destination: URL,
+        backupDirectory: URL
+    ) throws {
+        let backup = backupDirectory.appendingPathComponent(
+            "overwrite-\(UUID().uuidString.lowercased()).backup"
+        )
+        try fileManager.moveItem(at: destination, to: backup)
+        do {
+            try coordinatedMove(from: staged, to: destination)
+            try? fileManager.removeItem(at: backup)
+        } catch {
+            if fileManager.fileExists(atPath: destination.path) {
+                try? fileManager.removeItem(at: destination)
+            }
+            try? fileManager.moveItem(at: backup, to: destination)
+            throw error
+        }
+    }
+
     private func acknowledge(
         _ delivery: IPhoneDelivery,
         credentials: IPhoneReceiverCredentials,
@@ -940,7 +1009,8 @@ actor USBReceiveService {
         completedCount: Int,
         bytesReceived: Int64,
         totalBytes: Int64? = nil,
-        startedAt: Date
+        startedAt: Date,
+        detail: String? = nil
     ) {
         progressStore.publish(USBReceiveProgress(
             stage: stage,
@@ -953,7 +1023,8 @@ actor USBReceiveService {
             totalBytes: totalBytes ?? delivery.size,
             startedAt: startedAt,
             expiresAt: delivery.expiresAt,
-            errorMessage: nil
+            errorMessage: nil,
+            detail: detail
         ))
     }
 

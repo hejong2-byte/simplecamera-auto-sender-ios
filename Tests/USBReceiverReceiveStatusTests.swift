@@ -318,8 +318,8 @@ final class USBReceiverReceiveStatusTests: XCTestCase {
                 fileURL: directory.appendingPathComponent("destination.json")
             ),
             registrar: ReceiveStatusRegistrar(),
-            receiveLocalOnce: receiveLocalOnce,
             receiveOnce: { USBReceiveSummary(discovered: 0, completed: 0) },
+            receiveLocalOnce: receiveLocalOnce,
             storedFiles: { storedFiles },
             progressUpdates: { progress.updates() },
             loadOutcome: { id in
