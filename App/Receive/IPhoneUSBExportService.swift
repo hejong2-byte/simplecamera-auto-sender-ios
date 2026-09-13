@@ -64,7 +64,7 @@ struct IPhoneUSBExportSummary: Equatable, Sendable {
     }
 
     var changeSummary: USBTransferChangeSummary {
-        let completed = verified.reduce(.zero) { result, decision in
+        let completed = verified.reduce(USBTransferChangeSummary.zero) { result, decision in
             let fallbackCount = decision.copiedFiles?.count ?? 1
             let value = decision.changeSummary ?? USBTransferChangeSummary(
                 totalFiles: fallbackCount,
