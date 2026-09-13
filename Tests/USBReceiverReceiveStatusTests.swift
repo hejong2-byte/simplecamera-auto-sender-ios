@@ -403,10 +403,12 @@ final class USBReceiverReceiveStatusTests: XCTestCase {
 
 private actor ReceivePollGate {
     private var started = false
+    private var released = false
     private var continuation: CheckedContinuation<Void, Never>?
 
     func wait() async throws {
         started = true
+        if released { return }
         await withCheckedContinuation { continuation = $0 }
     }
 
@@ -415,6 +417,7 @@ private actor ReceivePollGate {
     }
 
     func release() {
+        released = true
         continuation?.resume()
         continuation = nil
     }
