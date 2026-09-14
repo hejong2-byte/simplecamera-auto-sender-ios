@@ -512,6 +512,37 @@ final class USBReceiveServiceTests: XCTestCase {
         XCTAssertNil(fixture.ledger.checkpoint(for: fixture.delivery.deliveryID))
     }
 
+    func testTemporaryCleanupRemovesDirectReceiveWorkButKeepsCompletedUSBFile() async throws {
+        let fixture = try makeFixture(payload: validZIPData(), chunkSize: 8)
+        try Data("direct-zip-temp".utf8).write(to: fixture.stagedZIP)
+        let partialRoot = fixture.destination.appendingPathComponent(
+            USBReceiveService.partialDirectoryName,
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: partialRoot, withIntermediateDirectories: true)
+        let directPartial = partialRoot.appendingPathComponent(
+            fixture.delivery.deliveryID.uuidString.lowercased() + ".partial"
+        )
+        try Data("partial".utf8).write(to: directPartial)
+        let completed = fixture.destination.appendingPathComponent("completed.bin")
+        try Data("completed".utf8).write(to: completed)
+
+        let summary = await fixture.service.cleanupTemporaryFiles(
+            to: USBBookmarkDestination(
+                url: fixture.destination,
+                volumeID: "test-volume",
+                displayName: "TEST USB",
+                isStale: false
+            )
+        )
+
+        XCTAssertTrue(summary.failures.isEmpty)
+        XCTAssertEqual(summary.deletedCount, 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.stagedZIP.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directPartial.path))
+        XCTAssertEqual(try Data(contentsOf: completed), Data("completed".utf8))
+    }
+
     private func makeFixture(
         payload: Data,
         fileName: String = "업무.zip",

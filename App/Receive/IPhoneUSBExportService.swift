@@ -650,29 +650,6 @@ actor IPhoneUSBExportService {
                 failedFiles: 0
             )
             try fileManager.moveItem(at: partialURL, to: finalURL)
-        } else if !isDirectory.boolValue,
-                  try fileSize(finalURL) == sourceSize,
-                  try hashFile(finalURL, progress: { bytes in
-                      self.publish(
-                          file: file,
-                          currentIndex: currentIndex,
-                          totalCount: totalCount,
-                          completedCount: completedCount,
-                          bytes: bytes,
-                          totalBytes: sourceSize,
-                          startedAt: startedAt,
-                          stage: .verifying,
-                          detail: "기존 파일 내용 비교 중 · 1/1\n\(storedName)"
-                      )
-                  }) == sourceSHA {
-            changeSummary = USBTransferChangeSummary(
-                totalFiles: 1,
-                newFiles: 0,
-                replacedFiles: 0,
-                unchangedFiles: 1,
-                failedFiles: 0
-            )
-            try fileManager.removeItem(at: partialURL)
         } else {
             changeSummary = USBTransferChangeSummary(
                 totalFiles: 1,
@@ -1005,27 +982,25 @@ actor IPhoneUSBExportService {
             fileManager: fileManager,
             moveItem: { try self.fileManager.moveItem(at: $0, to: $1) }
         )
-        let analysis = try committer.analyzeChanges(
+        let pendingFiles = copiedFiles.filter {
+            topLevelName($0.path).map(finalizedTopLevelNames.contains) != true
+        }
+        let pendingAnalysis = try committer.analyzeChanges(
             destinationRoot: destination.url,
-            files: copiedFiles
+            files: pendingFiles,
+            compareContents: false
         ) { update in
             report(
-                .verifying,
+                .finalizing,
                 update.completedBytes,
                 update.totalBytes,
-                "기존 파일 비교 \(update.completedFiles)/\(update.totalFiles)개\n\(update.currentPath)"
+                "덮어쓰기 대상 확인 \(update.completedFiles)/\(update.totalFiles)개\n\(update.currentPath)"
             )
         }
-        for name in finalizedTopLevelNames {
-            let paths = copiedFiles
-                .filter { topLevelName($0.path) == name }
-                .map(\.path)
-            guard paths.allSatisfy(analysis.unchangedPaths.contains) else {
-                throw CocoaError(.fileWriteFileExists, userInfo: [
-                    NSFilePathErrorKey: destination.url.appendingPathComponent(name).path
-                ])
-            }
-        }
+        let finalizedFileCount = copiedFiles.count - pendingFiles.count
+        var changeSummary = pendingAnalysis.summary
+        changeSummary.totalFiles += finalizedFileCount
+        changeSummary.unchangedFiles += finalizedFileCount
         // All bytes are written and sized before publishing the exact top-level
         // names. Never add a ZIP-name wrapper or rename navigation directories.
         for (index, name) in topLevelNames.enumerated() {
@@ -1060,7 +1035,7 @@ actor IPhoneUSBExportService {
                     directories: directories,
                     files: files,
                     backupRoot: backup,
-                    unchangedPaths: analysis.unchangedPaths
+                    unchangedPaths: pendingAnalysis.unchangedPaths
                 )
             } else {
                 try fileManager.moveItem(at: staged, to: target)
@@ -1081,7 +1056,7 @@ actor IPhoneUSBExportService {
             totalBytes: extraction.totalBytes,
             startedAt: startedAt,
             stage: .finalizing,
-            detail: "저장 결과 · \(analysis.summary.displayText)\n임시 압축해제 파일 정리 중"
+            detail: "저장 결과 · \(changeSummary.displayText)\n임시 압축해제 파일 정리 중"
         )
 
         let decision = IPhoneUSBDeletionDecision(
@@ -1095,7 +1070,7 @@ actor IPhoneUSBExportService {
             copiedFiles: copiedFiles,
             usbVolumeID: destination.volumeID,
             sourceModifiedAt: sourceModifiedAt,
-            changeSummary: analysis.summary
+            changeSummary: changeSummary
         )
         try deletionStore.save(decision)
         return decision

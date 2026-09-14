@@ -424,6 +424,62 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: context.zipWorkingDirectory.path), [])
     }
 
+    func testInterruptedZIPUSBStageResumesFromPartialFileContents() async throws {
+        let fileManager = CancelOnlyFirstExportFileFileManager()
+        let context = try makeContext(fileManager: fileManager)
+        let archiveData = try XCTUnwrap(Data(base64Encoded: "UEsDBBQAAAAIANJIKF03rc1dEwAAAAsAAAAPAAAAZG9jcy9yZXBvcnQudHh0KkotyC8q0U1JLEkEAAAA//8DAFBLAwQUAAAACADSSChd+/k8aREAAAAJAAAACAAAAHJvb3QudHh0KsrPL9FNSSxJBAAAAP//AwBQSwECFAAUAAAACADSSChdN63NXRMAAAALAAAADwAAAAAAAAAAAAAAAAAAAAAAZG9jcy9yZXBvcnQudHh0UEsBAhQAFAAAAAgA0kgoXfv5PGkRAAAACQAAAAgAAAAAAAAAAAAAAAAAQAAAAHJvb3QudHh0UEsFBgAAAAACAAIAcwAAAHcAAAAAAA=="))
+        let file = try makeStoredFile(name: "resume-41.zip", data: archiveData, in: context.sourceDirectory)
+
+        let first = await context.service.export(
+            [file],
+            to: context.destination,
+            preservePartialOnCancellation: true
+        )
+        XCTAssertTrue(first.cancelled)
+
+        let extractionRoot = try XCTUnwrap(
+            FileManager.default.contentsOfDirectory(
+                at: context.zipWorkingDirectory,
+                includingPropertiesForKeys: nil
+            ).first { $0.lastPathComponent.hasPrefix("extract-") }
+        )
+        let extractedReport = try XCTUnwrap(
+            (FileManager.default.enumerator(at: extractionRoot, includingPropertiesForKeys: nil)?
+                .allObjects as? [URL])?.first { $0.path.hasSuffix("docs/report.txt") }
+        )
+        let partialRoot = context.usbDirectory.appendingPathComponent(
+            IPhoneUSBExportService.partialDirectoryName,
+            isDirectory: true
+        )
+        let partialExport = try XCTUnwrap(
+            FileManager.default.contentsOfDirectory(
+                at: partialRoot,
+                includingPropertiesForKeys: nil
+            ).first { $0.lastPathComponent.hasPrefix("export-") }
+        )
+        let partialReport = partialExport.appendingPathComponent("docs/report.txt")
+        try FileManager.default.createDirectory(
+            at: partialReport.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let reportData = try Data(contentsOf: extractedReport)
+        let fortyOnePercent = max(1, reportData.count * 41 / 100)
+        try reportData.prefix(fortyOnePercent).write(to: partialReport)
+
+        let resumed = await context.service.export(
+            [file],
+            to: context.destination,
+            preservePartialOnCancellation: true
+        )
+
+        XCTAssertTrue(resumed.failed.isEmpty, resumed.errorMessage ?? "41% ZIP resume failed")
+        XCTAssertEqual(
+            try Data(contentsOf: context.usbDirectory.appendingPathComponent("docs/report.txt")),
+            reportData
+        )
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: context.zipWorkingDirectory.path), [])
+    }
+
     func testInterruptedZIPFinalizationResumesAfterOneRootItemWasAlreadyMoved() async throws {
         let fileManager = CancelAfterFirstRootMoveFileManager()
         let context = try makeContext(fileManager: fileManager)

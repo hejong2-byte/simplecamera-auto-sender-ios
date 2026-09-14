@@ -288,10 +288,6 @@ struct USBZIPReceivePipeline {
             files: files.sorted { $0.path < $1.path },
             directories: extraction.directories.sorted()
         )
-        guard try layoutSizes(at: partialURL, matches: expected) else {
-            throw USBZIPReceivePipelineError.sizeMismatch
-        }
-
         let backupURL = partialDirectory.appendingPathComponent(
             "overwrite-\(UUID().uuidString.lowercased()).backup",
             isDirectory: true
@@ -362,54 +358,6 @@ struct USBZIPReceivePipeline {
             }.sorted { $0.path < $1.path },
             directories: extraction.directories.sorted()
         )
-    }
-
-    private func tree(at root: URL, matches expected: Manifest) throws -> Bool {
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory),
-              isDirectory.boolValue else { return false }
-        let keys: Set<URLResourceKey> = [
-            .isDirectoryKey,
-            .isRegularFileKey,
-            .isSymbolicLinkKey,
-            .fileSizeKey
-        ]
-        var enumerationError: Error?
-        guard let enumerator = fileManager.enumerator(
-            at: root,
-            includingPropertiesForKeys: Array(keys),
-            options: [],
-            errorHandler: { _, error in
-                enumerationError = error
-                return false
-            }
-        ) else { return false }
-
-        var files: [ManifestFile] = []
-        var directories: [String] = []
-        for case let url as URL in enumerator {
-            let values = try url.resourceValues(forKeys: keys)
-            guard values.isSymbolicLink != true,
-                  let relativePath = relativePath(of: url, under: root) else {
-                return false
-            }
-            if values.isDirectory == true {
-                directories.append(relativePath)
-            } else if values.isRegularFile == true {
-                files.append(ManifestFile(
-                    path: relativePath,
-                    size: Int64(values.fileSize ?? 0),
-                    sha256: try hashFile(url)
-                ))
-            } else {
-                return false
-            }
-        }
-        if enumerationError != nil { return false }
-        return Manifest(
-            files: files.sorted { $0.path < $1.path },
-            directories: directories.sorted()
-        ) == expected
     }
 
     private func layout(at root: URL, matches expected: Manifest) throws -> Bool {
@@ -491,14 +439,6 @@ struct USBZIPReceivePipeline {
         }) {
         }
         return Self.hex(hasher.finalize())
-    }
-
-    private func relativePath(of item: URL, under root: URL) -> String? {
-        let rootPath = root.standardizedFileURL.path
-        let itemPath = item.standardizedFileURL.path
-        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
-        guard itemPath.hasPrefix(prefix) else { return nil }
-        return String(itemPath.dropFirst(prefix.count))
     }
 
     private func coordinatedMove(from source: URL, to destination: URL) throws {
@@ -601,11 +541,12 @@ struct USBStagedTreeCommitter {
                 summary.newFiles += 1
             } else if isDirectory.boolValue {
                 summary.replacedFiles += 1
+            } else if !compareContents {
+                summary.replacedFiles += 1
             } else {
                 let attributes = try fileManager.attributesOfItem(atPath: target.path)
                 let size = (attributes[.size] as? NSNumber)?.int64Value ?? -1
-                if compareContents,
-                   size == file.size,
+                if size == file.size,
                    try Self.hashFile(target, progress: { hashedBytes in
                        progress(ChangeProgress(
                            completedFiles: index,

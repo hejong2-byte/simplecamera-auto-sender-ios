@@ -84,6 +84,14 @@ final class USBReceiverDependencies: @unchecked Sendable {
         let exportProgressStore = USBReceiveProgressStore(
             fileURL: stateDirectory.appendingPathComponent("usb-export-progress.json")
         )
+        let directZIPExporter = IPhoneUSBExportService(
+            deletionStore: deletionStore,
+            progressStore: progressStore,
+            zipWorkingDirectory: stateDirectory.appendingPathComponent(
+                "DirectZIPExport",
+                isDirectory: true
+            )
+        )
         let directUSBService = USBReceiveService(
             client: usbClient,
             ledger: ledger,
@@ -96,7 +104,8 @@ final class USBReceiverDependencies: @unchecked Sendable {
             zipStagingDirectory: stateDirectory.appendingPathComponent(
                 "DirectZIPStaging",
                 isDirectory: true
-            )
+            ),
+            zipExporter: directZIPExporter
         )
         let backgroundSession = BackgroundIPhoneReceiveSession.shared
         let localEngine = IPhoneLocalReceiveEngine(
@@ -260,8 +269,20 @@ final class USBReceiverDependencies: @unchecked Sendable {
                     overwriteExisting: true
                 )
             },
-            cleanupExportTemps: { [exporter] destination, progress in
-                await exporter.cleanupTemporaryFiles(to: destination, progress: progress)
+            cleanupExportTemps: { [exporter, directUSBService] destination, progress in
+                let direct = await directUSBService.cleanupTemporaryFiles(
+                    to: destination,
+                    progress: progress
+                )
+                let exported = await exporter.cleanupTemporaryFiles(
+                    to: destination,
+                    progress: progress
+                )
+                return USBExportTemporaryCleanupSummary(
+                    deletedCount: direct.deletedCount + exported.deletedCount,
+                    failures: direct.failures + exported.failures,
+                    usbChecked: direct.usbChecked || exported.usbChecked
+                )
             },
             pendingDeletionDecisions: { [deletionStore] in deletionStore.pending() },
             verifyCopies: { [exporter] files, destination, progress in

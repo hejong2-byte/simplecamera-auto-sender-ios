@@ -47,6 +47,7 @@ actor USBReceiveService {
     private let receiveDecision: ReceiveDecisionProvider
     private let zipStagingDirectory: URL
     private let zipPipeline: USBZIPReceivePipeline
+    private let zipExporter: IPhoneUSBExportService?
     private var isRunning = false
 
     init(
@@ -64,7 +65,8 @@ actor USBReceiveService {
         progressStore: USBReceiveProgressStore = USBReceiveProgressStore(),
         receiveDecision: @escaping ReceiveDecisionProvider = { _, _ in nil },
         zipStagingDirectory: URL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SimpleCamera-Direct-ZIP", isDirectory: true)
+            .appendingPathComponent("SimpleCamera-Direct-ZIP", isDirectory: true),
+        zipExporter: IPhoneUSBExportService? = nil
     ) {
         precondition(chunkSize > 0)
         self.client = client
@@ -88,6 +90,7 @@ actor USBReceiveService {
                 isDirectory: true
             )
         )
+        self.zipExporter = zipExporter
     }
 
     func runOnce() async throws -> USBReceiveSummary {
@@ -106,6 +109,121 @@ actor USBReceiveService {
             progressStore.publishFailure(Self.errorMessage(error))
             throw error
         }
+    }
+
+    func cleanupTemporaryFiles(
+        to selectedDestination: USBBookmarkDestination?,
+        progress: @Sendable (FileDeletionProgress) -> Void = { _ in }
+    ) async -> USBExportTemporaryCleanupSummary {
+        var result = USBExportTemporaryCleanupSummary()
+        guard !isRunning else {
+            result.failures.append("직접 수신 작업이 끝난 뒤 임시파일을 정리해 주세요.")
+            return result
+        }
+
+        var candidates: [URL] = []
+        if fileManager.fileExists(atPath: zipStagingDirectory.path) {
+            do {
+                candidates.append(contentsOf: try fileManager.contentsOfDirectory(
+                    at: zipStagingDirectory,
+                    includingPropertiesForKeys: nil
+                ))
+            } catch {
+                result.failures.append("직접 수신 임시파일 확인 실패 · \(error.localizedDescription)")
+            }
+        }
+
+        var scopedURL: URL?
+        defer { if let scopedURL { stopAccessing(scopedURL) } }
+        if let selectedDestination {
+            do {
+                guard !selectedDestination.isStale,
+                      startAccessing(selectedDestination.url) else {
+                    throw USBReceiveServiceError.staleDestination
+                }
+                scopedURL = selectedDestination.url
+                let currentVolume = try volumeIdentity(selectedDestination.url)
+                    ?? selectedDestination.url.path
+                guard currentVolume == selectedDestination.volumeID else {
+                    throw USBReceiveServiceError.destinationChanged
+                }
+                let partialRoot = partialDirectory(in: selectedDestination.url)
+                if fileManager.fileExists(atPath: partialRoot.path) {
+                    let directCandidates = try fileManager.contentsOfDirectory(
+                        at: partialRoot,
+                        includingPropertiesForKeys: nil
+                    ).filter { item in
+                        let name = item.lastPathComponent
+                        let barePartial = String(name.dropLast(".partial".count))
+                        return (name.hasSuffix(".partial") && UUID(uuidString: barePartial) != nil)
+                            || (name.hasPrefix("zip-") && name.hasSuffix(".partial"))
+                            || (name.hasPrefix("overwrite-") && name.hasSuffix(".backup"))
+                    }
+                    candidates.append(contentsOf: directCandidates)
+                }
+                result.usbChecked = true
+            } catch {
+                result.failures.append("SD/USB 직접 수신 임시파일 확인 실패 · \(Self.errorMessage(error))")
+            }
+        }
+
+        var seen = Set<String>()
+        candidates = candidates.filter {
+            seen.insert($0.standardizedFileURL.path).inserted
+        }
+        for (index, item) in candidates.enumerated() {
+            progress(FileDeletionProgress(
+                totalCount: candidates.count,
+                processedCount: index,
+                failedCount: result.failures.count,
+                currentName: item.lastPathComponent
+            ))
+            do {
+                var coordinationError: NSError?
+                var removalError: Error?
+                NSFileCoordinator(filePresenter: nil).coordinate(
+                    writingItemAt: item,
+                    options: .forDeleting,
+                    error: &coordinationError
+                ) { coordinatedItem in
+                    do {
+                        guard coordinatedItem.standardizedFileURL.path
+                                == item.standardizedFileURL.path else {
+                            throw USBReceiveServiceError.destinationChanged
+                        }
+                        if fileManager.fileExists(atPath: coordinatedItem.path) {
+                            try fileManager.removeItem(at: coordinatedItem)
+                        }
+                    } catch {
+                        removalError = error
+                    }
+                }
+                if let removalError { throw removalError }
+                if let coordinationError { throw coordinationError }
+                guard !fileManager.fileExists(atPath: item.path) else {
+                    throw USBReceiveServiceError.destinationNotWritable
+                }
+                result.deletedCount += 1
+            } catch {
+                result.failures.append("직접 수신 임시파일 강제 삭제 실패 · \(item.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        progress(FileDeletionProgress(
+            totalCount: candidates.count,
+            processedCount: candidates.count,
+            failedCount: result.failures.count,
+            currentName: nil
+        ))
+        if let zipExporter {
+            let shared = await zipExporter.cleanupTemporaryFiles(
+                to: selectedDestination,
+                progress: progress
+            )
+            result.deletedCount += shared.deletedCount
+            result.failures += shared.failures
+            result.usbChecked = result.usbChecked || shared.usbChecked
+        }
+        return result
     }
 
     private func performRunOnce() async throws -> USBReceiveSummary {
@@ -221,20 +339,14 @@ actor USBReceiveService {
             let finalURL = destination.url.appendingPathComponent(checkpoint.finalFileName)
             let sourceZIP = stagedZIPURL(for: checkpoint.deliveryID)
             let sourceMatches = checkpoint.archiveMode == .extract
-                ? try fileMatches(
-                    sourceZIP,
-                    size: checkpoint.totalBytes,
-                    sha256: checkpoint.sha256
-                )
+                ? ((try? fileSize(sourceZIP)) == checkpoint.totalBytes)
                 : true
             let finalMatches: Bool
             if checkpoint.archiveMode == .extract {
+                // ackPending is written only after ZIP SHA/CRC, USB writes and
+                // final file-size checks succeeded. Do not re-extract and reread
+                // the entire USB tree merely because the server ACK is retried.
                 finalMatches = sourceMatches
-                    && ((try? zipPipeline.verify(
-                        zip: sourceZIP,
-                        archiveName: checkpoint.fileName,
-                        committedFolder: destination.url
-                    )) == true)
             } else {
                 finalMatches = try fileMatches(
                     finalURL,
@@ -697,67 +809,115 @@ actor USBReceiveService {
         checkpoint.state = .finalizing
         try ledger.save(checkpoint)
         let commit: USBZIPCommit
-        var activePipelinePhase: USBZIPReceivePhase?
-        var pipelinePhaseStartedAt = now()
+        let overwriteExisting = (try receiveDecision(
+            credentials.identity.receiverID,
+            delivery.deliveryID
+        ))?.overwriteExisting == true
         do {
-            commit = try zipPipeline.commit(
-                zip: sourceZIP,
-                delivery: delivery,
-                destination: destination.url,
-                overwriteExisting: (try receiveDecision(
-                    credentials.identity.receiverID,
-                    delivery.deliveryID
-                ))?.overwriteExisting == true
-            ) { update in
-                if activePipelinePhase != update.phase {
-                    activePipelinePhase = update.phase
-                    pipelinePhaseStartedAt = now()
-                }
-                let stage: USBReceiveStage
-                let bytes: Int64
-                let total: Int64
-                switch update.phase {
-                case .extracting:
-                    stage = .extracting
-                    bytes = delivery.size
-                    total = delivery.size
-                case .copying:
-                    stage = .copyingToUSB
-                    bytes = update.completedBytes
-                    total = update.totalBytes
-                case .verifying:
-                    stage = .verifying
-                    bytes = update.completedBytes
-                    total = update.totalBytes
-                case .comparing:
-                    stage = .finalizing
-                    bytes = update.completedBytes
-                    total = update.totalBytes
-                }
-                let detail: String?
-                switch update.phase {
-                case .extracting:
-                    detail = "ZIP 구조·압축 손상 확인 중"
-                case .copying:
-                    detail = update.totalFiles > 0
-                        ? "압축 파일 \(update.completedFiles)/\(update.totalFiles)개\n\(update.currentPath ?? "")"
-                        : "압축 해제 파일을 SD/USB에 기록 중"
-                case .verifying:
-                    detail = "정밀 SHA 검증 중"
-                case .comparing:
-                    detail = "덮어쓰기 대상 확인 \(update.completedFiles)/\(update.totalFiles)개\n\(update.currentPath ?? "")"
-                }
-                publish(
-                    stage,
-                    delivery: delivery,
-                    currentIndex: currentIndex,
-                    totalCount: totalCount,
-                    completedCount: completedCount,
-                    bytesReceived: bytes,
-                    totalBytes: total,
-                    startedAt: pipelinePhaseStartedAt,
-                    detail: detail
+            if let zipExporter {
+                let stagedFile = IPhoneStoredFile(
+                    id: "direct-usb:\(delivery.deliveryID.uuidString.lowercased())",
+                    url: sourceZIP,
+                    name: delivery.fileName,
+                    size: delivery.size,
+                    modifiedAt: now(),
+                    receivedRecord: IPhoneReceivedFileRecord(
+                        deliveryID: delivery.deliveryID,
+                        originalName: delivery.fileName,
+                        storedName: sourceZIP.lastPathComponent,
+                        size: delivery.size,
+                        sha256: delivery.sha256,
+                        receivedAt: now()
+                    )
                 )
+                let exported = await zipExporter.export(
+                    [stagedFile],
+                    to: destination,
+                    archiveMode: .extract,
+                    preservePartialOnCancellation: true,
+                    overwriteExisting: overwriteExisting
+                )
+                if exported.cancelled { throw CancellationError() }
+                if let failure = exported.failed.first {
+                    if failure.error == .overwriteConfirmationRequired {
+                        throw USBZIPReceivePipelineError.overwriteRequired(
+                            USBZIPOverwriteRequest(
+                                deliveryID: delivery.deliveryID,
+                                paths: [delivery.fileName]
+                            )
+                        )
+                    }
+                    throw failure.error
+                }
+                guard let completed = exported.verified.first else {
+                    throw IPhoneUSBExportError.copyFailed
+                }
+                try await zipExporter.keep(decisionIDs: [completed.id])
+                commit = USBZIPCommit(
+                    finalFolderName: completed.usbStoredName,
+                    extractedBytes: completed.copiedFiles?.reduce(Int64(0)) { $0 + $1.size }
+                        ?? delivery.size,
+                    changeSummary: completed.changeSummary ?? exported.changeSummary
+                )
+            } else {
+                var activePipelinePhase: USBZIPReceivePhase?
+                var pipelinePhaseStartedAt = now()
+                commit = try zipPipeline.commit(
+                    zip: sourceZIP,
+                    delivery: delivery,
+                    destination: destination.url,
+                    overwriteExisting: overwriteExisting
+                ) { update in
+                    if activePipelinePhase != update.phase {
+                        activePipelinePhase = update.phase
+                        pipelinePhaseStartedAt = now()
+                    }
+                    let stage: USBReceiveStage
+                    let bytes: Int64
+                    let total: Int64
+                    switch update.phase {
+                    case .extracting:
+                        stage = .extracting
+                        bytes = delivery.size
+                        total = delivery.size
+                    case .copying:
+                        stage = .copyingToUSB
+                        bytes = update.completedBytes
+                        total = update.totalBytes
+                    case .verifying:
+                        stage = .verifying
+                        bytes = update.completedBytes
+                        total = update.totalBytes
+                    case .comparing:
+                        stage = .finalizing
+                        bytes = update.completedBytes
+                        total = update.totalBytes
+                    }
+                    let detail: String?
+                    switch update.phase {
+                    case .extracting:
+                        detail = "ZIP 구조·압축 손상 확인 중"
+                    case .copying:
+                        detail = update.totalFiles > 0
+                            ? "압축 파일 \(update.completedFiles)/\(update.totalFiles)개\n\(update.currentPath ?? "")"
+                            : "압축 해제 파일을 SD/USB에 기록 중"
+                    case .verifying:
+                        detail = "정밀 SHA 검증 중"
+                    case .comparing:
+                        detail = "덮어쓰기 대상 확인 \(update.completedFiles)/\(update.totalFiles)개\n\(update.currentPath ?? "")"
+                    }
+                    publish(
+                        stage,
+                        delivery: delivery,
+                        currentIndex: currentIndex,
+                        totalCount: totalCount,
+                        completedCount: completedCount,
+                        bytesReceived: bytes,
+                        totalBytes: total,
+                        startedAt: pipelinePhaseStartedAt,
+                        detail: detail
+                    )
+                }
             }
         } catch let error as USBZIPReceivePipelineError {
             if case .overwriteRequired = error { throw error }

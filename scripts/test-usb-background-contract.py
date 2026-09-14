@@ -42,6 +42,24 @@ class USBBackgroundContract(unittest.TestCase):
         self.assertNotIn('tree(at: partialURL', commit)
         self.assertNotIn('layout(at: destination', commit)
         self.assertNotIn('copyAndHash(', commit)
+        self.assertEqual(commit.count('layoutSizes(at:'), 1)
+
+    def test_direct_receive_temporary_files_share_cleanup_button(self):
+        service = (ROOT / 'App/Receive/USBReceiveService.swift').read_text(encoding='utf-8')
+        dependencies = (ROOT / 'App/Application/USBReceiverDependencies.swift').read_text(encoding='utf-8')
+        retry = service.split('private func retryAcknowledgements(')[1].split('private func receive(')[0]
+        self.assertIn('func cleanupTemporaryFiles(', service)
+        self.assertIn('directUSBService.cleanupTemporaryFiles', dependencies)
+        self.assertNotIn('zipPipeline.verify(', retry)
+
+    def test_direct_zip_receive_reuses_stored_file_export_engine(self):
+        service = (ROOT / 'App/Receive/USBReceiveService.swift').read_text(encoding='utf-8')
+        dependencies = (ROOT / 'App/Application/USBReceiverDependencies.swift').read_text(encoding='utf-8')
+        exporter = (ROOT / 'App/Receive/IPhoneUSBExportService.swift').read_text(encoding='utf-8')
+        self.assertIn('zipExporter: directZIPExporter', dependencies)
+        self.assertIn('await zipExporter.export(', service)
+        self.assertIn('compareContents: false', exporter)
+        self.assertNotIn('hashFile(finalURL', exporter)
 
     def test_transfer_ui_uses_mb_and_minute_second_eta(self):
         source = (ROOT / 'App/UI/USBReceiverViewModel.swift').read_text(encoding='utf-8')
