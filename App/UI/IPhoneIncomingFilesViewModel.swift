@@ -21,7 +21,11 @@ struct IPhoneIncomingBatch: Identifiable, Equatable {
     var message: String {
         let names = files.prefix(3).map(\.fileName).joined(separator: "\n")
         let remaining = files.count > 3 ? "\n외 \(files.count - 3)개" : ""
-        let size = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
+        let size = String(
+            format: "%.1fMB",
+            locale: Locale(identifier: "en_US_POSIX"),
+            Double(max(totalBytes, 0)) / Double(1_024 * 1_024)
+        )
         return "\(names)\(remaining)\n총 \(size)\n저장할 위치를 선택하세요."
     }
 }

@@ -45,8 +45,12 @@ class USBBackgroundContract(unittest.TestCase):
 
     def test_transfer_ui_uses_mb_and_minute_second_eta(self):
         source = (ROOT / 'App/UI/USBReceiverViewModel.swift').read_text(encoding='utf-8')
+        receive_view = (ROOT / 'App/UI/USBReceiverView.swift').read_text(encoding='utf-8')
+        selection = (ROOT / 'App/UI/PendingIncomingSelectionView.swift').read_text(encoding='utf-8')
         self.assertIn('megabyteText(progress.bytesReceived)', source)
         self.assertIn(r'"\(seconds / 60)분 \(seconds % 60)초"', source)
+        self.assertIn('format: "%.1fMB"', receive_view)
+        self.assertIn('format: "%.1fMB"', selection)
 
 
 if __name__ == '__main__':

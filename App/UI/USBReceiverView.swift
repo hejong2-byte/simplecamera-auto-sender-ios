@@ -501,8 +501,10 @@ struct USBReceiverView: View {
     }
 
     private func byteText(_ bytes: Int64) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: max(0, bytes))
+        String(
+            format: "%.1fMB",
+            locale: Locale(identifier: "en_US_POSIX"),
+            Double(max(bytes, 0)) / Double(1_024 * 1_024)
+        )
     }
 }
