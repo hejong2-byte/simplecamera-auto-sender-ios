@@ -697,6 +697,8 @@ actor USBReceiveService {
         checkpoint.state = .finalizing
         try ledger.save(checkpoint)
         let commit: USBZIPCommit
+        var activePipelinePhase: USBZIPReceivePhase?
+        var pipelinePhaseStartedAt = now()
         do {
             commit = try zipPipeline.commit(
                 zip: sourceZIP,
@@ -707,6 +709,10 @@ actor USBReceiveService {
                     delivery.deliveryID
                 ))?.overwriteExisting == true
             ) { update in
+                if activePipelinePhase != update.phase {
+                    activePipelinePhase = update.phase
+                    pipelinePhaseStartedAt = now()
+                }
                 let stage: USBReceiveStage
                 let bytes: Int64
                 let total: Int64
@@ -724,13 +730,23 @@ actor USBReceiveService {
                     bytes = update.completedBytes
                     total = update.totalBytes
                 case .comparing:
-                    stage = .verifying
+                    stage = .finalizing
                     bytes = update.completedBytes
                     total = update.totalBytes
                 }
-                let detail = update.phase == .comparing
-                    ? "기존 파일 비교 \(update.completedFiles)/\(update.totalFiles)개\n\(update.currentPath ?? "")"
-                    : nil
+                let detail: String?
+                switch update.phase {
+                case .extracting:
+                    detail = "ZIP 구조·압축 손상 확인 중"
+                case .copying:
+                    detail = update.totalFiles > 0
+                        ? "압축 파일 \(update.completedFiles)/\(update.totalFiles)개\n\(update.currentPath ?? "")"
+                        : "압축 해제 파일을 SD/USB에 기록 중"
+                case .verifying:
+                    detail = "정밀 SHA 검증 중"
+                case .comparing:
+                    detail = "덮어쓰기 대상 확인 \(update.completedFiles)/\(update.totalFiles)개\n\(update.currentPath ?? "")"
+                }
                 publish(
                     stage,
                     delivery: delivery,
@@ -739,7 +755,7 @@ actor USBReceiveService {
                     completedCount: completedCount,
                     bytesReceived: bytes,
                     totalBytes: total,
-                    startedAt: startedAt,
+                    startedAt: pipelinePhaseStartedAt,
                     detail: detail
                 )
             }

@@ -266,9 +266,9 @@ final class USBReceiverViewModelTests: XCTestCase {
         XCTAssertEqual(model.usbExportRemainingTimeText(at: start.addingTimeInterval(10)), "남은 시간 계산 중")
         publish(.copyingToUSB, bytes: 25, total: 100)
         await waitUntil { model.usbExportProgress?.bytesReceived == 25 }
-        XCTAssertEqual(model.usbExportRemainingTimeText(at: start.addingTimeInterval(10)), "현재 복사 작업 · 약 30초 남음")
-        XCTAssertEqual(model.usbExportRemainingTimeText(at: start.addingTimeInterval(100)), "현재 복사 작업 · 약 5분 남음")
-        XCTAssertEqual(model.usbExportRemainingTimeText(at: start.addingTimeInterval(1_200)), "현재 복사 작업 · 약 1시간 0분 남음")
+        XCTAssertEqual(model.usbExportRemainingTimeText(at: start.addingTimeInterval(10)), "현재 복사 작업 · 약 0분 30초 남음")
+        XCTAssertEqual(model.usbExportRemainingTimeText(at: start.addingTimeInterval(100)), "현재 복사 작업 · 약 5분 0초 남음")
+        XCTAssertEqual(model.usbExportRemainingTimeText(at: start.addingTimeInterval(1_200)), "현재 복사 작업 · 약 60분 0초 남음")
         XCTAssertEqual(model.usbExportRemainingTimeText(at: try XCTUnwrap(model.usbExportLastUpdatedAt).addingTimeInterval(10)), "진행 응답 대기 · 남은 시간 다시 계산 중")
         publish(.copyingToUSB, bytes: 100, total: 100)
         await waitUntil { model.usbExportProgress?.bytesReceived == 100 }
@@ -278,6 +278,20 @@ final class USBReceiverViewModelTests: XCTestCase {
             await waitUntil { model.usbExportProgress?.stage == stage }
             XCTAssertNil(model.usbExportRemainingTimeText(at: start.addingTimeInterval(10)))
         }
+    }
+
+    func testUSBTransferByteTextAlwaysUsesMegabytes() async throws {
+        let store = USBReceiveProgressStore()
+        let model = try exportModel(files: [], exportProgressStore: store) { _, _, _ in
+            IPhoneUSBExportSummary(verified: [], failed: [])
+        }
+        let eightGiB = Int64(8 * 1_024 * 1_024 * 1_024)
+        store.publish(USBReceiveProgress(stage: .copyingToUSB, deliveryID: nil, fileName: "archive.zip",
+            currentIndex: 1, totalCount: 1, completedCount: 0, bytesReceived: eightGiB / 2,
+            totalBytes: eightGiB, startedAt: Date(), expiresAt: nil, errorMessage: nil))
+        await waitUntil { model.usbExportProgress != nil }
+
+        XCTAssertEqual(model.usbExportByteText, "4096.0MB / 8192.0MB")
     }
 
     func testOptionalVerificationFailureDoesNotReplaceCopyOrReceiveResults() async throws {
@@ -982,7 +996,7 @@ final class USBReceiverViewModelTests: XCTestCase {
             )
         )
         await waitUntil { model.receiveProgress?.stage == .verifying }
-        XCTAssertEqual(model.receiveStageTitle, "파일·SHA 검증 중 · 1/2")
+        XCTAssertEqual(model.receiveStageTitle, "수신 파일 무결성 확인 중 · 1/2")
     }
 
     func testForegroundPollingStartsImmediatelyAndStopsCleanly() async throws {

@@ -221,6 +221,12 @@ struct USBReceiverView: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
+                if let detail = progress.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if !model.receiveSpeedText.isEmpty {
                     HStack {
                         Text(model.receiveSpeedText)
@@ -231,7 +237,7 @@ struct USBReceiverView: View {
                     .foregroundStyle(.secondary)
                 }
                 if progress.totalCount > 0 {
-                    Text("전체 \(progress.totalCount)개 · 저장 완료 \(progress.completedCount)개")
+                    Text("받은 파일 \(progress.completedCount)/\(progress.totalCount)개")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

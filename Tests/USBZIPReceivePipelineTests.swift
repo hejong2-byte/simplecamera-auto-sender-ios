@@ -33,7 +33,7 @@ final class USBZIPReceivePipelineTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: context.zip.path))
         XCTAssertTrue(phases.contains(.extracting))
         XCTAssertTrue(phases.contains(.copying))
-        XCTAssertTrue(phases.contains(.verifying))
+        XCTAssertFalse(phases.contains(.verifying), "Normal USB copy must not reread every copied file for SHA")
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: context.work.path), [])
     }
 
@@ -83,7 +83,7 @@ final class USBZIPReceivePipelineTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: context.usb.appendingPathComponent("업무자료").path))
     }
 
-    func testOverwriteResultSeparatesNewReplacedAndUnchangedFiles() throws {
+    func testOverwriteResultReplacesConflictsWithoutSlowContentComparison() throws {
         let context = try makeContext()
         try FileManager.default.createDirectory(
             at: context.usb.appendingPathComponent("docs"),
@@ -104,11 +104,28 @@ final class USBZIPReceivePipelineTests: XCTestCase {
 
         XCTAssertEqual(result.changeSummary.totalFiles, 2)
         XCTAssertEqual(result.changeSummary.newFiles, 0)
-        XCTAssertEqual(result.changeSummary.replacedFiles, 1)
-        XCTAssertEqual(result.changeSummary.unchangedFiles, 1)
+        XCTAssertEqual(result.changeSummary.replacedFiles, 2)
+        XCTAssertEqual(result.changeSummary.unchangedFiles, 0)
         XCTAssertEqual(result.changeSummary.failedFiles, 0)
         XCTAssertEqual(try Data(contentsOf: unchanged), Data("root-data".utf8))
         XCTAssertEqual(try Data(contentsOf: replaced), Data("report-data".utf8))
+    }
+
+    func testCopyProgressReportsExtractedFileCountAndPath() throws {
+        let context = try makeContext()
+        var updates: [USBZIPReceiveProgress] = []
+
+        _ = try context.pipeline.commit(
+            zip: context.zip,
+            delivery: context.delivery,
+            destination: context.usb,
+            progress: { updates.append($0) }
+        )
+
+        let copy = try XCTUnwrap(updates.last(where: { $0.phase == .copying }))
+        XCTAssertEqual(copy.completedFiles, 2)
+        XCTAssertEqual(copy.totalFiles, 2)
+        XCTAssertEqual(copy.currentPath, "root.txt")
     }
 
     func testArchiveNameAndSDCardRootWrappersAreRemovedForDirectUSBReceive() throws {

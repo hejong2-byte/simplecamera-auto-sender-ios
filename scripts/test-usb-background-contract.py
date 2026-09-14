@@ -36,6 +36,18 @@ class USBBackgroundContract(unittest.TestCase):
         self.assertIn('resumeInterruptedUSBExportIfPossible()', model)
         self.assertIn('receiverModel.setAppActive(active)', content)
 
+    def test_normal_zip_commit_does_not_reread_usb_for_sha(self):
+        source = (ROOT / 'App/Receive/USBZIPReceivePipeline.swift').read_text(encoding='utf-8')
+        commit = source.split('private func performCommit(')[1].split('private func extract(')[0]
+        self.assertNotIn('tree(at: partialURL', commit)
+        self.assertNotIn('layout(at: destination', commit)
+        self.assertNotIn('copyAndHash(', commit)
+
+    def test_transfer_ui_uses_mb_and_minute_second_eta(self):
+        source = (ROOT / 'App/UI/USBReceiverViewModel.swift').read_text(encoding='utf-8')
+        self.assertIn('megabyteText(progress.bytesReceived)', source)
+        self.assertIn(r'"\(seconds / 60)분 \(seconds % 60)초"', source)
+
 
 if __name__ == '__main__':
     unittest.main()

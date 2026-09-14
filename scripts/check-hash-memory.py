@@ -65,7 +65,6 @@ var failures = 0
 
 CASES = [(source, "hashFile") for source in SOURCES] + [
     ("IPhoneUSBExportService.swift", "copyAndHash"),
-    ("USBZIPReceivePipeline.swift", "copyAndHash"),
     ("USBReceiveService.swift", "hashPrefix"),
 ]
 for index, (source, method) in enumerate(CASES):

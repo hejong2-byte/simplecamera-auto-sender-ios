@@ -1458,7 +1458,7 @@ final class USBReceiverViewModel: ObservableObject {
 
     var usbExportByteText: String {
         guard let progress = visibleUSBExportProgress else { return "" }
-        return "\(Self.byteText(progress.bytesReceived)) / \(Self.byteText(progress.totalBytes))"
+        return "\(Self.megabyteText(progress.bytesReceived)) / \(Self.megabyteText(progress.totalBytes))"
     }
 
     var visibleUSBExportProgress: USBReceiveProgress? {
@@ -1499,14 +1499,7 @@ final class USBReceiverViewModel: ObservableObject {
             * date.timeIntervalSince(start) / Double(progress.bytesReceived)
         guard estimate.isFinite, estimate < Double(Int.max) else { return "남은 시간 계산 중" }
         let seconds = max(1, Int(ceil(estimate)))
-        let duration: String
-        if seconds >= 3_600 {
-            duration = "\(seconds / 3_600)시간 \((seconds % 3_600) / 60)분"
-        } else if seconds >= 60 {
-            duration = "\(Int(ceil(Double(seconds) / 60)))분"
-        } else {
-            duration = "\(seconds)초"
-        }
+        let duration = "\(seconds / 60)분 \(seconds % 60)초"
         return "현재 복사 작업 · 약 \(duration) 남음"
     }
 
@@ -1523,7 +1516,7 @@ final class USBReceiverViewModel: ObservableObject {
         case .downloading: return "\(destination) 저장 중\(position)"
         case .downloaded: return "다운로드 완료\(position)"
         case .extracting: return "ZIP 압축 해제 중\(position)"
-        case .verifying: return "파일·SHA 검증 중\(position)"
+        case .verifying: return "수신 파일 무결성 확인 중\(position)"
         case .finalizing: return "\(destination) 파일 확정 중\(position)"
         case .copyingToUSB: return "USB로 복사 중\(position)"
         case .acknowledging: return "PC에 저장 완료 알림 중\(position)"
@@ -1547,7 +1540,7 @@ final class USBReceiverViewModel: ObservableObject {
 
     var receiveByteText: String {
         guard let progress = receiveProgress, progress.totalBytes > 0 else { return "" }
-        return "\(Self.byteText(progress.bytesReceived)) / \(Self.byteText(progress.totalBytes))"
+        return "받은 용량 \(Self.megabyteText(progress.bytesReceived)) / \(Self.megabyteText(progress.totalBytes))"
     }
 
     var receiveSpeedText: String {
@@ -1568,7 +1561,8 @@ final class USBReceiverViewModel: ObservableObject {
         let elapsed = max(Date().timeIntervalSince(startedAt), 0.001)
         let speed = Double(progress.bytesReceived) / elapsed
         let seconds = Int(Double(progress.totalBytes - progress.bytesReceived) / speed)
-        return "약 \(max(seconds, 1))초 남음"
+        let remaining = max(seconds, 1)
+        return "약 \(remaining / 60)분 \(remaining % 60)초 남음"
     }
 
     private func handleReceiveProgress(_ progress: USBReceiveProgress) {
@@ -1715,6 +1709,14 @@ final class USBReceiverViewModel: ObservableObject {
         return String(
             format: "%.2fGB",
             Double(value) / Double(1_024 * 1_024 * 1_024)
+        )
+    }
+
+    private static func megabyteText(_ bytes: Int64) -> String {
+        String(
+            format: "%.1fMB",
+            locale: Locale(identifier: "en_US_POSIX"),
+            Double(max(bytes, 0)) / Double(1_024 * 1_024)
         )
     }
 }

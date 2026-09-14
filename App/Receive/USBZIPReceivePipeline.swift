@@ -239,9 +239,11 @@ struct USBZIPReceivePipeline {
         progress(USBZIPReceiveProgress(
             phase: .copying,
             completedBytes: 0,
-            totalBytes: extraction.totalBytes
+            totalBytes: extraction.totalBytes,
+            completedFiles: 0,
+            totalFiles: extraction.files.count
         ))
-        for extractedFile in extraction.files {
+        for (index, extractedFile) in extraction.files.enumerated() {
             let copiedFile = partialURL.appendingPathComponent(extractedFile.relativePath)
             try fileManager.createDirectory(
                 at: copiedFile.deletingLastPathComponent(),
@@ -250,14 +252,17 @@ struct USBZIPReceivePipeline {
             guard fileManager.createFile(atPath: copiedFile.path, contents: nil) else {
                 throw USBZIPReceivePipelineError.destinationNotWritable
             }
-            let sha256 = try copyAndHash(
+            try copyFile(
                 source: extractedFile.url,
                 destination: copiedFile
             ) { fileBytes in
                 progress(USBZIPReceiveProgress(
                     phase: .copying,
                     completedBytes: copiedBytes + fileBytes,
-                    totalBytes: extraction.totalBytes
+                    totalBytes: extraction.totalBytes,
+                    completedFiles: index,
+                    totalFiles: extraction.files.count,
+                    currentPath: extractedFile.relativePath
                 ))
             }
             guard try regularFileSize(copiedFile) == extractedFile.size else {
@@ -267,7 +272,15 @@ struct USBZIPReceivePipeline {
             files.append(ManifestFile(
                 path: extractedFile.relativePath,
                 size: extractedFile.size,
-                sha256: sha256
+                sha256: ""
+            ))
+            progress(USBZIPReceiveProgress(
+                phase: .copying,
+                completedBytes: copiedBytes,
+                totalBytes: extraction.totalBytes,
+                completedFiles: index + 1,
+                totalFiles: extraction.files.count,
+                currentPath: extractedFile.relativePath
             ))
         }
 
@@ -275,13 +288,8 @@ struct USBZIPReceivePipeline {
             files: files.sorted { $0.path < $1.path },
             directories: extraction.directories.sorted()
         )
-        progress(USBZIPReceiveProgress(
-            phase: .verifying,
-            completedBytes: extraction.totalBytes,
-            totalBytes: extraction.totalBytes
-        ))
-        guard try tree(at: partialURL, matches: expected) else {
-            throw USBZIPReceivePipelineError.shaMismatch
+        guard try layoutSizes(at: partialURL, matches: expected) else {
+            throw USBZIPReceivePipelineError.sizeMismatch
         }
 
         let backupURL = partialDirectory.appendingPathComponent(
@@ -297,7 +305,8 @@ struct USBZIPReceivePipeline {
             destinationRoot: destination,
             files: expected.files.map {
                 USBCopyFileDigest(path: $0.path, size: $0.size, sha256: $0.sha256)
-            }
+            },
+            compareContents: false
         ) { update in
             progress(USBZIPReceiveProgress(
                 phase: .comparing,
@@ -316,8 +325,8 @@ struct USBZIPReceivePipeline {
             backupRoot: backupURL,
             unchangedPaths: analysis.unchangedPaths
         )
-        guard try layout(at: destination, matches: expected) else {
-            throw USBZIPReceivePipelineError.shaMismatch
+        guard try layoutSizes(at: destination, matches: expected) else {
+            throw USBZIPReceivePipelineError.sizeMismatch
         }
         return USBZIPCommit(
             finalFolderName: "",
@@ -419,26 +428,39 @@ struct USBZIPReceivePipeline {
         return true
     }
 
-    private func copyAndHash(
+    private func layoutSizes(at root: URL, matches expected: Manifest) throws -> Bool {
+        for relativePath in expected.directories {
+            var isDirectory = ObjCBool(false)
+            guard fileManager.fileExists(
+                atPath: root.appendingPathComponent(relativePath).path,
+                isDirectory: &isDirectory
+            ), isDirectory.boolValue else { return false }
+        }
+        for file in expected.files {
+            guard try regularFileSize(root.appendingPathComponent(file.path)) == file.size else {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func copyFile(
         source: URL,
         destination: URL,
         progress: (Int64) -> Void
-    ) throws -> String {
+    ) throws {
         let input = try FileHandle(forReadingFrom: source)
         let output = try FileHandle(forWritingTo: destination)
-        var hasher = SHA256()
         var copied: Int64 = 0
         do {
             while try autoreleasepool(invoking: {
                 guard let data = try input.read(upToCount: 1_024 * 1_024), !data.isEmpty else { return false }
                 try output.write(contentsOf: data)
-                hasher.update(data: data)
                 copied += Int64(data.count)
                 progress(copied)
                 return true
             }) {
             }
-            try output.synchronize()
             try input.close()
             try output.close()
         } catch {
@@ -446,7 +468,6 @@ struct USBZIPReceivePipeline {
             try? output.close()
             throw error
         }
-        return Self.hex(hasher.finalize())
     }
 
     private func regularFileSize(_ url: URL) throws -> Int64 {
@@ -562,6 +583,7 @@ struct USBStagedTreeCommitter {
     func analyzeChanges(
         destinationRoot: URL,
         files: [USBCopyFileDigest],
+        compareContents: Bool = true,
         progress: (ChangeProgress) -> Void = { _ in }
     ) throws -> ChangeAnalysis {
         let ordered = files.sorted { $0.path < $1.path }
@@ -582,7 +604,8 @@ struct USBStagedTreeCommitter {
             } else {
                 let attributes = try fileManager.attributesOfItem(atPath: target.path)
                 let size = (attributes[.size] as? NSNumber)?.int64Value ?? -1
-                if size == file.size,
+                if compareContents,
+                   size == file.size,
                    try Self.hashFile(target, progress: { hashedBytes in
                        progress(ChangeProgress(
                            completedFiles: index,
