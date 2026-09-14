@@ -538,7 +538,11 @@ actor IPhoneUSBExportService {
         if let record = file.receivedRecord, record.size != sourceSize {
             throw IPhoneUSBExportError.sourceChanged
         }
-        let isExtractedZIP = file.url.pathExtension.caseInsensitiveCompare("zip") == .orderedSame
+        // Direct PC receives are staged as `<delivery>.zip.partial`, so the
+        // temporary URL cannot identify the original file type. Use the
+        // preserved display/original name for archive routing.
+        let isExtractedZIP = (file.name as NSString).pathExtension
+            .caseInsensitiveCompare("zip") == .orderedSame
             && archiveMode == .extract
         let requestedFinalURL = destination.url.appendingPathComponent(file.name)
         if !isExtractedZIP,

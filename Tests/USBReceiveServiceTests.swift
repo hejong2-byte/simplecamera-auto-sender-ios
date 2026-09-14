@@ -558,6 +558,15 @@ final class USBReceiveServiceTests: XCTestCase {
             try Data(contentsOf: fixture.destination.appendingPathComponent("docs/report.txt")),
             Data("report-data".utf8)
         )
+        XCTAssertEqual(
+            try Data(contentsOf: fixture.destination.appendingPathComponent("root.txt")),
+            Data("root-data".utf8)
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: fixture.destination.appendingPathComponent("업무.zip").path
+            )
+        )
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.stagedZIP.path))
     }
 
