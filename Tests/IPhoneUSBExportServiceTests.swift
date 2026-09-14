@@ -175,7 +175,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         ))
     }
 
-    func testRegularIdenticalFileIsReportedAndLeftUnchangedAfterApproval() async throws {
+    func testRegularIdenticalFileIsRewrittenAfterOverwriteApprovalWithoutUSBHashRead() async throws {
         let context = try makeContext()
         let bytes = Data("same report".utf8)
         let file = try makeStoredFile(name: "동일.pdf", data: bytes, in: context.sourceDirectory)
@@ -193,12 +193,9 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         )
 
         XCTAssertTrue(second.failed.isEmpty)
-        XCTAssertEqual(second.changeSummary.unchangedFiles, 1)
-        XCTAssertEqual(second.changeSummary.replacedFiles, 0)
-        XCTAssertEqual(
-            try FileManager.default.attributesOfItem(atPath: destination.path)[.modificationDate] as? Date,
-            Date(timeIntervalSince1970: 10)
-        )
+        XCTAssertEqual(second.changeSummary.unchangedFiles, 0)
+        XCTAssertEqual(second.changeSummary.replacedFiles, 1)
+        XCTAssertEqual(try Data(contentsOf: destination), bytes)
     }
 
     func testCancelAfterUSBDisappearsReportsUnconfirmedCleanupAndPreservesSource() async throws {
@@ -430,11 +427,13 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         let archiveData = try XCTUnwrap(Data(base64Encoded: "UEsDBBQAAAAIANJIKF03rc1dEwAAAAsAAAAPAAAAZG9jcy9yZXBvcnQudHh0KkotyC8q0U1JLEkEAAAA//8DAFBLAwQUAAAACADSSChd+/k8aREAAAAJAAAACAAAAHJvb3QudHh0KsrPL9FNSSxJBAAAAP//AwBQSwECFAAUAAAACADSSChdN63NXRMAAAALAAAADwAAAAAAAAAAAAAAAAAAAAAAZG9jcy9yZXBvcnQudHh0UEsBAhQAFAAAAAgA0kgoXfv5PGkRAAAACQAAAAgAAAAAAAAAAAAAAAAAQAAAAHJvb3QudHh0UEsFBgAAAAACAAIAcwAAAHcAAAAAAA=="))
         let file = try makeStoredFile(name: "resume-41.zip", data: archiveData, in: context.sourceDirectory)
 
-        let first = await context.service.export(
-            [file],
-            to: context.destination,
-            preservePartialOnCancellation: true
-        )
+        let first = await Task {
+            await context.service.export(
+                [file],
+                to: context.destination,
+                preservePartialOnCancellation: true
+            )
+        }.value
         XCTAssertTrue(first.cancelled)
 
         let extractionRoot = try XCTUnwrap(
@@ -661,10 +660,10 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         XCTAssertTrue(reported.contains { $0.stage == .extracting && $0.totalBytes > 0 })
         XCTAssertTrue(
             reported.contains {
-                $0.stage == .verifying
-                    && $0.detail?.contains("기존 파일 비교") == true
+                $0.stage == .finalizing
+                    && $0.detail?.contains("덮어쓰기 대상 확인") == true
             },
-            "ZIP export must report the comparison pass used for new/replaced/unchanged counts"
+            "ZIP export must report its metadata-only overwrite scan without a USB SHA pass"
         )
         XCTAssertFalse(reported.contains { $0.stage == .checkingSource })
         XCTAssertEqual(reported.last(where: { $0.stage == .completed })?.bytesReceived, 20)

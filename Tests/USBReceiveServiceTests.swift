@@ -543,6 +543,24 @@ final class USBReceiveServiceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: completed), Data("completed".utf8))
     }
 
+    func testProductionDirectZIPPathUsesStoredFileExporterEngine() async throws {
+        let fixture = try makeFixture(
+            payload: validZIPData(),
+            chunkSize: 8,
+            archiveMode: .extract,
+            useSharedZIPExporter: true
+        )
+
+        let result = try await fixture.service.runOnce()
+
+        XCTAssertEqual(result.completed, 1)
+        XCTAssertEqual(
+            try Data(contentsOf: fixture.destination.appendingPathComponent("docs/report.txt")),
+            Data("report-data".utf8)
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.stagedZIP.path))
+    }
+
     private func makeFixture(
         payload: Data,
         fileName: String = "업무.zip",
@@ -555,7 +573,8 @@ final class USBReceiveServiceTests: XCTestCase {
         canAccessSecurityScope: Bool = true,
         currentVolumeID: String = "test-volume",
         archiveMode: IPhoneReceiveArchiveMode = .keepArchive,
-        overwriteExisting: Bool = false
+        overwriteExisting: Bool = false,
+        useSharedZIPExporter: Bool = false
     ) throws -> Fixture {
         let destination = temporaryDirectory()
         let delivery = IPhoneDelivery(
@@ -588,6 +607,22 @@ final class USBReceiveServiceTests: XCTestCase {
         )
         let progressStore = USBReceiveProgressStore()
         let zipStagingDirectory = temporaryDirectory()
+        let sharedZIPExporter: IPhoneUSBExportService?
+        if useSharedZIPExporter {
+            sharedZIPExporter = IPhoneUSBExportService(
+                deletionStore: try IPhoneUSBDeletionDecisionStore(
+                    fileURL: temporaryDirectory().appendingPathComponent("direct-decisions.json")
+                ),
+                fileManager: .default,
+                startAccessing: { _ in canAccessSecurityScope },
+                stopAccessing: { _ in },
+                volumeIdentity: { _ in currentVolumeID },
+                progressStore: progressStore,
+                zipWorkingDirectory: temporaryDirectory()
+            )
+        } else {
+            sharedZIPExporter = nil
+        }
         let service = USBReceiveService(
             client: client,
             ledger: ledger,
@@ -614,7 +649,8 @@ final class USBReceiveServiceTests: XCTestCase {
                     )
                     : nil
             },
-            zipStagingDirectory: zipStagingDirectory
+            zipStagingDirectory: zipStagingDirectory,
+            zipExporter: sharedZIPExporter
         )
         return Fixture(
             client: client,

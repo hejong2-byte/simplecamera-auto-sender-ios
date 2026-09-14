@@ -583,9 +583,14 @@ actor IPhoneUSBExportService {
         )
         var resumeOffset: Int64 = 0
         if fileManager.fileExists(atPath: partialURL.path) {
-            let existingSize = try fileSize(partialURL)
-            if existingSize <= sourceSize,
-               try resumeBoundaryMatches(source: file.url, partial: partialURL, offset: existingSize) {
+            let existingSize = (try? fileSize(partialURL)) ?? -1
+            if existingSize >= 0,
+               existingSize <= sourceSize,
+               (try? resumeBoundaryMatches(
+                   source: file.url,
+                   partial: partialURL,
+                   offset: existingSize
+               )) == true {
                 resumeOffset = existingSize
             } else {
                 try fileManager.removeItem(at: partialURL)
@@ -864,8 +869,8 @@ actor IPhoneUSBExportService {
             }
             let partialFile = partialURL.appendingPathComponent(extractedFile.relativePath)
             guard fileManager.fileExists(atPath: partialFile.path) else { continue }
-            let existingSize = try fileSize(partialFile)
-            if existingSize <= extractedFile.size {
+            if let existingSize = try? fileSize(partialFile),
+               existingSize <= extractedFile.size {
                 existingOffsets[extractedFile.relativePath] = existingSize
                 resumableBytes += existingSize
             } else {
@@ -922,9 +927,14 @@ actor IPhoneUSBExportService {
             var resumeOffset: Int64 = 0
             let previouslyCounted = existingOffsets[extractedFile.relativePath] ?? 0
             if fileManager.fileExists(atPath: partialFile.path) {
-                let existingSize = try fileSize(partialFile)
-                if existingSize <= extractedFile.size,
-                   try resumeBoundaryMatches(source: extractedFile.url, partial: partialFile, offset: existingSize) {
+                let existingSize = (try? fileSize(partialFile)) ?? -1
+                if existingSize >= 0,
+                   existingSize <= extractedFile.size,
+                   (try? resumeBoundaryMatches(
+                       source: extractedFile.url,
+                       partial: partialFile,
+                       offset: existingSize
+                   )) == true {
                     resumeOffset = existingSize
                 } else {
                     try fileManager.removeItem(at: partialFile)
@@ -1303,7 +1313,7 @@ actor IPhoneUSBExportService {
         for item in manifest.files {
             let url = root.appendingPathComponent(item.stagingPath).standardizedFileURL
             guard url.path.hasPrefix(root.standardizedFileURL.path + "/"),
-                  try fileSize(url) == item.size else { return nil }
+                  (try? fileSize(url)) == item.size else { return nil }
             files.append(SafeZIPExtractedFile(
                 relativePath: item.relativePath,
                 url: url,
