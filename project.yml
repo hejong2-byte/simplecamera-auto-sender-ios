@@ -6,8 +6,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    CURRENT_PROJECT_VERSION: 53
-    MARKETING_VERSION: 0.3.42
+    CURRENT_PROJECT_VERSION: 54
+    MARKETING_VERSION: 0.3.43
 packages:
   ZIPFoundation:
     url: https://github.com/weichsel/ZIPFoundation.git

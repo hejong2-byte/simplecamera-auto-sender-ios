@@ -13,6 +13,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Verify SideStore install contract
+        run: python3 scripts/test-release-install-contract.py
       - name: Install build tools
         run: |
           brew install xcodegen
@@ -43,5 +45,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            dist/com.hejong2byte.simplecameraautosender.ipa
             dist/SimpleCameraAutoSender.ipa
             docs/install-qr.png

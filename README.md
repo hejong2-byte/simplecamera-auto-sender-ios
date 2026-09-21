@@ -1,6 +1,8 @@
 # SimpleCamera 자동전송 ADD-ON
 
-Simple Cam으로 촬영한 새 사진을 자동 전송하고, 사용자가 직접 선택한 사진·스크린샷·동영상을 기존 업무사진 수신기로 보내며, PC에서 보낸 모든 일반 파일을 iPhone 내부 또는 외장 USB에 저장하는 iOS 보조 앱입니다. 현재 버전은 0.3.42(빌드 53)입니다.
+Simple Cam으로 촬영한 새 사진을 자동 전송하고, 사용자가 직접 선택한 사진·스크린샷·동영상을 기존 업무사진 수신기로 보내며, PC에서 보낸 모든 일반 파일을 iPhone 내부 또는 외장 USB에 저장하는 iOS 보조 앱입니다. 현재 버전은 0.3.43(빌드 54)입니다.
+
+0.3.43은 SideStore가 원격 IPA 파일명을 예상 번들 ID로 사용하는 설치 검증 방식에 맞춰 설치용 IPA 이름을 `com.hejong2byte.simplecameraautosender.ipa`로 제공합니다. 실제 앱 번들 ID는 기존과 동일하므로 기존 앱 위에 업데이트할 수 있으며, 기존 `SimpleCameraAutoSender.ipa` 파일도 수동 다운로드 호환용으로 함께 제공합니다.
 
 0.3.42는 Windows에서 만든 ZIP이 한글 파일명을 CP949로 저장하고 UTF-8 표시를 생략한 경우에도 압축 해제한 파일명을 원래 한글로 복원합니다. UTF-8 ZIP과 영문 파일명 처리, ZIP CRC 손상 검사와 안전 경로 검사는 그대로 유지합니다.
 
@@ -34,7 +36,7 @@ USB 폴더 생성·쓰기·이름 변경에 외부 저장장치 파일 조정을
 
 ![SideStore 설치 QR](docs/install-qr.png)
 
-[SideStore에서 설치하기](sidestore://install?url=https%3A%2F%2Fgithub.com%2Fhejong2-byte%2Fsimplecamera-auto-sender-ios%2Freleases%2Flatest%2Fdownload%2FSimpleCameraAutoSender.ipa)
+[SideStore에서 설치하기](sidestore://install?url=https%3A%2F%2Fgithub.com%2Fhejong2-byte%2Fsimplecamera-auto-sender-ios%2Freleases%2Flatest%2Fdownload%2Fcom.hejong2byte.simplecameraautosender.ipa)
 
 ## 동작 방식
 

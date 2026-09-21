@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 ROOT = Path(__file__).resolve().parents[1]
 PAYLOAD_FILE = ROOT / "install-url.txt"
 EXPECTED_REPOSITORY = "/hejong2-byte/simplecamera-auto-sender-ios/"
-EXPECTED_ASSET = "/releases/latest/download/SimpleCameraAutoSender.ipa"
+EXPECTED_ASSET = "/releases/latest/download/com.hejong2byte.simplecameraautosender.ipa"
 
 
 def validated_payload() -> str:

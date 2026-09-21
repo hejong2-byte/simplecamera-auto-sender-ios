@@ -24,11 +24,16 @@ cp -R \
 APP_BUNDLE="$BUILD_ROOT/Payload/SimpleCameraAutoSender.app"
 test -f "$APP_BUNDLE/Assets.car"
 /usr/libexec/PlistBuddy -c 'Print :CFBundleIcons' "$APP_BUNDLE/Info.plist" >/dev/null
-rm -f "$ROOT/dist/SimpleCameraAutoSender.ipa"
+INSTALL_IPA="$ROOT/dist/com.hejong2byte.simplecameraautosender.ipa"
+LEGACY_IPA="$ROOT/dist/SimpleCameraAutoSender.ipa"
+rm -f "$INSTALL_IPA" "$LEGACY_IPA"
 ditto -c -k --sequesterRsrc --keepParent \
   "$BUILD_ROOT/Payload" \
-  "$ROOT/dist/SimpleCameraAutoSender.ipa"
+  "$INSTALL_IPA"
+cp "$INSTALL_IPA" "$LEGACY_IPA"
 
-test -s "$ROOT/dist/SimpleCameraAutoSender.ipa"
-unzip -t "$ROOT/dist/SimpleCameraAutoSender.ipa"
-python3 "$ROOT/scripts/verify-ipa.py" "$ROOT/dist/SimpleCameraAutoSender.ipa"
+test -s "$INSTALL_IPA"
+test -s "$LEGACY_IPA"
+cmp "$INSTALL_IPA" "$LEGACY_IPA"
+unzip -t "$INSTALL_IPA"
+python3 "$ROOT/scripts/verify-ipa.py" "$INSTALL_IPA"

@@ -14,6 +14,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Verify SideStore install contract
+        run: python3 scripts/test-release-install-contract.py
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Run iOS tests
@@ -44,4 +46,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: SimpleCameraAutoSender-unsigned
-          path: dist/SimpleCameraAutoSender.ipa
+          path: |
+            dist/com.hejong2byte.simplecameraautosender.ipa
+            dist/SimpleCameraAutoSender.ipa
