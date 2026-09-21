@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import ZIPFoundation
 
 enum SafeZIPExtractorError: Error, Equatable {
@@ -21,6 +22,10 @@ struct SafeZIPExtraction {
 struct SafeZIPExtractor {
     let fileManager: FileManager
 
+    private static let windowsKoreanEncoding = String.Encoding(
+        rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(0x0422))
+    )
+
     func extract(_ source: URL, to destination: URL,
                  progress: @escaping (Int64, Int64, String, Int, Int) -> Void = { _, _, _, _, _ in }) throws -> SafeZIPExtraction {
         try Task.checkCancellation()
@@ -36,7 +41,8 @@ struct SafeZIPExtractor {
         for entry in archive {
             try Task.checkCancellation()
             entryCount += 1
-            let entryURL = destination.appendingPathComponent(entry.path)
+            let entryPath = Self.decodedPath(for: entry)
+            let entryURL = destination.appendingPathComponent(entryPath)
             guard entryURL.isContained(in: destination), entry.type != .symlink else {
                 throw SafeZIPExtractorError.unsafeArchive
             }
@@ -55,24 +61,25 @@ struct SafeZIPExtractor {
             for (index, entry) in archive.enumerated() {
                 try autoreleasepool {
                     try Task.checkCancellation()
+                    let entryPath = Self.decodedPath(for: entry)
                     let base = completedBytes
                     let entrySize = entry.type == .file ? Int64(entry.uncompressedSize) : 0
                     let entryProgress = Progress(totalUnitCount: entrySize)
-                    progress(base, totalBytes, entry.path, index, entryCount)
+                    progress(base, totalBytes, entryPath, index, entryCount)
                     try Task.checkCancellation()
                     let observation = entryProgress.observe(\.completedUnitCount, options: [.new]) { value, _ in
                         if Task.isCancelled { value.cancel() }
                         progress(base + min(entrySize, max(0, value.completedUnitCount)), totalBytes,
-                                 entry.path, index, entryCount)
+                                 entryPath, index, entryCount)
                     }
                     defer { observation.invalidate() }
-                    let checksum = try archive.extract(entry, to: destination.appendingPathComponent(entry.path),
+                    let checksum = try archive.extract(entry, to: destination.appendingPathComponent(entryPath),
                                                        bufferSize: 1_024 * 1_024, skipCRC32: false,
                                                        allowUncontainedSymlinks: false, progress: entryProgress)
                     try Task.checkCancellation()
                     guard checksum == entry.checksum else { throw SafeZIPExtractorError.extractionFailed }
                     completedBytes += entrySize
-                    progress(completedBytes, totalBytes, entry.path, index + 1, entryCount)
+                    progress(completedBytes, totalBytes, entryPath, index + 1, entryCount)
                 }
             }
         } catch {
@@ -87,6 +94,14 @@ struct SafeZIPExtractor {
         }
 
         return try inventory(in: destination)
+    }
+
+    private static func decodedPath(for entry: Entry) -> String {
+        let utf8Path = entry.path(using: .utf8)
+        if !utf8Path.isEmpty { return utf8Path }
+
+        let windowsKoreanPath = entry.path(using: windowsKoreanEncoding)
+        return windowsKoreanPath.isEmpty ? entry.path : windowsKoreanPath
     }
 
     private func inventory(in root: URL) throws -> SafeZIPExtraction {
