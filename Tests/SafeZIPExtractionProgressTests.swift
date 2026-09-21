@@ -4,6 +4,24 @@ import ZIPFoundation
 @testable import SimpleCameraAutoSender
 
 final class SafeZIPExtractionProgressTests: XCTestCase {
+    func testCP949EntryNameWithoutUTF8FlagIsRestored() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let zip = root.appendingPathComponent("windows-korean.zip")
+        let fixture = try XCTUnwrap(Data(base64Encoded:
+            "UEsDBBQAAAAAAAAAAAAeEYlcEAAAABAAAAANAAAAx9Gx2yC5rrytLnR4dGhlbGxvIGtvcmVhbiB6aXBQSwECFAAUAAAAAAAAAAAAHhGJXBAAAAAQAAAADQAAAAAAAAAAAAAAAAAAAAAAx9Gx2yC5rrytLnR4dFBLBQYAAAAAAQABADsAAAA7AAAAAAA="
+        ))
+        try fixture.write(to: zip)
+
+        let output = try SafeZIPExtractor(fileManager: .default)
+            .extract(zip, to: root.appendingPathComponent("out"))
+
+        XCTAssertEqual(output.files.map(\.relativePath), ["한글 문서.txt"])
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(output.files.first).url), Data("hello korean zip".utf8))
+    }
+
     func testSingleLargeEntryReportsBytesBeforeEntryCompletes() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
