@@ -1,6 +1,17 @@
 import Foundation
 
 enum IPhoneReceiveErrorMessage {
+    static func isMissingFileProvider(_ error: Error) -> Bool {
+        var current: NSError? = error as NSError
+        for _ in 0..<5 {
+            guard let value = current else { break }
+            // NSFileProviderError.providerNotFound may be wrapped in a Cocoa I/O error.
+            if value.domain == "NSFileProviderErrorDomain", value.code == -2001 { return true }
+            current = value.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return false
+    }
+
     static func isCancellation(_ error: Error) -> Bool {
         if error is CancellationError { return true }
         let value = error as NSError
@@ -17,6 +28,9 @@ enum IPhoneReceiveErrorMessage {
     static func message(_ error: Error) -> String {
         if isCancellation(error) {
             return "수신이 일시정지되었습니다."
+        }
+        if isMissingFileProvider(error) {
+            return "저장 위치에 접근할 수 없습니다. USB·SD 연결을 확인하고 폴더를 다시 선택해 주세요. (NSFileProviderErrorDomain · -2001)"
         }
         let value = error as NSError
         if value.domain == NSURLErrorDomain {

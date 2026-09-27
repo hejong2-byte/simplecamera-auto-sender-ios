@@ -124,17 +124,12 @@ struct USBStorageManagementView: View {
                 ProgressView("파일 목록 확인 중")
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 16)
-            } else if !model.hasUSBDestination {
-                Text("위에서 SD/USB 폴더를 먼저 선택하세요.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 8)
-            } else if model.storageEntries.isEmpty && model.storageExplorerError == nil {
+            } else if model.hasUSBDestination && model.storageEntries.isEmpty && model.storageExplorerError == nil {
                 Text("이 폴더에는 표시할 파일이 없습니다.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
-            } else {
+            } else if model.hasUSBDestination {
                 LazyVStack(spacing: 0) {
                     ForEach(model.storageEntries) { entry in
                         storageEntryRow(entry)
@@ -301,13 +296,6 @@ struct USBStorageManagementView: View {
                     .font(.subheadline)
                     .foregroundStyle(model.isUSBAvailable == false ? Color.orange : Color.secondary)
             }
-            Label(
-                "파일시스템(참고): \(model.usbFileSystemDescription ?? "저장장치가 형식 정보를 제공하지 않음")",
-                systemImage: "info.circle"
-            )
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-
             HStack {
                 Button(model.hasUSBDestination ? "폴더 다시 선택" : "USB 폴더 선택") {
                     model.isChoosingUSBFolder = true
@@ -330,10 +318,6 @@ struct USBStorageManagementView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("저장장치 내용 삭제")
                 .font(.headline)
-            Text("SD 카드 전체를 비우려면 카드의 최상위 폴더를 선택하세요. 선택한 폴더 자체와 iPhone 원본은 유지됩니다.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
             Button("선택한 저장장치 내용 전체 삭제", role: .destructive) {
                 Task { await model.prepareUSBFolderDeletion() }
             }
@@ -354,9 +338,6 @@ struct USBStorageManagementView: View {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red)
             }
-            Text("삭제 전 파일·폴더 수와 용량을 다시 확인합니다. 확인 뒤 내용이나 저장장치가 바뀌면 삭제하지 않습니다.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
         .cardStyle()
     }

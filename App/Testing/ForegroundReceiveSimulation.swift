@@ -208,6 +208,15 @@ final class ForegroundReceiveSimulation {
             startAccessing: { _ in true },
             stopAccessing: { _ in }
         )
+        let exportProgress = USBReceiveProgressStore()
+        if outcome == "usb-export-error" {
+            let stored = try catalog.refresh()
+            exportProgress.beginExport(fileName: stored.first?.name, totalCount: stored.count,
+                                       sourceFileIDs: stored.map(\.id))
+            exportProgress.publishFailure(IPhoneReceiveErrorMessage.message(
+                NSError(domain: "NSFileProviderErrorDomain", code: -2001)
+            ))
+        }
         receiver = USBReceiverViewModel(
             uploadCredentialStore: InMemoryCredentialStore(),
             registrationStore: registration,
@@ -246,6 +255,8 @@ final class ForegroundReceiveSimulation {
                 }
                 continuation.finish()
             } },
+            exportProgressUpdates: { exportProgress.updates() },
+            clearInterruptedExportProgress: { exportProgress.clearInterruptedExport() },
             loadOutcome: { id in
                 outcomeStore.load(receiverID: id)
             },

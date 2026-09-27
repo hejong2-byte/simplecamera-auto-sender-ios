@@ -34,9 +34,6 @@ struct SettingsView: View {
             }
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier("kakao-folder-select")
-            Text("자주 쓰는 파일 폴더를 선택하세요. 다음 파일 선택 시 시작 위치로 사용합니다. 선택한 파일만 보내며 원본은 유지합니다.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
         .cardStyle()
     }
@@ -137,9 +134,6 @@ struct SettingsView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Text("인증값은 이 아이폰의 보안 저장소에만 보관됩니다.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 

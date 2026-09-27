@@ -19,8 +19,8 @@ final class ProjectSmokeTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 55"))
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.44"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 56"))
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.45"))
         XCTAssertTrue(project.contains("INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription"))
         XCTAssertTrue(project.contains("exactVersion: 0.9.20"))
         XCTAssertTrue(project.contains("UIFileSharingEnabled: true"))
@@ -52,7 +52,7 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(install.contains("앱이 다시 활성화될 때마다"))
         XCTAssertTrue(install.contains("iPhone 내부 임시공간"))
         XCTAssertTrue(install.contains("검증된 압축 해제 폴더"))
-        XCTAssertTrue(readme.contains("현재 버전은 0.3.44(빌드 55)"))
+        XCTAssertTrue(readme.contains("현재 버전은 0.3.45(빌드 56)"))
     }
 
     func testReleaseDocumentsPriorityReceiveStoredZIPAndStorageManagement() throws {
@@ -240,7 +240,7 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertFalse(source.contains("operationNotice"))
     }
 
-    func testSettingsExposeReferenceFileSystemAndConfirmedFolderCleanup() throws {
+    func testSettingsExposeConfirmedFolderCleanup() throws {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -254,9 +254,7 @@ final class ProjectSmokeTests: XCTestCase {
         )
 
         XCTAssertTrue(settings.contains("SD/USB 저장장치 관리"))
-        XCTAssertTrue(storage.contains("파일시스템(참고)"))
         XCTAssertTrue(storage.contains("선택한 저장장치 내용 전체 삭제"))
-        XCTAssertTrue(storage.contains("선택한 폴더 자체와 iPhone 원본은 유지"))
         XCTAssertFalse(storage.contains("FAT32 포맷"))
     }
 

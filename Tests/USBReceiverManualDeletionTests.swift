@@ -59,6 +59,24 @@ final class USBReceiverManualDeletionTests: XCTestCase {
         XCTAssertEqual(try fixture.catalog.refresh().count, 2)
     }
 
+    func testRefreshClearsFailedRecordWhenOriginalsWereAlreadyDeleted() async throws {
+        let exportProgress = USBReceiveProgressStore()
+        let fixture = try makeFixture(exportProgress: exportProgress)
+        await fixture.model.refresh()
+        exportProgress.beginExport(fileName: "first.txt", totalCount: 2,
+                                   sourceFileIDs: fixture.model.storedFiles.map(\.id))
+        exportProgress.publishFailure("USB connection unavailable")
+        await waitUntil { fixture.model.usbExportProgress?.stage == .failed }
+        let deleted = fixture.catalog.delete(fixture.model.storedFiles)
+        XCTAssertEqual(deleted.deletedIDs.count, 2)
+
+        await fixture.model.refresh()
+
+        XCTAssertNil(fixture.model.usbExportProgress)
+        XCTAssertNil(fixture.model.lastUSBExportError)
+        XCTAssertEqual(exportProgress.snapshot().stage, .idle)
+    }
+
     func testOpeningStoredFilePreservesSelectionAndReceiveAndUSBState() async throws {
         let fixture = try makeFixture()
         await fixture.model.refresh()

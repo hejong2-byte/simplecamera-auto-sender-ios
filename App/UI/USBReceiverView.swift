@@ -407,6 +407,18 @@ struct USBReceiverView: View {
         VStack(alignment: .leading, spacing: 10) {
             Divider()
             Text(model.usbExportStageTitle).font(.headline)
+            if model.usbExportProgress?.stage == .failed {
+                HStack(spacing: 8) {
+                    Button("USB 폴더 다시 선택") { model.isChoosingUSBFolder = true }
+                        .disabled(model.isExportingToUSB || model.isReceivingFile || model.isDeletingStoredFiles)
+                        .accessibilityIdentifier("stored-files-reselect-export-folder")
+                    Button("확인·닫기") { model.dismissInterruptedUSBCopy() }
+                        .disabled(!model.canDismissInterruptedUSBCopy)
+                        .accessibilityIdentifier("stored-files-dismiss-failed-export")
+                }
+                .buttonStyle(.bordered)
+                .font(.subheadline)
+            }
             if model.usbExportProgress?.stage == .paused {
                 HStack(spacing: 8) {
                     Button("중단 지점부터 이어받기") {

@@ -397,7 +397,9 @@ actor IPhoneUSBExportService {
                 startedAt: nil,
                 expiresAt: nil,
                 errorMessage: summary.errorMessage,
-                detail: summary.changeSummary.displayText
+                detail: summary.changeSummary.displayText,
+                sourceFileIDs: failed.map(\.sourceID),
+                archiveMode: archiveMode
             ))
         }
         return summary
@@ -1443,7 +1445,9 @@ actor IPhoneUSBExportService {
             diagnostics += " · \(debug.prefix(512))"
         }
         let message: String
-        if systemError.domain == NSCocoaErrorDomain && systemError.code == CocoaError.Code.fileWriteFileExists.rawValue {
+        if IPhoneReceiveErrorMessage.isMissingFileProvider(error) {
+            message = IPhoneReceiveErrorMessage.message(error)
+        } else if systemError.domain == NSCocoaErrorDomain && systemError.code == CocoaError.Code.fileWriteFileExists.rawValue {
             message = "USB 루트에 같은 이름의 파일 또는 폴더가 이미 있습니다. 기존 내용은 덮어쓰거나 이름을 바꾸지 않았습니다."
         } else if systemError.domain == NSCocoaErrorDomain && systemError.code == CocoaError.Code.fileReadUnknown.rawValue {
             message = "파일을 읽지 못했습니다. 파일 손상으로 판정한 것은 아닙니다."

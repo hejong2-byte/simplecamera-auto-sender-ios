@@ -264,7 +264,7 @@ final class USBReceiveProgressStore: @unchecked Sendable {
     }
 
     func clearInterruptedExport() {
-        clear { $0.stage == .paused }
+        clear { $0.stage == .paused || $0.stage == .failed }
     }
 
     private func clear(where shouldClear: (USBReceiveProgress) -> Bool) {

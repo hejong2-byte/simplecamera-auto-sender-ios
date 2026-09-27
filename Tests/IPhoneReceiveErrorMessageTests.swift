@@ -4,13 +4,16 @@ import XCTest
 
 final class IPhoneReceiveErrorMessageTests: XCTestCase {
     func testMissingFileProviderExplainsFolderReselectionInsteadOfReceiveFailure() {
-        let message = IPhoneReceiveErrorMessage.message(
-            NSError(domain: "NSFileProviderErrorDomain", code: -2001)
-        )
-        XCTAssertTrue(message.contains("저장 위치"))
-        XCTAssertTrue(message.contains("다시 선택"))
-        XCTAssertTrue(message.contains("-2001"))
-        XCTAssertFalse(message.contains("수신 오류"))
+        let provider = NSError(domain: "NSFileProviderErrorDomain", code: -2001)
+        let wrapped = NSError(domain: NSCocoaErrorDomain, code: 256,
+                              userInfo: [NSUnderlyingErrorKey: provider])
+        for error in [provider, wrapped] {
+            let message = IPhoneReceiveErrorMessage.message(error)
+            XCTAssertTrue(message.contains("저장 위치"))
+            XCTAssertTrue(message.contains("다시 선택"))
+            XCTAssertTrue(message.contains("-2001"))
+            XCTAssertFalse(message.contains("수신 오류"))
+        }
     }
 
     func testUSBSizeMismatchIsNotPresentedAsSHAVerificationFailure() {

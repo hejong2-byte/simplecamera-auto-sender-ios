@@ -247,9 +247,7 @@ final class ForegroundReceiveUITests: XCTestCase {
         XCTAssertTrue(storage.isHittable)
         storage.tap()
         XCTAssertTrue(app.navigationBars["SD/USB 저장장치 관리"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS %@", "ExFAT")
-        ).firstMatch.exists)
+        keepScreenshot("storage-management", app: app)
 
         let delete = app.buttons["storage-delete-all"]
         XCTAssertTrue(delete.waitForExistence(timeout: 5))
@@ -555,6 +553,24 @@ final class ForegroundReceiveUITests: XCTestCase {
         confirmation.buttons["취소"].tap()
         XCTAssertFalse(confirmation.exists)
         XCTAssertTrue(app.staticTexts["stored.zip"].firstMatch.exists)
+    }
+
+    func testUSBExportFailureCanBeClosedWithoutRemovingStoredFiles() {
+        let app = launchSimulation(delay: 120, outcome: "usb-export-error", withStoredFiles: true)
+        let open = app.buttons["open-receiver"]
+        reveal(open, in: app)
+        open.tap()
+        XCTAssertTrue(app.navigationBars["PC 파일 수신"].waitForExistence(timeout: 10))
+        let dismiss = app.buttons["stored-files-dismiss-failed-export"]
+        reveal(dismiss, in: app)
+        XCTAssertTrue(dismiss.exists)
+        XCTAssertTrue(dismiss.isEnabled)
+        XCTAssertTrue(app.buttons["stored-files-reselect-export-folder"].exists)
+        keepScreenshot("usb-export-failure-recovery", app: app)
+        dismiss.tap()
+        XCTAssertFalse(app.staticTexts["USB 복사 실패"].exists)
+        XCTAssertTrue(app.staticTexts["stored.zip"].firstMatch.exists)
+        keepScreenshot("usb-export-failure-dismissed", app: app)
     }
 
     func testReceiverCanDismissServerCanceledWarningAndKeepStoredFiles() {

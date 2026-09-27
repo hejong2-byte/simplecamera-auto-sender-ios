@@ -180,6 +180,7 @@ final class USBReceiverViewModel: ObservableObject {
     private var declinedOverwriteDeliveryIDs: Set<UUID> = []
     private var pendingStoredOverwriteArchiveMode: IPhoneReceiveArchiveMode?
     private var lastUSBTransferSummaryText: String?
+    private var hasLoadedStoredFiles = false
     private var receiverID: UUID?
     private var usbDestinationPendingDeletion: USBBookmarkDestination?
 
@@ -292,6 +293,9 @@ final class USBReceiverViewModel: ObservableObject {
                 self?.usbExportLastUpdatedAt = Date()
                 if progress.stage == .failed {
                     self?.lastUSBExportError = progress.errorMessage
+                    self?.clearObsoleteUSBExportFailure()
+                } else if progress.stage == .idle {
+                    self?.lastUSBExportError = nil
                 }
             }
         }
@@ -497,7 +501,9 @@ final class USBReceiverViewModel: ObservableObject {
     func refresh() async {
         do {
             storedFiles = try storedFilesProvider()
+            hasLoadedStoredFiles = true
             selectedStoredFileIDs.formIntersection(Set(storedFiles.map(\.id)))
+            clearObsoleteUSBExportFailure()
             needsDeletionDecision = !pendingDeletionDecisions().isEmpty
         } catch {
             lastError = Self.message(for: error)
@@ -910,6 +916,8 @@ final class USBReceiverViewModel: ObservableObject {
         do {
             storedFiles = try storedFilesProvider()
             selectedStoredFileIDs.formIntersection(Set(storedFiles.map(\.id)))
+            hasLoadedStoredFiles = true
+            clearObsoleteUSBExportFailure()
         } catch {
             let detail = "저장 파일 목록을 다시 읽지 못했습니다. \(error.localizedDescription)"
             storedFileDeletionError = [storedFileDeletionError, detail].compactMap { $0 }.joined(separator: "\n")
@@ -990,7 +998,8 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     var canDismissInterruptedUSBCopy: Bool {
-        usbExportProgress?.stage == .paused && !isExportingToUSB
+        (usbExportProgress?.stage == .paused || usbExportProgress?.stage == .failed)
+            && !isExportingToUSB
     }
 
     func resumeInterruptedUSBCopy() async {
@@ -1016,6 +1025,18 @@ final class USBReceiverViewModel: ObservableObject {
         lastUSBExportError = nil
         usbExportCompletionMessage = nil
         lastUSBTransferSummaryText = nil
+    }
+
+    private func clearObsoleteUSBExportFailure() {
+        guard hasLoadedStoredFiles, !isExportingToUSB,
+              let progress = usbExportProgress, progress.stage == .failed else { return }
+        if let sourceIDs = progress.sourceFileIDs, !sourceIDs.isEmpty {
+            guard Set(sourceIDs).isDisjoint(with: storedFiles.map(\.id)) else { return }
+        } else {
+            // Older records have no source IDs. Do not guess which remaining file they concern.
+            guard storedFiles.isEmpty, progress.fileName != nil else { return }
+        }
+        dismissInterruptedUSBCopy()
     }
 
     private func interruptedStoredFiles() -> [IPhoneStoredFile] {
@@ -1212,6 +1233,10 @@ final class USBReceiverViewModel: ObservableObject {
             lastUSBExportError = overwriteIDs.isEmpty ? summary.errorMessage : nil
             lastOriginalCleanupError = summary.cleanupWarning
         } catch {
+            if IPhoneReceiveErrorMessage.isMissingFileProvider(error) {
+                cachedUSBDestination = nil
+                isUSBAvailable = false
+            }
             lastUSBExportError = Self.message(for: error)
             failExportProgress(Self.message(for: error))
         }

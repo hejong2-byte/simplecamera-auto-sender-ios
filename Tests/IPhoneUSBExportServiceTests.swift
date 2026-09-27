@@ -798,8 +798,23 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         XCTAssertEqual(summary.failed.map(\.error), [.destinationAccessDenied])
         XCTAssertEqual(progress?.stage, .failed)
         XCTAssertEqual(progress?.fileName, file.name)
+        XCTAssertEqual(progress?.sourceFileIDs, [file.id])
         XCTAssertTrue(progress?.errorMessage?.contains("권한") == true)
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
+
+    func testMissingUSBProviderExplainsReselectionAndKeepsTheOriginal() async throws {
+        let context = try makeContext(coordinateWrite: { _, _ in
+            throw NSError(domain: "NSFileProviderErrorDomain", code: -2001)
+        })
+        let file = try makeStoredFile(name: "keep.txt", data: Data("original".utf8),
+                                      in: context.sourceDirectory)
+        let summary = await context.service.export([file], to: context.destination)
+        XCTAssertTrue(summary.verified.isEmpty)
+        XCTAssertTrue(summary.errorMessage?.contains("다시 선택") == true)
+        XCTAssertTrue(summary.errorMessage?.contains("-2001") == true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+        XCTAssertTrue(context.deletionStore.pending().isEmpty)
     }
 
     func testUnexpectedFileSystemFailurePreservesDiagnosticCode() async throws {
