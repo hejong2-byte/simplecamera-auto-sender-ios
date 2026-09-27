@@ -3,6 +3,16 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneReceiveErrorMessageTests: XCTestCase {
+    func testMissingFileProviderExplainsFolderReselectionInsteadOfReceiveFailure() {
+        let message = IPhoneReceiveErrorMessage.message(
+            NSError(domain: "NSFileProviderErrorDomain", code: -2001)
+        )
+        XCTAssertTrue(message.contains("저장 위치"))
+        XCTAssertTrue(message.contains("다시 선택"))
+        XCTAssertTrue(message.contains("-2001"))
+        XCTAssertFalse(message.contains("수신 오류"))
+    }
+
     func testUSBSizeMismatchIsNotPresentedAsSHAVerificationFailure() {
         let message = IPhoneReceiveErrorMessage.message(IPhoneUSBExportError.sizeMismatch)
         XCTAssertTrue(message.contains("파일 크기"))

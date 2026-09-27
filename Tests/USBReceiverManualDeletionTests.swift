@@ -4,6 +4,61 @@ import XCTest
 
 @MainActor
 final class USBReceiverManualDeletionTests: XCTestCase {
+    func testDeletingFailedCopySourcesClearsTheObsoleteUSBFailure() async throws {
+        let exportProgress = USBReceiveProgressStore()
+        let fixture = try makeFixture(exportProgress: exportProgress)
+        await fixture.model.refresh()
+        exportProgress.beginExport(fileName: "first.txt", totalCount: 2,
+                                   sourceFileIDs: fixture.model.storedFiles.map(\.id))
+        exportProgress.publishFailure("NSFileProviderErrorDomain -2001")
+        await waitUntil { fixture.model.usbExportProgress?.stage == .failed }
+        for file in fixture.model.storedFiles { fixture.model.toggleStoredFileSelection(file.id) }
+        fixture.model.requestStoredFileDeletion()
+
+        await fixture.model.deleteConfirmedStoredFiles()
+
+        XCTAssertTrue(fixture.model.storedFiles.isEmpty)
+        XCTAssertNil(fixture.model.usbExportProgress)
+        XCTAssertNil(fixture.model.lastUSBExportError)
+        XCTAssertEqual(exportProgress.snapshot().stage, .idle)
+    }
+
+    func testDeletingOnlyOneFailedSourceKeepsTheRemainingFailure() async throws {
+        let exportProgress = USBReceiveProgressStore()
+        let fixture = try makeFixture(exportProgress: exportProgress)
+        await fixture.model.refresh()
+        exportProgress.beginExport(fileName: "first.txt", totalCount: 2,
+                                   sourceFileIDs: fixture.model.storedFiles.map(\.id))
+        exportProgress.publishFailure("USB connection unavailable")
+        await waitUntil { fixture.model.usbExportProgress?.stage == .failed }
+        fixture.model.toggleStoredFileSelection(try XCTUnwrap(fixture.model.storedFiles.first).id)
+        fixture.model.requestStoredFileDeletion()
+
+        await fixture.model.deleteConfirmedStoredFiles()
+
+        XCTAssertEqual(fixture.model.storedFiles.count, 1)
+        XCTAssertEqual(fixture.model.usbExportProgress?.stage, .failed)
+        XCTAssertNotNil(fixture.model.lastUSBExportError)
+    }
+
+    func testFailedCopyCanBeDismissedWithoutDeletingOriginals() async throws {
+        let exportProgress = USBReceiveProgressStore()
+        let fixture = try makeFixture(exportProgress: exportProgress)
+        await fixture.model.refresh()
+        exportProgress.beginExport(fileName: "first.txt", totalCount: 2,
+                                   sourceFileIDs: fixture.model.storedFiles.map(\.id))
+        exportProgress.publishFailure("USB connection unavailable")
+        await waitUntil { fixture.model.usbExportProgress?.stage == .failed }
+
+        XCTAssertTrue(fixture.model.canDismissInterruptedUSBCopy)
+        fixture.model.dismissInterruptedUSBCopy()
+
+        XCTAssertNil(fixture.model.usbExportProgress)
+        XCTAssertNil(fixture.model.lastUSBExportError)
+        XCTAssertEqual(exportProgress.snapshot().stage, .idle)
+        XCTAssertEqual(try fixture.catalog.refresh().count, 2)
+    }
+
     func testOpeningStoredFilePreservesSelectionAndReceiveAndUSBState() async throws {
         let fixture = try makeFixture()
         await fixture.model.refresh()
@@ -245,6 +300,7 @@ final class USBReceiverManualDeletionTests: XCTestCase {
 
     private func makeFixture(
         progress: USBReceiveProgressStore = USBReceiveProgressStore(),
+        exportProgress: USBReceiveProgressStore = USBReceiveProgressStore(),
         beforePoll: @escaping @Sendable () async -> Void = {},
         beforeDelete: @escaping @Sendable () async -> Void = {},
         canPreview: @escaping (URL) -> Bool = { _ in true }
@@ -282,6 +338,8 @@ final class USBReceiverManualDeletionTests: XCTestCase {
                 return catalog.delete(files, progress: progress)
             },
             progressUpdates: { progress.updates() },
+            exportProgressUpdates: { exportProgress.updates() },
+            clearInterruptedExportProgress: { exportProgress.clearInterruptedExport() },
             defaultDeviceName: "Test iPhone",
             preferences: USBReceiverPreferences(defaults: defaults)
         )

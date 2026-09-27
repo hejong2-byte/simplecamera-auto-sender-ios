@@ -2,6 +2,22 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class USBExportProgressRecoveryTests: XCTestCase {
+    func testDismissedFailureDoesNotReturnAfterRestart() throws {
+        let url = try checkpointURL()
+        let store = USBReceiveProgressStore(fileURL: url)
+        store.publish(progress(.failed, bytes: 70))
+        store.clearInterruptedExport()
+        XCTAssertEqual(store.snapshot().stage, .idle)
+        XCTAssertEqual(USBReceiveProgressStore(fileURL: url).snapshot().stage, .idle)
+    }
+
+    func testDismissCannotClearAnActiveCopy() throws {
+        let store = USBReceiveProgressStore(fileURL: try checkpointURL())
+        store.publish(progress(.copyingToUSB, bytes: 70))
+        store.clearInterruptedExport()
+        XCTAssertEqual(store.snapshot().stage, .copyingToUSB)
+    }
+
     func testRelaunchRestores70PercentAsInterruptedNotRunning() throws {
         let url = try checkpointURL()
         let store = USBReceiveProgressStore(fileURL: url)
