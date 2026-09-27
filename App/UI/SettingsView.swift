@@ -60,9 +60,6 @@ struct SettingsView: View {
                 .buttonStyle(.borderedProminent)
             }
 
-            Text("새 파일이 도착하면 iPhone 또는 USB 저장을 선택합니다.")
-                .font(.subheadline)
-
             Toggle(
                 "셀룰러에서도 파일 수신",
                 isOn: Binding(
@@ -70,12 +67,6 @@ struct SettingsView: View {
                     set: { receiverModel.setAllowsCellular($0) }
                 )
             )
-            Text("기본값은 Wi‑Fi 전용입니다. 4GiB 초과 파일은 exFAT USB를 권장합니다.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            if let error = receiverModel.lastError {
-                Text(error).font(.caption).foregroundStyle(.red)
-            }
         }
         .cardStyle()
         .task { await receiverModel.refresh() }
@@ -158,9 +149,6 @@ struct SettingsView: View {
                 model.isMonitoringEnabled ? "새 사진 감시 시작됨" : "아직 시작하지 않음",
                 systemImage: model.isMonitoringEnabled ? "checkmark.circle.fill" : "record.circle"
             )
-            Text("이 버튼을 누른 시점 이후 Simple Cam으로 찍은 사진만 자동 전송 대상입니다.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
             Button("이 시점부터 자동 전송") {
                 Task { try? await model.enableAutomaticSending() }
             }
@@ -173,9 +161,6 @@ struct SettingsView: View {
         setupCard(number: 4, title: "아이폰 자동화 1회 설정") {
             Text("단축어 앱 → 자동화 → 앱 → Simple Cam → 닫힐 때 → 즉시 실행 → 새 SimpleCamera 사진 전송")
                 .font(.subheadline)
-            Text("사진을 고르는 단축키는 만들 필요가 없습니다.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 
