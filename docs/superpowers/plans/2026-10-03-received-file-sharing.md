@@ -35,7 +35,7 @@
 - [x] Implement type filtering using `UTType(filenameExtension: file.url.pathExtension)` conforming to `.image` or `.pdf`. Revalidate with `previewStoredFile`, then publish the sharing snapshot; catch errors separately and refresh the catalog.
 - [x] Implement the sheet using `UIActivityViewController(activityItems: [file.url], applicationActivities: nil)` and `completionWithItemsHandler`; no decoding of large photos into memory or temporary extra copies.
 - [x] Add the compact per-file button and separate share-error alert. Extend incoming-dialog gating with `sharingFile == nil && storedFileShareError == nil`. Guard deletion while sharing.
-- [ ] GREEN: Run focused unit/UI tests and inspect the screenshots. Run `python scripts/test-release-install-contract.py` and `git diff --check` locally. Review changed files for unrelated changes.
+- [x] GREEN: Run focused unit/UI tests and inspect the screenshots. Run `python scripts/test-release-install-contract.py` and `git diff --check` locally. Review changed files for unrelated changes.
 - [ ] Bump version, document the exact tap sequence, commit and run full release tests using the existing release workflow. Download/verify IPA version, bundle ID, aliases/digest and QR payload; present QR with physical KakaoTalk validation limits.
 
 ## Progress
@@ -43,3 +43,9 @@
 Design approved; existing linked worktree reused on `codex/received-file-sharing`. Baseline install contract passes locally. No local Xcode is available; macOS Actions is the Swift/iOS runtime validation environment.
 
 RED run 37100430717 on 757ac59: 16 existing deletion tests passed; the new UI test failed exactly at the absent share button (line 17). The app and test code compiled. Green verification is pending.
+
+Implementation run 37100969927: all 26 unit tests passed. The UI failure was a test locator: the native share sheet exposes `UIActivityContentView`/`header.closeButton`, not a custom controller-view identifier. The failure hierarchy already contained the actual PDF payload. Removed the ineffective identifier and checked the observed native header plus re-enabled share action after cancellation.
+
+GREEN run 37101653830 on f450cbe: 26 unit tests and 1 UI test passed. Inspected both captured native sheets: `받은 문서.pdf` has document actions; `받은 사진.png` has image actions. Both close/cancel paths preserve the original rows and prior deletion selection. Install URI/bundle-ID contract and whitespace checks passed locally. Source changes remain limited to the approved sharing feature, simulation/tests, and version/install documentation.
+
+Release preparation: version 0.3.46/build 57 is set; full release regression and IPA/QR verification are still pending. Actual KakaoTalk conversation delivery cannot be exercised on this simulator.
