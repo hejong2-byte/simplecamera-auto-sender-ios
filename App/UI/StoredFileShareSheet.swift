@@ -16,7 +16,6 @@ struct StoredFileShareSheet: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIActivityViewController {
         // Keep the original name and bytes; don't load a whole photo/PDF into memory.
         let controller = UIActivityViewController(activityItems: [file.url], applicationActivities: nil)
-        controller.view.accessibilityIdentifier = "stored-file-share-sheet"
         controller.completionWithItemsHandler = { _, _, _, error in
             Task { @MainActor in onFinish(error) }
         }

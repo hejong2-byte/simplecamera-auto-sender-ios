@@ -18,15 +18,14 @@ final class ForegroundReceiveUITests: XCTestCase {
             XCTAssertTrue(share.isEnabled)
             keepScreenshot("stored-file-share-action-\(name)", app: app)
             share.tap()
-            let sheet = app.otherElements["stored-file-share-sheet"]
+            let sheet = app.navigationBars["UIActivityContentView"]
             XCTAssertTrue(sheet.waitForExistence(timeout: 10))
             keepScreenshot("stored-file-share-sheet-\(name)", app: app)
-            let close = app.buttons.matching(NSPredicate(
-                format: "label IN %@", ["Close", "닫기", "Cancel", "취소"]
-            )).firstMatch
+            let close = sheet.buttons["header.closeButton"]
             XCTAssertTrue(close.waitForExistence(timeout: 5))
             close.tap()
-            XCTAssertTrue(share.waitForExistence(timeout: 5))
+            let shareEnabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: share)
+            XCTAssertEqual(XCTWaiter.wait(for: [shareEnabled], timeout: 5), .completed)
             XCTAssertTrue(app.buttons["stored-files-delete"].isEnabled,
                           "Sharing must keep the existing file selection")
             XCTAssertTrue(app.buttons["stored-file-받은 문서.pdf"].exists)
