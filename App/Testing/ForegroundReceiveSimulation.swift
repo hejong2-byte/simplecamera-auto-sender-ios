@@ -1,5 +1,6 @@
 #if targetEnvironment(simulator)
 import Foundation
+import UIKit
 
 // UI tests use synthetic metadata and a temporary directory; never the relay or Keychain.
 @MainActor
@@ -16,6 +17,7 @@ final class ForegroundReceiveSimulation {
         return try! ForegroundReceiveSimulation(
             delay: delay, outcome: outcome,
             withStoredFiles: arguments.contains("--ui-test-stored-files"),
+            withShareableFiles: arguments.contains("--ui-test-shareable-files"),
             withTextMessage: arguments.contains("--ui-test-text-message"),
             withSavedTextRecipient: arguments.contains("--ui-test-text-recipient"),
             withZIP: arguments.contains("--ui-test-incoming-zip"),
@@ -34,6 +36,7 @@ final class ForegroundReceiveSimulation {
         delay: TimeInterval,
         outcome: String?,
         withStoredFiles: Bool,
+        withShareableFiles: Bool,
         withTextMessage: Bool,
         withSavedTextRecipient: Bool,
         withZIP: Bool,
@@ -52,6 +55,19 @@ final class ForegroundReceiveSimulation {
                     to: catalog.receivedDirectory.appendingPathComponent(name)
                 )
             }
+        }
+        if withShareableFiles {
+            let bounds = CGRect(x: 0, y: 0, width: 180, height: 100)
+            let pdf = UIGraphicsPDFRenderer(bounds: bounds).pdfData { context in
+                context.beginPage()
+                ("Received PDF" as NSString).draw(at: CGPoint(x: 12, y: 12), withAttributes: nil)
+            }
+            try pdf.write(to: catalog.receivedDirectory.appendingPathComponent("받은 문서.pdf"))
+            let image = UIGraphicsImageRenderer(size: bounds.size).pngData { context in
+                UIColor.systemBlue.setFill()
+                context.fill(bounds)
+            }
+            try image.write(to: catalog.receivedDirectory.appendingPathComponent("받은 사진.png"))
         }
         let receiverID = UUID()
         let registration = IPhoneReceiverRegistrationStore(identityStore: InMemoryCredentialStore(), secretStore: InMemoryCredentialStore())

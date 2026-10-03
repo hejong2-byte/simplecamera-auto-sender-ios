@@ -1,0 +1,44 @@
+name: Received file sharing regression
+
+on:
+  push:
+    branches: ["codex/received-file-sharing"]
+
+permissions:
+  contents: read
+
+jobs:
+  share:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - name: Received file sharing tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodegen generate
+          DEVICE_ID="$(xcrun simctl list devices available -j | /usr/bin/python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for ds in data["devices"].values() for d in ds if d["name"].startswith("iPhone")))')"
+          xcodebuild test -project SimpleCameraAutoSender.xcodeproj -scheme SimpleCameraAutoSender \
+            -destination "platform=iOS Simulator,id=${DEVICE_ID}" \
+            -parallel-testing-enabled NO \
+            -resultBundlePath build/FileShareTests.xcresult \
+            -only-testing:SimpleCameraAutoSenderTests/USBReceiverStoredFileSharingTests \
+            -only-testing:SimpleCameraAutoSenderTests/USBReceiverManualDeletionTests \
+            -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testReceivedPhotoAndPDFShareSheetsKeepOriginalsAndSelectionAfterCancel \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/file-share-tests.log
+      - name: Export screenshots
+        if: always()
+        run: |
+          if [ -d build/FileShareTests.xcresult ]; then
+            xcrun xcresulttool export attachments --path build/FileShareTests.xcresult --output-path build/share-screenshots
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: File-share-test-results
+          path: |
+            build/file-share-tests.log
+            build/share-screenshots
+          retention-days: 3

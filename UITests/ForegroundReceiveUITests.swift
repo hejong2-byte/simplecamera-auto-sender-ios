@@ -1,6 +1,40 @@
 import XCTest
 
 final class ForegroundReceiveUITests: XCTestCase {
+    func testReceivedPhotoAndPDFShareSheetsKeepOriginalsAndSelectionAfterCancel() {
+        let app = launchSimulation(delay: 3_600, withShareableFiles: true)
+        let receiver = app.buttons["open-receiver"]
+        XCTAssertTrue(receiver.waitForExistence(timeout: 20))
+        receiver.tap()
+
+        let selected = app.buttons["stored-file-받은 문서.pdf"]
+        reveal(selected, in: app)
+        selected.tap()
+
+        for name in ["받은 문서.pdf", "받은 사진.png"] {
+            let share = app.buttons["stored-file-share-\(name)"]
+            reveal(share, in: app)
+            XCTAssertTrue(share.waitForExistence(timeout: 5), "Received photos/PDFs need a direct share action")
+            XCTAssertTrue(share.isEnabled)
+            keepScreenshot("stored-file-share-action-\(name)", app: app)
+            share.tap()
+            let sheet = app.otherElements["stored-file-share-sheet"]
+            XCTAssertTrue(sheet.waitForExistence(timeout: 10))
+            keepScreenshot("stored-file-share-sheet-\(name)", app: app)
+            let close = app.buttons.matching(NSPredicate(
+                format: "label IN %@", ["Close", "닫기", "Cancel", "취소"]
+            )).firstMatch
+            XCTAssertTrue(close.waitForExistence(timeout: 5))
+            close.tap()
+            XCTAssertTrue(share.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["stored-files-delete"].isEnabled,
+                          "Sharing must keep the existing file selection")
+            XCTAssertTrue(app.buttons["stored-file-받은 문서.pdf"].exists)
+            XCTAssertTrue(app.buttons["stored-file-받은 사진.png"].exists)
+            XCTAssertFalse(app.alerts["파일 공유 실패"].exists)
+        }
+    }
+
     func testUSBDisconnectionAppearsWithoutReopeningSettings() {
         let app = launchSimulation(delay: 3_600, outcome: "usb-disconnect", withStorageManagement: true)
         let settings = app.buttons["open-settings"]
@@ -601,6 +635,7 @@ final class ForegroundReceiveUITests: XCTestCase {
         delay: Int = 0,
         outcome: String? = nil,
         withStoredFiles: Bool = false,
+        withShareableFiles: Bool = false,
         withTextMessage: Bool = false,
         withSavedTextRecipient: Bool = false,
         withZIP: Bool = false,
@@ -614,6 +649,7 @@ final class ForegroundReceiveUITests: XCTestCase {
             app.launchArguments += ["--ui-test-receive-outcome", outcome]
         }
         if withStoredFiles { app.launchArguments.append("--ui-test-stored-files") }
+        if withShareableFiles { app.launchArguments.append("--ui-test-shareable-files") }
         if withTextMessage { app.launchArguments.append("--ui-test-text-message") }
         if withSavedTextRecipient {
             app.launchArguments.append("--ui-test-text-recipient")
