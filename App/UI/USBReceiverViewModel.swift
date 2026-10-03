@@ -103,6 +103,8 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var storedFileDeletionError: String?
     @Published var previewFile: IPhoneStoredFile?
     @Published var storedFilePreviewError: String?
+    @Published var sharingFile: IPhoneStoredFile?
+    @Published var storedFileShareError: String?
     @Published private(set) var needsLocalFallbackDecision = false
     @Published private(set) var needsDeletionDecision = false
     @Published var isChoosingUSBFolder = false
@@ -383,7 +385,7 @@ final class USBReceiverViewModel: ObservableObject {
             || isCleaningTemporaryFiles || needsTemporaryCleanupConfirmation
     }
     var canDeleteStoredFiles: Bool {
-        hasStoredFileSelection && !isDeletingStoredFiles
+        hasStoredFileSelection && !isDeletingStoredFiles && sharingFile == nil
     }
     var pendingDeletionCount: Int { pendingDeletionDecisions().count }
     var isReceivingFile: Bool {
@@ -483,6 +485,7 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     func openStoredFile(_ file: IPhoneStoredFile) {
+        guard sharingFile == nil else { return }
         do {
             let url = try previewStoredFile(file)
             guard canPreviewFile(url) else { throw IPhoneStoredFilePreviewError.unsupported }
@@ -496,6 +499,37 @@ final class USBReceiverViewModel: ObservableObject {
             }
             storedFilePreviewError = error.localizedDescription
         }
+    }
+
+    func canShareStoredFile(_ file: IPhoneStoredFile) -> Bool {
+        file.supportsDirectSharing && sharingFile == nil && storedFileShareError == nil
+            && previewFile == nil && storedFilePreviewError == nil
+            && !isDeletingStoredFiles && !needsStoredFileDeletionConfirmation
+            && !isReceivingFile && !isExportingToUSB && interruptedExportRequest == nil
+            && !isChoosingUSBFolder && !isCleaningUSBFolder
+            && !needsDeletionDecision && !needsLocalFallbackDecision
+            && !needsStoredZIPExportChoice && !needsStoredOverwriteConfirmation
+            && !needsUSBReceiveOverwriteConfirmation
+    }
+
+    func shareStoredFile(_ file: IPhoneStoredFile) {
+        guard canShareStoredFile(file) else { return }
+        do {
+            _ = try previewStoredFile(file)
+            sharingFile = file
+        } catch {
+            if let files = try? storedFilesProvider() {
+                storedFiles = files
+                selectedStoredFileIDs.formIntersection(Set(files.map(\.id)))
+            }
+            storedFileShareError = error.localizedDescription
+        }
+    }
+
+    func finishSharingStoredFile(error: Error?) {
+        sharingFile = nil
+        // Completion/cancellation is not proof that a KakaoTalk recipient received it.
+        storedFileShareError = error.map { "파일을 공유하지 못했습니다. \($0.localizedDescription)" }
     }
 
     func refresh() async {
@@ -882,7 +916,7 @@ final class USBReceiverViewModel: ObservableObject {
 
     func deleteConfirmedStoredFiles() async {
         guard !storedFilesPendingDeletion.isEmpty, !isDeletingStoredFiles,
-              !isCleaningUSBFolder else { return }
+              !isCleaningUSBFolder, sharingFile == nil else { return }
         guard !isReceivingFile, !isExportingToUSB else {
             storedFilesPendingDeletion = []
             storedFileDeletionError = "전송 중에는 삭제할 수 없습니다. 전송이 끝난 뒤 다시 눌러 주세요."
@@ -929,7 +963,7 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     func requestStoredFilesUSBExport() async {
-        guard !isExportingToUSB, !isReceivingFile,
+        guard !isExportingToUSB, !isReceivingFile, sharingFile == nil,
               !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation,
               !isCleaningUSBFolder, !needsStoredZIPExportChoice else { return }
         let selected = storedFiles.filter { selectedStoredFileIDs.contains($0.id) }
@@ -1077,6 +1111,7 @@ final class USBReceiverViewModel: ObservableObject {
         !isExportingToUSB && !isReceivingPayload && !isDeletingStoredFiles
             && !isCleaningUSBFolder && !isChoosingUSBFolder && !needsDeletionDecision
             && !needsStoredFileDeletionConfirmation && !needsStoredZIPExportChoice
+            && sharingFile == nil
     }
 
     private var isReceivingPayload: Bool {
@@ -1281,7 +1316,7 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     func verifySelectedUSBCopies() async {
-        guard !isExportingToUSB, !isReceivingFile, !isPerformingReceive,
+        guard !isExportingToUSB, !isReceivingFile, !isPerformingReceive, sharingFile == nil,
               !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation,
               !isCleaningUSBFolder, !isChoosingUSBFolder, !needsDeletionDecision,
               !needsStoredZIPExportChoice else { return }
@@ -1342,6 +1377,7 @@ final class USBReceiverViewModel: ObservableObject {
     }
 
     func deleteOriginals() async {
+        guard sharingFile == nil else { return }
         let ids = Set(pendingDeletionDecisions().map(\.id))
         guard !ids.isEmpty else { return }
         lastOriginalCleanupError = nil

@@ -37,6 +37,17 @@ struct USBReceiverView: View {
         .sheet(item: $model.previewFile) { file in
             StoredFilePreview(file: file, onClose: { model.previewFile = nil })
         }
+        .sheet(item: $model.sharingFile) { file in
+            StoredFileShareSheet(file: file, onFinish: model.finishSharingStoredFile)
+        }
+        .alert("파일 공유 실패", isPresented: Binding(
+            get: { model.storedFileShareError != nil && model.sharingFile == nil },
+            set: { if !$0 { model.storedFileShareError = nil } }
+        )) {
+            Button("확인", role: .cancel) { model.storedFileShareError = nil }
+        } message: {
+            Text(model.storedFileShareError ?? "")
+        }
         .alert("임시파일을 정리할까요?", isPresented: Binding(
             get: { model.needsTemporaryCleanupConfirmation }, set: { _ in }
         )) {
@@ -308,6 +319,18 @@ struct USBReceiverView: View {
                         .buttonStyle(.borderless)
                         .disabled(model.isDeletingStoredFiles)
                         .accessibilityIdentifier("stored-file-open-\(file.name)")
+                        if file.supportsDirectSharing {
+                            Button { model.shareStoredFile(file) } label: {
+                                Label("공유", systemImage: "square.and.arrow.up")
+                                    .font(.caption)
+                                    .frame(minHeight: 44)
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(!model.canShareStoredFile(file))
+                            .accessibilityIdentifier("stored-file-share-\(file.name)")
+                            .accessibilityLabel("\(file.name) 공유")
+                            .accessibilityHint("공유창에서 카카오톡을 선택할 수 있습니다.")
+                        }
                     }
                     Divider()
                 }

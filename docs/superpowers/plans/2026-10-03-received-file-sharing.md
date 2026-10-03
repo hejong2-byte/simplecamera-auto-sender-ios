@@ -30,14 +30,16 @@
 - Produce `sharingFile: IPhoneStoredFile?`, `storedFileShareError: String?`, `canShareStoredFile(_:)`, `shareStoredFile(_:)`, `finishSharingStoredFile(error:)`.
 - `StoredFileShareSheet(file:onFinish:)` passes `[file.url]` to `UIActivityViewController` and reports errors on the main actor.
 
-- [ ] RED: Add a real PNG/PDF simulation and UI test. Test looks for `stored-file-share-받은 문서.pdf`/`stored-file-share-받은 사진.png`, opens the system sheet, cancels, and checks originals/selection remain. Run focused Actions against pre-feature code; expect missing-button assertion failure, not a build failure.
-- [ ] Add model tests against a real temporary catalog, covering images/PDF/unsupported formats, missing/modified/outside-catalog originals, receive/error/selection preservation, blocked deletion and competing dialogs, and busy receive.
-- [ ] Implement type filtering using `UTType(filenameExtension: file.url.pathExtension)` conforming to `.image` or `.pdf`. Revalidate with `previewStoredFile`, then publish the sharing snapshot; catch errors separately and refresh the catalog.
-- [ ] Implement the sheet using `UIActivityViewController(activityItems: [file.url], applicationActivities: nil)` and `completionWithItemsHandler`; no decoding of large photos into memory or temporary extra copies.
-- [ ] Add the compact per-file button and separate share-error alert. Extend incoming-dialog gating with `sharingFile == nil && storedFileShareError == nil`. Guard deletion while sharing.
+- [x] RED: Add a real PNG/PDF simulation and UI test. Test looks for `stored-file-share-받은 문서.pdf`/`stored-file-share-받은 사진.png`, opens the system sheet, cancels, and checks originals/selection remain. Run focused Actions against pre-feature code; expect missing-button assertion failure, not a build failure.
+- [x] Add model tests against a real temporary catalog, covering images/PDF/unsupported formats, missing/modified/outside-catalog originals, receive/error/selection preservation, blocked deletion and competing dialogs, and busy receive.
+- [x] Implement type filtering using `UTType(filenameExtension: file.url.pathExtension)` conforming to `.image` or `.pdf`. Revalidate with `previewStoredFile`, then publish the sharing snapshot; catch errors separately and refresh the catalog.
+- [x] Implement the sheet using `UIActivityViewController(activityItems: [file.url], applicationActivities: nil)` and `completionWithItemsHandler`; no decoding of large photos into memory or temporary extra copies.
+- [x] Add the compact per-file button and separate share-error alert. Extend incoming-dialog gating with `sharingFile == nil && storedFileShareError == nil`. Guard deletion while sharing.
 - [ ] GREEN: Run focused unit/UI tests and inspect the screenshots. Run `python scripts/test-release-install-contract.py` and `git diff --check` locally. Review changed files for unrelated changes.
 - [ ] Bump version, document the exact tap sequence, commit and run full release tests using the existing release workflow. Download/verify IPA version, bundle ID, aliases/digest and QR payload; present QR with physical KakaoTalk validation limits.
 
 ## Progress
 
 Design approved; existing linked worktree reused on `codex/received-file-sharing`. Baseline install contract passes locally. No local Xcode is available; macOS Actions is the Swift/iOS runtime validation environment.
+
+RED run 37100430717 on 757ac59: 16 existing deletion tests passed; the new UI test failed exactly at the absent share button (line 17). The app and test code compiled. Green verification is pending.

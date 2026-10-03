@@ -235,6 +235,7 @@ struct ContentView: View {
             && !receiverModel.needsStoredZIPExportChoice
             && !receiverModel.isCleaningUSBFolder
             && receiverModel.previewFile == nil && receiverModel.storedFilePreviewError == nil
+            && receiverModel.sharingFile == nil && receiverModel.storedFileShareError == nil
             && !receiverModel.isExportingToUSB && !receiverIsBusy
     }
 
