@@ -36,7 +36,7 @@
 - [x] Implement the sheet using `UIActivityViewController(activityItems: [file.url], applicationActivities: nil)` and `completionWithItemsHandler`; no decoding of large photos into memory or temporary extra copies.
 - [x] Add the compact per-file button and separate share-error alert. Extend incoming-dialog gating with `sharingFile == nil && storedFileShareError == nil`. Guard deletion while sharing.
 - [x] GREEN: Run focused unit/UI tests and inspect the screenshots. Run `python scripts/test-release-install-contract.py` and `git diff --check` locally. Review changed files for unrelated changes.
-- [ ] Bump version, document the exact tap sequence, commit and run full release tests using the existing release workflow. Download/verify IPA version, bundle ID, aliases/digest and QR payload; present QR with physical KakaoTalk validation limits.
+- [x] Bump version, document the exact tap sequence, commit and run full release tests using the existing release workflow. Download/verify IPA version, bundle ID, aliases/digest and QR payload; present QR with physical KakaoTalk validation limits.
 
 ## Progress
 
@@ -51,3 +51,11 @@ GREEN run 37101653830 on f450cbe: 26 unit tests and 1 UI test passed. Inspected 
 Release preparation: version 0.3.46/build 57 is set; full release regression and IPA/QR verification are still pending. Actual KakaoTalk conversation delivery cannot be exercised on this simulator.
 
 First full release run 37102068588: all 28 UI tests passed, including sharing. Among 487 unit tests, two ProjectSmokeTests produced three failed assertions solely because their expected version/build/readme text still named 0.3.45/56. No IPA was published. Updated those three expectations to the approved 0.3.46/57 and included ProjectSmokeTests in the focused workflow so version drift is caught earlier. App code is unchanged from the fully passing sharing/UI run; full release verification will be rerun before delivery.
+
+## Delivered verification
+
+- Release run [37102951466](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/actions/runs/37102951466) passed on `4d2c9838f1ffc3d29dd338d116bfdbbb39961e59`: 487 unit tests and 28 UI tests, zero failures. IPA build and publication passed.
+- [v0.3.46](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/releases/tag/v0.3.46) published 2026-10-03. Downloaded IPA contains version `0.3.46`, build `57`, bundle ID `com.hejong2byte.simplecameraautosender`; archive CRC, Files sharing, and in-place document visibility checks passed.
+- Canonical IPA, legacy alias, and a fresh download from the QR's `releases/latest` target have identical SHA-256: `dca9d3ef4c40f84db311cd184601579cb9bb85971a1d553f9b6589ef40d22392`.
+- Published QR SHA-256: `5dd07fed72388309ef0b8e3d505af216d8a5199a6235b9c7312796e323d8b568`. Its pixels exactly match a newly constructed QR for the validated canonical SideStore URI.
+- Downloaded artifacts and test screenshots are in `release-v0.3.46-verify/`. Test data is synthetic; no user file or KakaoTalk message was sent. Real KakaoTalk conversation delivery remains an explicitly unverified device-side step.
