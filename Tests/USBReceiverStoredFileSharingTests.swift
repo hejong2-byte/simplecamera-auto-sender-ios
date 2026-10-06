@@ -1,17 +1,39 @@
 import Foundation
 import XCTest
+import ZIPFoundation
 @testable import SimpleCameraAutoSender
 
 @MainActor
 final class USBReceiverStoredFileSharingTests: XCTestCase {
-    func testOnlyPhotosAndPDFOfferDirectSharing() async throws {
-        let fixture = try makeFixture(names: ["photo.jpg", "photo.PNG", "photo.heic", "document.PDF", "archive.zip", "notes.txt", "movie.mp4"])
+    func testOnlyPhotosPDFAndZIPOfferDirectSharing() async throws {
+        let fixture = try makeFixture(names: ["photo.jpg", "photo.PNG", "photo.heic", "document.PDF", "archive.zip", "자료.ZIP", "notes.txt", "movie.mp4", "archive.zip.txt"])
         await fixture.model.refresh()
         for file in fixture.model.storedFiles {
-            let supported = ["jpg", "png", "heic", "pdf"].contains(file.url.pathExtension.lowercased())
+            let supported = ["jpg", "png", "heic", "pdf", "zip"].contains(file.url.pathExtension.lowercased())
             XCTAssertEqual(file.supportsDirectSharing, supported, file.name)
             XCTAssertEqual(fixture.model.canShareStoredFile(file), supported, file.name)
         }
+    }
+
+    func testZIPSharingAndCancelKeepsOriginalArchiveWithoutExtraction() async throws {
+        let fixture = try makeFixture(names: ["받은 자료.ZIP"])
+        await fixture.model.refresh()
+        let file = try XCTUnwrap(fixture.model.storedFiles.first)
+        let bytes = try Data(contentsOf: file.url)
+        fixture.model.toggleStoredFileSelection(file.id)
+
+        fixture.model.shareStoredFile(file)
+
+        XCTAssertEqual(fixture.model.sharingFile?.url, file.url)
+        XCTAssertEqual(fixture.model.sharingFile?.name, "받은 자료.ZIP")
+        XCTAssertNil(fixture.model.storedFileShareError)
+        fixture.model.finishSharingStoredFile(error: nil)
+
+        XCTAssertNil(fixture.model.sharingFile)
+        XCTAssertEqual(fixture.model.selectedStoredFileIDs, [file.id])
+        XCTAssertEqual(try Data(contentsOf: file.url), bytes)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.catalog.receivedDirectory.path), ["받은 자료.ZIP"])
+        XCTAssertEqual(try fixture.catalog.refresh(), [file])
     }
 
     func testSharingOriginalAndCancelPreservesBytesSelectionAndReceiverState() async throws {
@@ -95,7 +117,7 @@ final class USBReceiverStoredFileSharingTests: XCTestCase {
     }
 
     func testUnsupportedFileDoesNotOpenShareSheet() async throws {
-        let fixture = try makeFixture(names: ["archive.zip"])
+        let fixture = try makeFixture(names: ["notes.txt"])
         await fixture.model.refresh()
         let file = try XCTUnwrap(fixture.model.storedFiles.first)
 
@@ -196,7 +218,14 @@ final class USBReceiverStoredFileSharingTests: XCTestCase {
             recordsFileURL: root.appendingPathComponent("records.json")
         )
         for name in names {
-            try Data("original file bytes".utf8).write(to: catalog.receivedDirectory.appendingPathComponent(name))
+            let url = catalog.receivedDirectory.appendingPathComponent(name)
+            if url.pathExtension.lowercased() == "zip" {
+                let source = catalog.stagingDirectory.appendingPathComponent("문서.txt")
+                try Data("original file bytes".utf8).write(to: source)
+                try FileManager.default.zipItem(at: source, to: url)
+            } else {
+                try Data("original file bytes".utf8).write(to: url)
+            }
         }
         let suite = "StoredFileSharingTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

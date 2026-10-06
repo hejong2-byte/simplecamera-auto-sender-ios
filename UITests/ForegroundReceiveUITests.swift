@@ -1,6 +1,34 @@
 import XCTest
 
 final class ForegroundReceiveUITests: XCTestCase {
+    func testReceivedZIPShareSheetKeepsArchiveAndSelectionAfterCancel() {
+        let app = launchSimulation(delay: 3_600, withShareableZIP: true)
+        let receiver = app.buttons["open-receiver"]
+        XCTAssertTrue(receiver.waitForExistence(timeout: 20))
+        receiver.tap()
+
+        let original = app.buttons["stored-file-받은 자료.zip"]
+        reveal(original, in: app)
+        original.tap()
+        let share = app.buttons["stored-file-share-받은 자료.zip"]
+        XCTAssertTrue(share.waitForExistence(timeout: 5), "Received ZIP archives need a direct share action")
+        XCTAssertTrue(share.isEnabled)
+        keepScreenshot("stored-zip-share-action", app: app)
+        share.tap()
+        let sheet = app.navigationBars["UIActivityContentView"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10))
+        keepScreenshot("stored-zip-share-sheet", app: app)
+        let close = sheet.buttons["header.closeButton"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        close.tap()
+        let shareEnabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: share)
+        XCTAssertEqual(XCTWaiter.wait(for: [shareEnabled], timeout: 5), .completed)
+        XCTAssertTrue(original.exists)
+        XCTAssertTrue(app.buttons["stored-files-delete"].isEnabled)
+        XCTAssertFalse(app.alerts["파일 공유 실패"].exists)
+        keepScreenshot("stored-zip-share-canceled-original-kept", app: app)
+    }
+
     func testReceivedPhotoAndPDFShareSheetsKeepOriginalsAndSelectionAfterCancel() {
         let app = launchSimulation(delay: 3_600, withShareableFiles: true)
         let receiver = app.buttons["open-receiver"]
@@ -635,6 +663,7 @@ final class ForegroundReceiveUITests: XCTestCase {
         outcome: String? = nil,
         withStoredFiles: Bool = false,
         withShareableFiles: Bool = false,
+        withShareableZIP: Bool = false,
         withTextMessage: Bool = false,
         withSavedTextRecipient: Bool = false,
         withZIP: Bool = false,
@@ -649,6 +678,7 @@ final class ForegroundReceiveUITests: XCTestCase {
         }
         if withStoredFiles { app.launchArguments.append("--ui-test-stored-files") }
         if withShareableFiles { app.launchArguments.append("--ui-test-shareable-files") }
+        if withShareableZIP { app.launchArguments.append("--ui-test-shareable-zip") }
         if withTextMessage { app.launchArguments.append("--ui-test-text-message") }
         if withSavedTextRecipient {
             app.launchArguments.append("--ui-test-text-recipient")

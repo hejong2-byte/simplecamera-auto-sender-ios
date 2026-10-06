@@ -1,6 +1,7 @@
 #if targetEnvironment(simulator)
 import Foundation
 import UIKit
+import ZIPFoundation
 
 // UI tests use synthetic metadata and a temporary directory; never the relay or Keychain.
 @MainActor
@@ -18,6 +19,7 @@ final class ForegroundReceiveSimulation {
             delay: delay, outcome: outcome,
             withStoredFiles: arguments.contains("--ui-test-stored-files"),
             withShareableFiles: arguments.contains("--ui-test-shareable-files"),
+            withShareableZIP: arguments.contains("--ui-test-shareable-zip"),
             withTextMessage: arguments.contains("--ui-test-text-message"),
             withSavedTextRecipient: arguments.contains("--ui-test-text-recipient"),
             withZIP: arguments.contains("--ui-test-incoming-zip"),
@@ -37,6 +39,7 @@ final class ForegroundReceiveSimulation {
         outcome: String?,
         withStoredFiles: Bool,
         withShareableFiles: Bool,
+        withShareableZIP: Bool,
         withTextMessage: Bool,
         withSavedTextRecipient: Bool,
         withZIP: Bool,
@@ -68,6 +71,13 @@ final class ForegroundReceiveSimulation {
                 context.fill(bounds)
             }
             try image.write(to: catalog.receivedDirectory.appendingPathComponent("받은 사진.png"))
+        }
+        if withShareableZIP {
+            let source = catalog.stagingDirectory.appendingPathComponent("문서.txt")
+            try Data("Received ZIP contents".utf8).write(to: source)
+            try FileManager.default.zipItem(
+                at: source, to: catalog.receivedDirectory.appendingPathComponent("받은 자료.zip")
+            )
         }
         let receiverID = UUID()
         let registration = IPhoneReceiverRegistrationStore(identityStore: InMemoryCredentialStore(), secretStore: InMemoryCredentialStore())
