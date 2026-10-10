@@ -38,7 +38,8 @@ final class ContentViewModelTests: XCTestCase {
     }
 
     func testRefreshCountsEveryStateAndPreservesLedgerContents() async throws {
-        let ledger = try UploadLedger(fileURL: temporaryLedgerURL())
+        let ledgerURL = temporaryLedgerURL()
+        let ledger = try UploadLedger(fileURL: ledgerURL)
         try await ledger.setBaseline(Date(timeIntervalSince1970: 1_234))
         for (index, id) in ["new", "ignored", "queued", "uploaded", "network", "server", "retry"].enumerated() {
             try await ledger.recordDiscovery(id: id, createdAt: Date(timeIntervalSince1970: Double(100 - index)))
@@ -51,6 +52,7 @@ final class ContentViewModelTests: XCTestCase {
         try await ledger.markFailed(id: "retry", category: .unreadable)
         try await ledger.markQueued(id: "retry", taskIdentifier: 2)
         let before = await ledger.allRecords()
+        let beforeData = try Data(contentsOf: ledgerURL)
         let model = ContentViewModel(
             credentialStore: InMemoryCredentialStore(), ledger: ledger,
             uploader: NoOpUploader(), now: Date.init,
@@ -65,7 +67,9 @@ final class ContentViewModelTests: XCTestCase {
         XCTAssertEqual(model.failedCount, 2)
         XCTAssertEqual(model.automaticFailureMessage, "서버 오류 · 네트워크 오류")
         let after = await ledger.allRecords()
+        let afterData = try Data(contentsOf: ledgerURL)
         XCTAssertEqual(after, before)
+        XCTAssertEqual(afterData, beforeData)
         try await ledger.reset()
         await model.refresh()
         XCTAssertFalse(model.isMonitoringEnabled)

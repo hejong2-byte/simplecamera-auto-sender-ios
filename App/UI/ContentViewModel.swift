@@ -116,9 +116,9 @@ final class ContentViewModel: ObservableObject {
     }
 
     func refresh() async {
+        let status = await ledger.statusSummary()
         let authorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         let credentialAvailable = (try? credentialStore.load()) != nil
-        let status = await ledger.statusSummary()
         let monitoringEnabled = status.baseline != nil
         let failureMessage = status.failures.uploadFailureDescription
         if photoAuthorizationStatus != authorization { photoAuthorizationStatus = authorization }
