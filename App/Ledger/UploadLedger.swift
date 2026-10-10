@@ -49,6 +49,24 @@ actor UploadLedger {
         snapshot.records.values.sorted { $0.createdAt < $1.createdAt }
     }
 
+    func statusSummary() -> (baseline: Date?, queued: Int, uploaded: Int, failed: Int, failures: Set<UploadErrorCategory>) {
+        var queued = 0
+        var uploaded = 0
+        var failed = 0
+        var failures: Set<UploadErrorCategory> = []
+        for record in snapshot.records.values {
+            switch record.state {
+            case .queued: queued += 1
+            case .uploaded: uploaded += 1
+            case .failed:
+                failed += 1
+                if let error = record.lastError { failures.insert(error) }
+            case .discovered, .ignored: break
+            }
+        }
+        return (snapshot.baseline, queued, uploaded, failed, failures)
+    }
+
     func recordDiscovery(id: String, createdAt: Date) throws {
         guard snapshot.records[id] == nil else { return }
         snapshot.records[id] = AssetRecord(

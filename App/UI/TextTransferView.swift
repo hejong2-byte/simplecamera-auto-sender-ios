@@ -135,15 +135,9 @@ struct TextTransferView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if model.savedRecipients.isEmpty {
-                Text("자주 쓰는 코드를 이름과 함께 저장할 수 있습니다.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(model.savedRecipients) { saved in
-                    savedRecipientRow(saved)
-                    if saved.id != model.savedRecipients.last?.id { Divider() }
-                }
+            ForEach(model.savedRecipients) { saved in
+                savedRecipientRow(saved)
+                if saved.id != model.savedRecipients.last?.id { Divider() }
             }
 
             ZStack(alignment: .topLeading) {

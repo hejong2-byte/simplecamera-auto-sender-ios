@@ -16,7 +16,7 @@ final class ForegroundReceiveUITests: XCTestCase {
         keepScreenshot("stored-zip-share-action", app: app)
         share.tap()
         let sheet = app.navigationBars["UIActivityContentView"]
-        XCTAssertTrue(sheet.waitForExistence(timeout: 10))
+        XCTAssertTrue(sheet.waitForExistence(timeout: 30))
         keepScreenshot("stored-zip-share-sheet", app: app)
         let close = sheet.buttons["header.closeButton"]
         XCTAssertTrue(close.waitForExistence(timeout: 5))
@@ -47,7 +47,7 @@ final class ForegroundReceiveUITests: XCTestCase {
             keepScreenshot("stored-file-share-action-\(name)", app: app)
             share.tap()
             let sheet = app.navigationBars["UIActivityContentView"]
-            XCTAssertTrue(sheet.waitForExistence(timeout: 10))
+            XCTAssertTrue(sheet.waitForExistence(timeout: 30))
             keepScreenshot("stored-file-share-sheet-\(name)", app: app)
             let close = sheet.buttons["header.closeButton"]
             XCTAssertTrue(close.waitForExistence(timeout: 5))

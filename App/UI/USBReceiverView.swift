@@ -287,52 +287,54 @@ struct USBReceiverView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(model.storedFiles) { file in
-                    HStack(spacing: 8) {
-                        Button {
-                            model.toggleStoredFileSelection(file.id)
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: model.selectedStoredFileIDs.contains(file.id)
-                                    ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(.cyan)
-                                Image(systemName: "doc.fill")
-                                    .foregroundStyle(.secondary)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(file.name).lineLimit(2)
-                                    Text("\(byteText(file.size)) · \(file.modifiedAt.formatted(date: .abbreviated, time: .shortened))")
-                                        .font(.caption)
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(model.storedFiles) { file in
+                        HStack(spacing: 8) {
+                            Button {
+                                model.toggleStoredFileSelection(file.id)
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: model.selectedStoredFileIDs.contains(file.id)
+                                        ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(.cyan)
+                                    Image(systemName: "doc.fill")
                                         .foregroundStyle(.secondary)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(file.name).lineLimit(2)
+                                        Text("\(byteText(file.size)) · \(file.modifiedAt.formatted(date: .abbreviated, time: .shortened))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
                                 }
-                                Spacer()
+                                .contentShape(Rectangle())
                             }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(model.isExportingToUSB || model.isDeletingStoredFiles)
-                        .accessibilityIdentifier("stored-file-\(file.name)")
-                        Button { model.openStoredFile(file) } label: {
-                            Label("열기", systemImage: "eye")
-                                .font(.caption)
-                                .frame(minHeight: 44)
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(model.isDeletingStoredFiles)
-                        .accessibilityIdentifier("stored-file-open-\(file.name)")
-                        if file.supportsDirectSharing {
-                            Button { model.shareStoredFile(file) } label: {
-                                Label("공유", systemImage: "square.and.arrow.up")
+                            .buttonStyle(.plain)
+                            .disabled(model.isExportingToUSB || model.isDeletingStoredFiles)
+                            .accessibilityIdentifier("stored-file-\(file.name)")
+                            Button { model.openStoredFile(file) } label: {
+                                Label("열기", systemImage: "eye")
                                     .font(.caption)
                                     .frame(minHeight: 44)
                             }
                             .buttonStyle(.borderless)
-                            .disabled(!model.canShareStoredFile(file))
-                            .accessibilityIdentifier("stored-file-share-\(file.name)")
-                            .accessibilityLabel("\(file.name) 공유")
-                            .accessibilityHint("공유창에서 카카오톡을 선택할 수 있습니다.")
+                            .disabled(model.isDeletingStoredFiles)
+                            .accessibilityIdentifier("stored-file-open-\(file.name)")
+                            if file.supportsDirectSharing {
+                                Button { model.shareStoredFile(file) } label: {
+                                    Label("공유", systemImage: "square.and.arrow.up")
+                                        .font(.caption)
+                                        .frame(minHeight: 44)
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(!model.canShareStoredFile(file))
+                                .accessibilityIdentifier("stored-file-share-\(file.name)")
+                                .accessibilityLabel("\(file.name) 공유")
+                                .accessibilityHint("공유창에서 카카오톡을 선택할 수 있습니다.")
+                            }
                         }
+                        Divider()
                     }
-                    Divider()
                 }
             }
             HStack(alignment: .center, spacing: 8) {
@@ -523,9 +525,6 @@ struct USBReceiverView: View {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.subheadline)
                     .foregroundStyle(.red)
-                Text("복사에 실패한 파일의 원본은 자동 삭제하지 않습니다. 오류 원인을 확인한 뒤 선택된 파일을 다시 복사할 수 있습니다.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
     }

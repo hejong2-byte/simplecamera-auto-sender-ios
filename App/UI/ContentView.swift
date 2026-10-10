@@ -437,13 +437,15 @@ struct ContentView: View {
                 }
             }
 
-            Text(model.automaticTransferMessage)
-                .font(.subheadline)
-                .foregroundStyle(
-                    model.automaticProgress?.stage == .failed
-                        ? Color.red
-                        : Color.secondary
-                )
+            if !model.automaticTransferMessage.isEmpty {
+                Text(model.automaticTransferMessage)
+                    .font(.subheadline)
+                    .foregroundStyle(
+                        model.automaticProgress?.stage == .failed
+                            ? Color.red
+                            : Color.secondary
+                    )
+            }
 
             if model.automaticProgress?.stage != .failed,
                let failure = model.automaticFailureMessage {

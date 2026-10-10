@@ -116,18 +116,18 @@ final class ContentViewModel: ObservableObject {
     }
 
     func refresh() async {
-        photoAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        hasCredential = (try? credentialStore.load()) != nil
-        isMonitoringEnabled = (try? await ledger.baseline()) != nil
-        let records = await ledger.allRecords()
-        queuedCount = records.filter { $0.state == .queued }.count
-        uploadedCount = records.filter { $0.state == .uploaded }.count
-        failedCount = records.filter { $0.state == .failed }.count
-        automaticFailureMessage = Set(
-            records.compactMap { record in
-                record.state == .failed ? record.lastError : nil
-            }
-        ).uploadFailureDescription
+        let authorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        let credentialAvailable = (try? credentialStore.load()) != nil
+        let status = await ledger.statusSummary()
+        let monitoringEnabled = status.baseline != nil
+        let failureMessage = status.failures.uploadFailureDescription
+        if photoAuthorizationStatus != authorization { photoAuthorizationStatus = authorization }
+        if hasCredential != credentialAvailable { hasCredential = credentialAvailable }
+        if isMonitoringEnabled != monitoringEnabled { isMonitoringEnabled = monitoringEnabled }
+        if queuedCount != status.queued { queuedCount = status.queued }
+        if uploadedCount != status.uploaded { uploadedCount = status.uploaded }
+        if failedCount != status.failed { failedCount = status.failed }
+        if automaticFailureMessage != failureMessage { automaticFailureMessage = failureMessage }
     }
 
     func requestPhotoAccess() async {
@@ -314,11 +314,11 @@ final class ContentViewModel: ObservableObject {
 
     var automaticTransferMessage: String {
         guard let progress = automaticProgress else {
-            return "Simple Cam을 닫으면 새 사진을 자동으로 전송합니다."
+            return ""
         }
         switch progress.stage {
         case .idle:
-            return "Simple Cam을 닫으면 새 사진을 자동으로 전송합니다."
+            return ""
         case .scanning:
             return "Simple Cam으로 촬영한 새 사진을 확인하고 있습니다."
         case .preparing:
