@@ -25,9 +25,17 @@ jobs:
             -parallel-testing-enabled NO \
             -resultBundlePath build/FileShareTests.xcresult \
             -only-testing:SimpleCameraAutoSenderTests/USBReceiverStoredFileSharingTests \
+            -only-testing:SimpleCameraAutoSenderTests/USBReceiverFileFilterTests \
+            -only-testing:SimpleCameraAutoSenderTests/StorageCapacityPreflightTests \
+            -only-testing:SimpleCameraAutoSenderTests/TransferNotificationTests \
+            -only-testing:SimpleCameraAutoSenderTests/USBReceiveServiceTests \
+            -only-testing:SimpleCameraAutoSenderTests/IPhoneLocalReceiveEngineTests \
+            -only-testing:SimpleCameraAutoSenderTests/IPhoneUSBExportServiceTests \
+            -only-testing:SimpleCameraAutoSenderTests/SafeZIPExtractionProgressTests \
             -only-testing:SimpleCameraAutoSenderTests/USBReceiverManualDeletionTests \
             -only-testing:SimpleCameraAutoSenderTests/ContentViewModelTests \
             -only-testing:SimpleCameraAutoSenderTests/ProjectSmokeTests \
+            -only-testing:SimpleCameraAutoSenderUITests/FileConveniencesUITests \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testMainScreenOmitsFixedMenuDescriptions \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testTextTransferShowsComposeHistoryAndRecordActions \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testReceivedPhotoAndPDFShareSheetsKeepOriginalsAndSelectionAfterCancel \

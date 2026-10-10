@@ -3,6 +3,13 @@ import Foundation
 import XCTest
 @testable import SimpleCameraAutoSender
 
+private final class DirectReceiveConvenienceEventRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [TransferNotificationEvent] = []
+    var values: [TransferNotificationEvent] { lock.withLock { events } }
+    func append(_ event: TransferNotificationEvent) { lock.withLock { events.append(event) } }
+}
+
 final class USBReceiveServiceTests: XCTestCase {
     func testEmptyInboxDoesNotRequireUSBAccess() async throws {
         let fixture = try makeFixture(
@@ -570,6 +577,88 @@ final class USBReceiveServiceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.stagedZIP.path))
     }
 
+    func testDirectReceiveInsufficientCapacityPreservesExistingUSBAndDoesNotAcknowledge() async throws {
+        let fixture = try makeFixture(payload: Data("replacement".utf8), fileName: "ordinary.pdf",
+            contentType: "application/pdf", chunkSize: 4, overwriteExisting: true, capacityQuery: { _ in 1 })
+        let final = fixture.destination.appendingPathComponent(fixture.delivery.fileName)
+        let existing = Data("existing USB contents".utf8)
+        try existing.write(to: final)
+        do {
+            _ = try await fixture.service.runOnce()
+            XCTFail("Known insufficient space must block incoming content")
+        } catch {
+            let message = IPhoneReceiveErrorMessage.message(error)
+            XCTAssertTrue(message.contains("USB"), message)
+            XCTAssertTrue(message.contains("MB"), message)
+        }
+        XCTAssertEqual(try Data(contentsOf: final), existing)
+        let acknowledgements = await fixture.client.acknowledgedIDs()
+        XCTAssertTrue(acknowledgements.isEmpty)
+        XCTAssertEqual(fixture.progressStore.snapshot().capacityCheck?.requiredBytes, 11)
+    }
+
+    func testDirectReceiveKnownEnoughCapacityCompletesWithExistingLeaseAndACK() async throws {
+        let fixture = try makeFixture(payload: Data("payload".utf8), fileName: "ordinary.pdf",
+            contentType: "application/pdf", chunkSize: 4, capacityQuery: { _ in 7 })
+        let result = try await fixture.service.runOnce()
+        XCTAssertEqual(result.completed, 1)
+        XCTAssertEqual(try Data(contentsOf: fixture.destination.appendingPathComponent(fixture.delivery.fileName)), Data("payload".utf8))
+        let acknowledgements = await fixture.client.acknowledgedIDs()
+        XCTAssertEqual(acknowledgements, [fixture.delivery.deliveryID])
+    }
+
+    func testDirectReceiveUnknownCapacityDoesNotBecomeInsufficientSpace() async throws {
+        let fixture = try makeFixture(payload: Data("payload".utf8), fileName: "ordinary.pdf",
+            contentType: "application/pdf", chunkSize: 4, capacityQuery: { _ in nil })
+        let result = try await fixture.service.runOnce()
+        XCTAssertEqual(result.completed, 1)
+        XCTAssertNil(fixture.progressStore.snapshot().capacityCheck?.availableBytes)
+        XCTAssertTrue(fixture.progressStore.snapshot().capacityCheck?.displayText.contains("용량 정보 확인 불가") == true)
+    }
+
+    func testDirectZIPStagingPreflightBlocksBeforeIncomingContentWhenIPhoneSpaceIsInsufficient() async throws {
+        let fixture = try makeFixture(payload: validZIPData(), chunkSize: 4, archiveMode: .extract,
+            useSharedZIPExporter: true, capacityQuery: { url in url.lastPathComponent == "usb" ? 1_000_000 : 0 })
+        do {
+            _ = try await fixture.service.runOnce()
+            XCTFail("Compressed ZIP staging also needs its remaining-download capacity check")
+        } catch {
+            XCTAssertTrue(IPhoneReceiveErrorMessage.message(error).contains("iPhone"))
+        }
+        let acknowledgements = await fixture.client.acknowledgedIDs()
+        XCTAssertTrue(acknowledgements.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.destination.appendingPathComponent("docs/report.txt").path))
+    }
+
+    func testDirectZIPSubordinateExportDoesNotNotifyBeforeReceiptAndCompletesExactlyOnce() async throws {
+        let fixture = try makeFixture(payload: validZIPData(), chunkSize: 4, archiveMode: .extract, useSharedZIPExporter: true)
+        let events = DirectReceiveConvenienceEventRecorder()
+        fixture.progressStore.setTransferEventHandler { events.append($0) }
+        let result = try await fixture.service.runOnce()
+        XCTAssertEqual(result.completed, 1)
+        XCTAssertEqual(events.values.count, 1)
+        XCTAssertEqual(events.values.first?.operation, .receive)
+        XCTAssertEqual(events.values.first?.outcome, .completed)
+        let acknowledgements = await fixture.client.acknowledgedIDs()
+        XCTAssertEqual(acknowledgements, [fixture.delivery.deliveryID])
+    }
+
+    func testDirectZIPReceiptFailureThenRetryProducesFailureAndSuccessWithoutEarlyExporterCompletion() async throws {
+        let fixture = try makeFixture(payload: validZIPData(), chunkSize: 4, ackFailures: 1,
+            archiveMode: .extract, useSharedZIPExporter: true)
+        let events = DirectReceiveConvenienceEventRecorder()
+        fixture.progressStore.setTransferEventHandler { events.append($0) }
+        do {
+            _ = try await fixture.service.runOnce()
+            XCTFail("First receipt must fail in fixture")
+        } catch StubReceiverError.ackFailed { }
+        XCTAssertEqual(events.values.map(\.outcome), [.failed])
+        await fixture.client.clearInbox()
+        let result = try await fixture.service.runOnce()
+        XCTAssertEqual(result.completed, 1)
+        XCTAssertEqual(events.values.map(\.outcome), [.failed, .completed])
+    }
+
     private func makeFixture(
         payload: Data,
         fileName: String = "업무.zip",
@@ -583,7 +672,8 @@ final class USBReceiveServiceTests: XCTestCase {
         currentVolumeID: String = "test-volume",
         archiveMode: IPhoneReceiveArchiveMode = .keepArchive,
         overwriteExisting: Bool = false,
-        useSharedZIPExporter: Bool = false
+        useSharedZIPExporter: Bool = false,
+        capacityQuery: @escaping StorageCapacityPreflight.Query = StorageCapacityPreflight.system
     ) throws -> Fixture {
         let destination = temporaryDirectory()
         let delivery = IPhoneDelivery(
@@ -627,7 +717,8 @@ final class USBReceiveServiceTests: XCTestCase {
                 stopAccessing: { _ in },
                 volumeIdentity: { _ in currentVolumeID },
                 progressStore: progressStore,
-                zipWorkingDirectory: temporaryDirectory()
+                zipWorkingDirectory: temporaryDirectory(),
+                capacityQuery: capacityQuery
             )
         } else {
             sharedZIPExporter = nil
@@ -659,7 +750,8 @@ final class USBReceiveServiceTests: XCTestCase {
                     : nil
             },
             zipStagingDirectory: zipStagingDirectory,
-            zipExporter: sharedZIPExporter
+            zipExporter: sharedZIPExporter,
+            capacityQuery: capacityQuery
         )
         return Fixture(
             client: client,

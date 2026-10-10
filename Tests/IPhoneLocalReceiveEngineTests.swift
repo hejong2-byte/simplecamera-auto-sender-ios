@@ -3,6 +3,13 @@ import Foundation
 import XCTest
 @testable import SimpleCameraAutoSender
 
+private final class LocalReceiveNotificationEventRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [TransferNotificationEvent] = []
+    var values: [TransferNotificationEvent] { lock.withLock { events } }
+    func append(_ event: TransferNotificationEvent) { lock.withLock { events.append(event) } }
+}
+
 final class IPhoneLocalReceiveEngineTests: XCTestCase {
     func testCancelledDiscoveryDoesNotPublishReceiveFailure() async throws {
         for cancelDuringFeatureUpdate in [false, true] {
@@ -359,6 +366,55 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
         XCTAssertEqual(collision, "README (1)")
         XCTAssertTrue(long.hasSuffix(".hwp"))
         XCTAssertLessThanOrEqual(long.lengthOfBytes(using: .utf8), 240)
+    }
+
+    func testActualLocalReceiveCompletionNotifiesOnceAndFollowingDiscoveryFailureIsSilent() async throws {
+        let payload = Data("local receive contents".utf8)
+        let context = try makeContext(payloads: ["local.pdf": payload])
+        let events = LocalReceiveNotificationEventRecorder()
+        context.progress.setTransferEventHandler { events.append($0) }
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        let staging = context.catalog.stagingDirectory.appendingPathComponent("local.download")
+        try payload.write(to: staging)
+        await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+        XCTAssertEqual(events.values.map(\.operation), [.receive])
+        XCTAssertEqual(events.values.map(\.outcome), [.completed])
+        context.client.failNextDiscovery(duringFeatureUpdate: false)
+        await context.engine.restore()
+        XCTAssertEqual(events.values.map(\.outcome), [.completed], "Discovery must not reuse the last receive identity")
+        await context.engine.restore()
+        XCTAssertEqual(events.values.count, 1, "Historical progress must not replay a completion")
+    }
+
+    func testSequentialLocalReceiveJobsHaveDistinctCompletionIdentity() async throws {
+        let payloads = ["first.pdf": Data("first".utf8), "second.pdf": Data("second".utf8)]
+        let context = try makeContext(payloads: payloads)
+        let events = LocalReceiveNotificationEventRecorder()
+        context.progress.setTransferEventHandler { events.append($0) }
+        try await context.engine.discoverAndSchedule()
+        for _ in 0..<payloads.count {
+            let delivery = try XCTUnwrap(context.jobs.load().jobs.first { $0.stage == .downloading }).delivery
+            let staging = context.catalog.stagingDirectory.appendingPathComponent("\(delivery.deliveryID).download")
+            try XCTUnwrap(payloads[delivery.fileName]).write(to: staging)
+            await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+        }
+        XCTAssertEqual(events.values.map(\.outcome), [.completed, .completed])
+        XCTAssertEqual(Set(events.values.map(\.jobID)).count, 2)
+    }
+
+    func testLocalReceiveIntegrityFailureProducesActualJobFailureNotification() async throws {
+        let context = try makeContext(payloads: ["local.pdf": Data("expected".utf8)])
+        let events = LocalReceiveNotificationEventRecorder()
+        context.progress.setTransferEventHandler { events.append($0) }
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        let staging = context.catalog.stagingDirectory.appendingPathComponent("local.download")
+        try Data("corrupt".utf8).write(to: staging)
+        await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+        XCTAssertEqual(events.values.map(\.outcome), [.failed])
+        XCTAssertEqual(events.values.first?.operation, .receive)
+        XCTAssertTrue(context.client.acks().isEmpty)
     }
 
     private func makeContext(

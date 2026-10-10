@@ -10,6 +10,11 @@ final class USBReceiverPreferences: @unchecked Sendable {
         self.defaults = defaults
     }
 
+    var transferNotificationsEnabled: Bool {
+        get { false }
+        set {}
+    }
+
     var allowsCellular: Bool {
         get { lock.withLock { defaults.bool(forKey: key) } }
         set { lock.withLock { defaults.set(newValue, forKey: key) } }

@@ -91,6 +91,8 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var allowsCellular: Bool
     @Published private(set) var selectedDestination: IPhoneReceiveDestination
     @Published private(set) var storedFiles: [IPhoneStoredFile] = []
+    @Published private(set) var storedFileSearchText = ""
+    @Published private(set) var storedFileTypeFilter = IPhoneStoredFileTypeFilter.all
     @Published private(set) var selectedStoredFileIDs: Set<String> = []
     @Published private(set) var storedFilesPendingDeletion: [IPhoneStoredFile] = []
     @Published private(set) var storedZIPExportFilesPendingChoice: [IPhoneStoredFile] = []
@@ -896,6 +898,13 @@ final class USBReceiverViewModel: ObservableObject {
             selectedStoredFileIDs.insert(id)
         }
     }
+
+    var visibleStoredFiles: [IPhoneStoredFile] { storedFiles }
+    var storedFileCountText: String { "\(storedFiles.count)개" }
+    var storedFileEmptyMessage: String { "저장된 파일이 없습니다." }
+    var canEditStoredFileFilters: Bool { true }
+    func setStoredFileSearchText(_ text: String) { storedFileSearchText = text }
+    func setStoredFileTypeFilter(_ filter: IPhoneStoredFileTypeFilter) { storedFileTypeFilter = filter }
 
     func requestStoredFileDeletion() {
         guard canDeleteStoredFiles, !needsStoredFileDeletionConfirmation,

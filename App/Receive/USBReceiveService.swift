@@ -66,7 +66,8 @@ actor USBReceiveService {
         receiveDecision: @escaping ReceiveDecisionProvider = { _, _ in nil },
         zipStagingDirectory: URL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SimpleCamera-Direct-ZIP", isDirectory: true),
-        zipExporter: IPhoneUSBExportService? = nil
+        zipExporter: IPhoneUSBExportService? = nil,
+        capacityQuery: @escaping StorageCapacityPreflight.Query = StorageCapacityPreflight.system
     ) {
         precondition(chunkSize > 0)
         self.client = client

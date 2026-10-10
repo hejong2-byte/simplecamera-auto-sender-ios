@@ -214,7 +214,8 @@ actor IPhoneUSBExportService {
         zipWorkingDirectory: URL = FileManager.default.temporaryDirectory
             .appendingPathComponent("SimpleCamera-ZIP-Export", isDirectory: true),
         now: @escaping @Sendable () -> Date = Date.init,
-        coordinateWrite: @escaping CoordinateWrite = IPhoneUSBExportService.coordinateWriteSystem
+        coordinateWrite: @escaping CoordinateWrite = IPhoneUSBExportService.coordinateWriteSystem,
+        capacityQuery: @escaping StorageCapacityPreflight.Query = StorageCapacityPreflight.system
     ) {
         self.deletionStore = deletionStore
         self.fileManager = fileManager

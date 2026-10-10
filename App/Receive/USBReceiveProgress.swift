@@ -41,6 +41,7 @@ struct USBReceiveProgress: Codable, Sendable, Equatable {
     let detail: String?
     let sourceFileIDs: [String]?
     let archiveMode: IPhoneReceiveArchiveMode?
+    let capacityCheck: StorageCapacityCheck?
 
     init(
         stage: USBReceiveStage,
@@ -57,7 +58,8 @@ struct USBReceiveProgress: Codable, Sendable, Equatable {
         errorMessage: String?,
         detail: String? = nil,
         sourceFileIDs: [String]? = nil,
-        archiveMode: IPhoneReceiveArchiveMode? = nil
+        archiveMode: IPhoneReceiveArchiveMode? = nil,
+        capacityCheck: StorageCapacityCheck? = nil
     ) {
         self.stage = stage
         self.destination = destination
@@ -74,6 +76,7 @@ struct USBReceiveProgress: Codable, Sendable, Equatable {
         self.detail = detail
         self.sourceFileIDs = sourceFileIDs
         self.archiveMode = archiveMode
+        self.capacityCheck = capacityCheck
     }
 
     var percent: Int {
@@ -192,6 +195,8 @@ final class USBReceiveProgressStore: @unchecked Sendable {
     func snapshot() -> USBReceiveProgress {
         lock.withLock { latest }
     }
+
+    func setTransferEventHandler(_ handler: @escaping @Sendable (TransferNotificationEvent) -> Void) {}
 
     func publish(_ progress: USBReceiveProgress) {
         var delivered = progress
