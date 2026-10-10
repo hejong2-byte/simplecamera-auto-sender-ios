@@ -1,8 +1,95 @@
+import Combine
 import XCTest
 @testable import SimpleCameraAutoSender
 
 @MainActor
 final class ContentViewModelTests: XCTestCase {
+    func testRefreshSkipsUnchangedPublicationsButStillPublishesNewLedgerState() async throws {
+        let ledger = try UploadLedger(fileURL: temporaryLedgerURL())
+        try await ledger.setBaseline(Date(timeIntervalSince1970: 1_234))
+        try await ledger.recordDiscovery(id: "retry", createdAt: .now)
+        try await ledger.markFailed(id: "retry", category: .network)
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("Bearer synthetic-test")
+        let model = ContentViewModel(
+            credentialStore: credentials, ledger: ledger,
+            uploader: NoOpUploader(), now: Date.init,
+            send: { _ in .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) }
+        )
+        await model.refresh()
+        XCTAssertEqual(model.failedCount, 1)
+        XCTAssertEqual(model.automaticFailureMessage, "네트워크 오류")
+
+        var publications = 0
+        let observer = model.objectWillChange.sink { publications += 1 }
+        defer { observer.cancel() }
+        await model.refresh()
+        XCTAssertEqual(publications, 0, "Unchanged status must not invalidate the screen")
+
+        try await ledger.markUploaded(id: "retry")
+        await model.refresh()
+        XCTAssertGreaterThan(publications, 0)
+        XCTAssertEqual(model.uploadedCount, 1)
+        XCTAssertEqual(model.failedCount, 0)
+        XCTAssertNil(model.automaticFailureMessage)
+        publications = 0
+        await model.refresh()
+        XCTAssertEqual(publications, 0)
+    }
+
+    func testRefreshCountsEveryStateAndPreservesLedgerContents() async throws {
+        let ledger = try UploadLedger(fileURL: temporaryLedgerURL())
+        try await ledger.setBaseline(Date(timeIntervalSince1970: 1_234))
+        for (index, id) in ["new", "ignored", "queued", "uploaded", "network", "server", "retry"].enumerated() {
+            try await ledger.recordDiscovery(id: id, createdAt: Date(timeIntervalSince1970: Double(100 - index)))
+        }
+        try await ledger.markIgnored(id: "ignored")
+        try await ledger.markQueued(id: "queued", taskIdentifier: 1)
+        try await ledger.markUploaded(id: "uploaded")
+        try await ledger.markFailed(id: "network", category: .network)
+        try await ledger.markFailed(id: "server", category: .server)
+        try await ledger.markFailed(id: "retry", category: .unreadable)
+        try await ledger.markQueued(id: "retry", taskIdentifier: 2)
+        let before = await ledger.allRecords()
+        let model = ContentViewModel(
+            credentialStore: InMemoryCredentialStore(), ledger: ledger,
+            uploader: NoOpUploader(), now: Date.init,
+            send: { _ in .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) }
+        )
+
+        await model.refresh()
+
+        XCTAssertTrue(model.isMonitoringEnabled)
+        XCTAssertEqual(model.queuedCount, 2)
+        XCTAssertEqual(model.uploadedCount, 1)
+        XCTAssertEqual(model.failedCount, 2)
+        XCTAssertEqual(model.automaticFailureMessage, "서버 오류 · 네트워크 오류")
+        let after = await ledger.allRecords()
+        XCTAssertEqual(after, before)
+        try await ledger.reset()
+        await model.refresh()
+        XCTAssertFalse(model.isMonitoringEnabled)
+        XCTAssertEqual(model.queuedCount, 0)
+        XCTAssertEqual(model.uploadedCount, 0)
+        XCTAssertEqual(model.failedCount, 0)
+        XCTAssertNil(model.automaticFailureMessage)
+    }
+
+    func testIdleAutomaticStatusDoesNotRepeatSetupExplanation() async throws {
+        let store = AutomaticTransferProgressStore()
+        let model = ContentViewModel(
+            credentialStore: InMemoryCredentialStore(),
+            ledger: try UploadLedger(fileURL: temporaryLedgerURL()),
+            uploader: NoOpUploader(), now: Date.init,
+            send: { _ in .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
+            automaticUpdates: { store.updates() }
+        )
+        XCTAssertEqual(model.automaticTransferMessage, "")
+        await waitUntil { model.automaticProgress?.stage == .idle }
+        XCTAssertEqual(model.automaticStageTitle, "자동전송 대기")
+        XCTAssertEqual(model.automaticTransferMessage, "")
+    }
+
     func testDocumentTransferNeedsCredentialButNotPhotoAccessAndLeavesAutomaticLedgerAlone() async throws {
         let ledger = try UploadLedger(fileURL: temporaryLedgerURL())
         let baseline = Date(timeIntervalSince1970: 1_234)

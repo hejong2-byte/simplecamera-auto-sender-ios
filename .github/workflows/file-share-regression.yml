@@ -1,4 +1,4 @@
-name: Received file sharing regression
+name: Received file and UI regression
 
 on:
   push:
@@ -26,7 +26,10 @@ jobs:
             -resultBundlePath build/FileShareTests.xcresult \
             -only-testing:SimpleCameraAutoSenderTests/USBReceiverStoredFileSharingTests \
             -only-testing:SimpleCameraAutoSenderTests/USBReceiverManualDeletionTests \
+            -only-testing:SimpleCameraAutoSenderTests/ContentViewModelTests \
             -only-testing:SimpleCameraAutoSenderTests/ProjectSmokeTests \
+            -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testMainScreenOmitsFixedMenuDescriptions \
+            -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testTextTransferShowsComposeHistoryAndRecordActions \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testReceivedPhotoAndPDFShareSheetsKeepOriginalsAndSelectionAfterCancel \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testReceivedZIPShareSheetKeepsArchiveAndSelectionAfterCancel \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/file-share-tests.log

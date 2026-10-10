@@ -212,6 +212,27 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertFalse(source.contains("자동 전송 초기화"))
     }
 
+    func testRoutineCopyIsRemovedWithoutRemovingErrorAndDeletionControls() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let receiver = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/USBReceiverView.swift"),
+            encoding: .utf8
+        )
+        let text = try String(
+            contentsOf: repository.appendingPathComponent("App/UI/TextTransferView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertFalse(text.contains("자주 쓰는 코드를 이름과 함께 저장할 수 있습니다."))
+        XCTAssertFalse(receiver.contains("복사에 실패한 파일의 원본은 자동 삭제하지 않습니다. 오류 원인을 확인한 뒤 선택된 파일을 다시 복사할 수 있습니다."))
+        XCTAssertTrue(receiver.contains("Label(error, systemImage:"))
+        XCTAssertTrue(receiver.contains("stored-files-reselect-export-folder"))
+        XCTAssertTrue(receiver.contains("stored-files-dismiss-failed-export"))
+        XCTAssertTrue(receiver.contains("iPhone에 저장된 선택 파일만 삭제하며 되돌릴 수 없습니다."))
+        XCTAssertTrue(receiver.contains("Button(\"덮어쓰기\", role: .destructive)"))
+    }
+
     func testMainScreenLinksToTheTextTransferInterface() throws {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

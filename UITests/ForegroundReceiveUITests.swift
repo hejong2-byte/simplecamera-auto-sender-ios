@@ -395,6 +395,8 @@ final class ForegroundReceiveUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["PC에서 보낸 파일을 iPhone에 저장하거나 USB로 직접 저장"].exists)
         XCTAssertTrue(app.buttons["manual-photo"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.buttons["open-receiver"].exists)
+        XCTAssertFalse(app.staticTexts["Simple Cam을 닫으면 새 사진을 자동으로 전송합니다."].exists)
+        keepScreenshot("home-without-idle-explanation", app: app)
     }
 
     func testTextTransferShowsComposeHistoryAndRecordActions() {
@@ -411,6 +413,8 @@ final class ForegroundReceiveUITests: XCTestCase {
         XCTAssertTrue(app.textViews["text-body"].exists)
         XCTAssertTrue(app.buttons["text-send"].exists)
         XCTAssertTrue(app.buttons["text-refresh"].exists)
+        XCTAssertFalse(app.staticTexts["자주 쓰는 코드를 이름과 함께 저장할 수 있습니다."].exists)
+        keepScreenshot("text-compose-without-repeated-help", app: app)
 
         let message = app.buttons["text-message-received-123e4567-e89b-42d3-a456-426614174333"]
         reveal(message, in: app)
