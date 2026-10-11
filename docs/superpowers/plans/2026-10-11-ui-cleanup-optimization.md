@@ -41,9 +41,9 @@ Files: App/Ledger/UploadLedger.swift, App/UI/ContentViewModel.swift, App/UI/Cont
 
 - [x] Align iOS version 0.3.48/build 59 in project, smoke assertions and README; leave Windows unchanged.
 - [x] Run python scripts/test-release-install-contract.py, python scripts/generate-install-qr.py --check, and git diff --check.
-- [ ] Run fresh full native tests covering receiving, USB export, ZIP safety, sharing, deletion and the new features.
-- [ ] Verify published canonical IPA and latest-target identity, version, CRC/hash and QR payload.
-- [ ] Report tested limits. UI optimizations are not evidence of faster physical USB throughput.
+- [x] Run fresh full native tests covering receiving, USB export, ZIP safety, sharing, deletion and the new features. Release run 38099610117 on 12ff351: 540 unit + 31 UI tests, zero failures; native IPA build succeeded.
+- [x] Verify published canonical IPA and latest-target identity, version, CRC/hash and QR payload. v0.3.48/build 59: canonical, legacy alias and latest download are byte-identical (3,172,596 bytes; SHA256 b7aa23e9faa22b993d2d8f3cdbd16191f410874980498f60dd720b68128d5217), match GitHub asset digests, and pass archive, bundle, icons, Files and privacy-manifest checks. Published QR matches the validated canonical install URI.
+- [x] Report tested limits. Native simulator tests and artifact checks do not measure physical USB/reader throughput, demonstrate installed KakaoTalk delivery, or extend iOS background execution time. User files and installed apps were not deleted or modified during verification.
 
 ## Baseline
 
