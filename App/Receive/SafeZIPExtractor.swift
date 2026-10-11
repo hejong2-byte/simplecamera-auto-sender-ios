@@ -21,7 +21,7 @@ struct SafeZIPExtraction {
 
 struct SafeZIPExtractor {
     let fileManager: FileManager
-    var capacityQuery: StorageCapacityPreflight.Query = StorageCapacityPreflight.system
+    var capacityQuery: StorageCapacityPreflight.Query = { try StorageCapacityPreflight.system($0) }
     var capacityReport: (StorageCapacityCheck) -> Void = { _ in }
 
     private static let windowsKoreanEncoding = String.Encoding(

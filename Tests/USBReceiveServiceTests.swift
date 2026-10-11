@@ -673,7 +673,7 @@ final class USBReceiveServiceTests: XCTestCase {
         archiveMode: IPhoneReceiveArchiveMode = .keepArchive,
         overwriteExisting: Bool = false,
         useSharedZIPExporter: Bool = false,
-        capacityQuery: @escaping StorageCapacityPreflight.Query = StorageCapacityPreflight.system
+        capacityQuery: @escaping StorageCapacityPreflight.Query = { try StorageCapacityPreflight.system($0) }
     ) throws -> Fixture {
         let destination = temporaryDirectory()
         let delivery = IPhoneDelivery(

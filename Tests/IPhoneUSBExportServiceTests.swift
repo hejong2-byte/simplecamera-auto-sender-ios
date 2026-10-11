@@ -665,7 +665,16 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             },
             "ZIP export must report its metadata-only overwrite scan without a USB SHA pass"
         )
-        XCTAssertFalse(reported.contains { $0.stage == .checkingSource })
+        let metadataChecks = reported.filter { $0.stage == .checkingSource }
+        XCTAssertTrue(metadataChecks.contains { $0.detail == "압축 해제 전 용량 확인" })
+        XCTAssertTrue(metadataChecks.contains { $0.detail?.hasPrefix("이어받기 확인 ") == true })
+        XCTAssertTrue(metadataChecks.allSatisfy { progress in
+            guard progress.bytesReceived == 0, progress.totalBytes == 20 else { return false }
+            if progress.detail == "압축 해제 전 용량 확인" {
+                return progress.capacityCheck?.requiredBytes == 20 && progress.capacityCheck?.destination == .iphoneLocal
+            }
+            return ["이어받기 확인 1/2개\ndocs/report.txt", "이어받기 확인 2/2개\nroot.txt"].contains(progress.detail ?? "")
+        }, "Only capacity metadata and retained-boundary checks are allowed; no full ZIP/USB SHA reread phase")
         XCTAssertEqual(reported.last(where: { $0.stage == .completed })?.bytesReceived, 20)
         XCTAssertEqual(reported.last(where: { $0.stage == .completed })?.totalBytes, 20)
 
