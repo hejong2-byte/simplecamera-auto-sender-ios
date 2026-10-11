@@ -327,6 +327,7 @@ actor IPhoneUSBExportService {
         }
         var verified: [IPhoneUSBDeletionDecision] = []
         var failed: [IPhoneUSBExportFailure] = []
+        var firstFailedCapacityCheck: StorageCapacityCheck?
         var cancelled = false
         cleanupFailures = []
         for (index, file) in files.enumerated() {
@@ -351,6 +352,7 @@ actor IPhoneUSBExportService {
                 break
             } catch {
                 let reason = Self.failure(sourceID: file.id, error: error)
+                if failed.isEmpty { firstFailedCapacityCheck = currentCapacityCheck }
                 let last = progressStore.snapshot()
                 let phase = last.detail ?? (last.stage == .extracting ? "압축 해제" : "USB 복사")
                 failed.append(IPhoneUSBExportFailure(sourceID: file.id, error: reason.error,
@@ -407,8 +409,8 @@ actor IPhoneUSBExportService {
                 detail: summary.changeSummary.displayText,
                 sourceFileIDs: failed.map(\.sourceID),
                 archiveMode: archiveMode,
-                capacityCheck: currentCapacityCheck
-            ))
+                capacityCheck: firstFailedCapacityCheck
+            ), notifyExportOutcome: failed.contains { $0.error != .overwriteConfirmationRequired })
         }
         return summary
     }

@@ -181,6 +181,69 @@ final class TransferNotificationTests: XCTestCase {
         XCTAssertEqual(events.values.count, 1)
     }
 
+    func testRealManualOverwriteApprovalAndCancellationAreSilentButApprovedCopyNotifies() async throws {
+        let fixture = try makeExportFixture()
+        let oldBytes = Data("existing USB original".utf8)
+        let target = fixture.destination.url.appendingPathComponent(fixture.file.name)
+        try oldBytes.write(to: target)
+        fixture.store.beginExport(fileName: fixture.file.name, totalCount: 1)
+        let pending = await fixture.exporter.export([fixture.file], to: fixture.destination, archiveMode: .keepArchive)
+        XCTAssertEqual(pending.failed.map(\.error), [.overwriteConfirmationRequired])
+        XCTAssertEqual(fixture.store.snapshot().stage, .failed, "Approval UI keeps its existing progress contract")
+        XCTAssertTrue(fixture.events.values.isEmpty, "An approval request is not a failed USB copy")
+        fixture.store.publish(progress(.cancelled))
+        XCTAssertTrue(fixture.events.values.isEmpty, "Declining overwrite must remain silent")
+        XCTAssertEqual(try Data(contentsOf: target), oldBytes)
+        XCTAssertEqual(try Data(contentsOf: fixture.file.url), fixture.bytes)
+
+        fixture.store.beginExport(fileName: fixture.file.name, totalCount: 1)
+        let approved = await fixture.exporter.export([fixture.file], to: fixture.destination,
+            archiveMode: .keepArchive, overwriteExisting: true)
+        XCTAssertTrue(approved.failed.isEmpty, approved.errorMessage ?? "")
+        XCTAssertEqual(fixture.events.values.map(\.outcome), [.completed])
+        XCTAssertEqual(try Data(contentsOf: target), fixture.bytes)
+        XCTAssertEqual(try Data(contentsOf: fixture.file.url), fixture.bytes)
+    }
+
+    func testRealManualMixedOverwriteApprovalAndMissingSourceStillNotifiesFailure() async throws {
+        let fixture = try makeExportFixture()
+        let target = fixture.destination.url.appendingPathComponent(fixture.file.name)
+        let oldBytes = Data("existing USB original".utf8)
+        try oldBytes.write(to: target)
+        let missingURL = fixture.file.url.deletingLastPathComponent().appendingPathComponent("missing.pdf")
+        let missing = IPhoneStoredFile(id: missingURL.path, url: missingURL, name: "missing.pdf", size: 10,
+            modifiedAt: Date(), receivedRecord: nil)
+        fixture.store.beginExport(fileName: fixture.file.name, totalCount: 2)
+        let result = await fixture.exporter.export([fixture.file, missing], to: fixture.destination, archiveMode: .keepArchive)
+        XCTAssertEqual(result.failed.count, 2)
+        XCTAssertEqual(result.failed.first?.error, .overwriteConfirmationRequired)
+        XCTAssertNotEqual(result.failed.last?.error, .overwriteConfirmationRequired)
+        XCTAssertEqual(fixture.events.values.map(\.outcome), [.failed])
+        XCTAssertEqual(try Data(contentsOf: target), oldBytes)
+        XCTAssertEqual(try Data(contentsOf: fixture.file.url), fixture.bytes)
+    }
+
+    private func makeExportFixture() throws -> (exporter: IPhoneUSBExportService, store: USBReceiveProgressStore,
+        destination: USBBookmarkDestination, file: IPhoneStoredFile, bytes: Data, events: NotificationEventRecorder) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let usb = root.appendingPathComponent("usb")
+        try FileManager.default.createDirectory(at: usb, withIntermediateDirectories: true)
+        let source = root.appendingPathComponent("original.pdf")
+        let bytes = Data("new iPhone original".utf8)
+        try bytes.write(to: source)
+        let file = IPhoneStoredFile(id: source.path, url: source, name: source.lastPathComponent, size: Int64(bytes.count),
+            modifiedAt: Date(), receivedRecord: nil)
+        let store = USBReceiveProgressStore()
+        let events = NotificationEventRecorder()
+        store.setTransferEventHandler { events.append($0) }
+        let exporter = IPhoneUSBExportService(deletionStore: try IPhoneUSBDeletionDecisionStore(fileURL: root.appendingPathComponent("decisions.json")),
+            startAccessing: { _ in true }, stopAccessing: { _ in }, volumeIdentity: { _ in "notification-volume" },
+            progressStore: store, zipWorkingDirectory: root.appendingPathComponent("zip-work"), capacityQuery: { _ in nil })
+        return (exporter, store, USBBookmarkDestination(url: usb, volumeID: "notification-volume", displayName: "Test USB", isStale: false),
+            file, bytes, events)
+    }
+
     func testProgressHookRunsOutsideLockAndManualVerificationDiscoveryCancelAreSilent() throws {
         let store = USBReceiveProgressStore()
         let events = NotificationEventRecorder()

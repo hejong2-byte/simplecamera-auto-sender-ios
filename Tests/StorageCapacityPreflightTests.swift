@@ -35,6 +35,27 @@ final class StorageCapacityPreflightTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
     }
 
+    func testMultiFileFailureDisplaysCapacityOfFirstFailedFileNotLaterSuccessfulCopy() async throws {
+        let context = try makeContext(capacity: { _ in 1_048_576 })
+        let large = try storedFile("large.pdf", data: Data(repeating: 0x4d, count: 2_097_152), in: context.source)
+        let smallBytes = Data("fits".utf8)
+        let small = try storedFile("small.pdf", data: smallBytes, in: context.source)
+        let result = await context.service.export([large, small], to: context.destination, archiveMode: .keepArchive)
+        XCTAssertEqual(result.failed.map(\.sourceID), [large.id])
+        XCTAssertEqual(result.verified.map(\.sourceID), [small.id])
+        let terminal = context.progress.snapshot()
+        XCTAssertEqual(terminal.stage, .failed)
+        XCTAssertEqual(terminal.fileName, large.name)
+        XCTAssertEqual(terminal.capacityCheck?.requiredBytes, large.size)
+        XCTAssertEqual(terminal.capacityCheck?.availableBytes, 1_048_576)
+        XCTAssertTrue(terminal.capacityCheck?.displayText.contains("필요 2.00 MB") == true)
+        XCTAssertTrue(result.errorMessage?.contains("필요 2.00 MB") == true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: context.usb.appendingPathComponent(large.name).path))
+        XCTAssertEqual(try Data(contentsOf: context.usb.appendingPathComponent(small.name)), smallBytes)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: large.url.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: small.url.path))
+    }
+
     func testInsufficientCapacityLeavesOriginalAndExistingDestinationUnchanged() async throws {
         let context = try makeContext(capacity: { _ in 1 })
         let bytes = Data("replacement contents".utf8)

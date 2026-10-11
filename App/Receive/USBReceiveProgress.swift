@@ -214,7 +214,7 @@ final class USBReceiveProgressStore: @unchecked Sendable {
         handler?(event)
     }
 
-    func publish(_ progress: USBReceiveProgress) {
+    func publish(_ progress: USBReceiveProgress, notifyExportOutcome: Bool = true) {
         var delivered = progress
         var event: TransferNotificationEvent?
         var handler: (@Sendable (TransferNotificationEvent) -> Void)?
@@ -236,12 +236,12 @@ final class USBReceiveProgressStore: @unchecked Sendable {
                 case .paused: outcome = .paused
                 default: outcome = nil
                 }
-                if let outcome, exportOutcomes.insert(outcome).inserted {
+                if notifyExportOutcome, let outcome, exportOutcomes.insert(outcome).inserted {
                     event = TransferNotificationEvent(jobID: jobID, operation: .usbCopy,
                         outcome: outcome, count: delivered.totalCount)
                     handler = transferEventHandler
                 }
-                if delivered.stage == .completed || delivered.stage == .cancelled { exportJobID = nil }
+                if !notifyExportOutcome || delivered.stage == .completed || delivered.stage == .cancelled { exportJobID = nil }
             }
             return Array(continuations.values)
         }
