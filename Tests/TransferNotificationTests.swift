@@ -25,6 +25,27 @@ final class TransferNotificationTests: XCTestCase {
         XCTAssertFalse(fixture.preferences.transferNotificationsEnabled)
     }
 
+    func testDisablingWhilePermissionIsPendingCannotReenableOrReplayOldEvents() async throws {
+        let suite = "DelayedNotificationPermission.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let preferences = USBReceiverPreferences(defaults: defaults)
+        let requested = expectation(description: "permission request is pending")
+        let client = DelayedPermissionNotificationClient(onRequest: { requested.fulfill() })
+        let service = TransferNotificationService(preferences: preferences, client: client)
+        let enabling = Task { await service.setEnabled(true) }
+        await fulfillment(of: [requested], timeout: 2)
+        await service.handle(event(.completed))
+        await service.setEnabled(false)
+        await client.resolvePermission(true)
+        await enabling.value
+        XCTAssertFalse(preferences.transferNotificationsEnabled)
+        XCTAssertFalse(service.isReady)
+        XCTAssertTrue(service.readinessMessage.contains("꺼짐"))
+        let requests = await client.requests()
+        XCTAssertTrue(requests.isEmpty, "Late OS permission must not schedule an old event or undo the opt-out")
+    }
+
     func testDeniedAndRevokedPermissionShowsReadinessWithoutBlockingTransfer() async throws {
         let fixture = try makeFixture(status: .denied)
         await fixture.service.setEnabled(true)
@@ -225,6 +246,28 @@ private actor TestNotificationClient: TransferNotificationClient {
     func failScheduling() { schedulingFails = true }
     func requests() -> [TransferNotificationRequest] { scheduled }
     func permissionRequests() -> Int { permissionCount }
+}
+
+private actor DelayedPermissionNotificationClient: TransferNotificationClient {
+    private let onRequest: @Sendable () -> Void
+    private var pending: CheckedContinuation<Bool, Never>?
+    private var authorization = TransferNotificationAuthorization.notDetermined
+    private var scheduled: [TransferNotificationRequest] = []
+    init(onRequest: @escaping @Sendable () -> Void) { self.onRequest = onRequest }
+    func authorizationStatus() async -> TransferNotificationAuthorization { authorization }
+    func requestAuthorization() async throws -> Bool {
+        await withCheckedContinuation { continuation in
+            pending = continuation
+            onRequest()
+        }
+    }
+    func resolvePermission(_ granted: Bool) {
+        authorization = granted ? .authorized : .denied
+        pending?.resume(returning: granted)
+        pending = nil
+    }
+    func schedule(_ request: TransferNotificationRequest) async throws { scheduled.append(request) }
+    func requests() -> [TransferNotificationRequest] { scheduled }
 }
 
 private final class NotificationEventRecorder: @unchecked Sendable {
