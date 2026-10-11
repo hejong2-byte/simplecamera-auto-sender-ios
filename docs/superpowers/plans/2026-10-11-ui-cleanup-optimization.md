@@ -19,28 +19,28 @@ Tech Stack: Swift 5, SwiftUI, Combine, XCTest, iOS 17+, existing macOS GitHub Ac
 
 Files: App/Ledger/UploadLedger.swift, App/UI/ContentViewModel.swift, App/UI/ContentView.swift, App/UI/TextTransferView.swift, App/UI/USBReceiverView.swift; corresponding XCTest and UI coverage.
 
-- [ ] Add a real-ledger refresh test covering every asset state, stale failure removal and unchanged persisted records.
-- [ ] After initial refresh, subscribe to model.objectWillChange, repeat refresh, and assert zero emissions. Mutate the ledger and assert new values still publish.
-- [ ] Assert idle automatic status has no explanatory subtitle and routine screens omit repetitive help without losing error/recovery/deletion controls.
-- [ ] Run focused native tests against unchanged production code and record actual failing assertions.
-- [ ] Add UploadLedger.statusSummary() returning baseline, queued/uploaded/failed counts and failure categories from one unsorted snapshot loop. Keep allRecords() unchanged.
-- [ ] Compare refreshed status values before assigning Published properties. Render no empty automatic subtitle.
-- [ ] Remove empty-recipient help and repeated USB-failure paragraph; keep errors and destructive prompts.
-- [ ] Render saved-file rows in a LazyVStack without changing identifiers, actions or selection.
-- [ ] Verify focused native tests pass before the subsequent features.
+- [x] Add a real-ledger refresh test covering every asset state, stale failure removal and unchanged persisted records.
+- [x] After initial refresh, subscribe to model.objectWillChange, repeat refresh, and assert zero emissions. Mutate the ledger and assert new values still publish.
+- [x] Assert idle automatic status has no explanatory subtitle and routine screens omit repetitive help without losing error/recovery/deletion controls.
+- [x] Run focused native tests against unchanged production code and record actual failing assertions.
+- [x] Add UploadLedger.statusSummary() returning baseline, queued/uploaded/failed counts and failure categories from one unsorted snapshot loop. Keep allRecords() unchanged.
+- [x] Compare refreshed status values before assigning Published properties. Render no empty automatic subtitle.
+- [x] Remove empty-recipient help and repeated USB-failure paragraph; keep errors and destructive prompts.
+- [x] Render saved-file rows in a LazyVStack without changing identifiers, actions or selection.
+- [x] Verify focused native tests pass before the subsequent features. Run 38096300663: 65 unit + 4 UI tests pass on fa6f0f7; independent fix review approved.
 
 ## 2. Add approved conveniences after optimization
 
-- [ ] Inspect existing catalog, USB export preflight and notification ownership before selecting exact extension points.
-- [ ] Add received-file name search and type filters without changing stored originals or stale selection safety.
-- [ ] Show/check required copy capacity, including ZIP expanded size, before writing; keep unknown-capacity and insufficient-capacity states distinct.
-- [ ] Add permission-aware completion/interruption notifications, without blocking transfer when notifications are denied and without duplicate alerts.
-- [ ] Add focused tests for each feature before implementation, then native UI/integration coverage.
+- [x] Inspect existing catalog, USB export preflight and notification ownership before selecting exact extension points.
+- [x] Add received-file name search and type filters without changing stored originals or stale selection safety.
+- [x] Show/check required copy capacity, including ZIP expanded size, before writing; keep unknown-capacity and insufficient-capacity states distinct.
+- [x] Add permission-aware completion/interruption notifications, without blocking transfer when notifications are denied and without duplicate alerts.
+- [x] Add focused tests for each feature before implementation, then native UI/integration coverage. Run 38098868059 on 40443fd: 244 unit + 6 UI tests pass. Task and whole-branch follow-up reviews approved; first-failure capacity and approval-only notification findings are fixed and covered by real-file regressions.
 
 ## 3. Deliver verified update
 
-- [ ] Align iOS version 0.3.48/build 59 in project, smoke assertions and README; leave Windows unchanged.
-- [ ] Run python scripts/test-release-install-contract.py, python scripts/generate-install-qr.py --check, and git diff --check.
+- [x] Align iOS version 0.3.48/build 59 in project, smoke assertions and README; leave Windows unchanged.
+- [x] Run python scripts/test-release-install-contract.py, python scripts/generate-install-qr.py --check, and git diff --check.
 - [ ] Run fresh full native tests covering receiving, USB export, ZIP safety, sharing, deletion and the new features.
 - [ ] Verify published canonical IPA and latest-target identity, version, CRC/hash and QR payload.
 - [ ] Report tested limits. UI optimizations are not evidence of faster physical USB throughput.
