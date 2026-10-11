@@ -4,6 +4,7 @@ final class USBReceiverPreferences: @unchecked Sendable {
     private let defaults: UserDefaults
     private let key = "usbReceiver.allowsCellular"
     private let destinationKey = "iphoneReceiver.destination"
+    private let notificationKey = "iphoneReceiver.transferNotifications"
     private let lock = NSLock()
 
     init(defaults: UserDefaults = .standard) {
@@ -11,8 +12,8 @@ final class USBReceiverPreferences: @unchecked Sendable {
     }
 
     var transferNotificationsEnabled: Bool {
-        get { false }
-        set {}
+        get { lock.withLock { defaults.bool(forKey: notificationKey) } }
+        set { lock.withLock { defaults.set(newValue, forKey: notificationKey) } }
     }
 
     var allowsCellular: Bool {

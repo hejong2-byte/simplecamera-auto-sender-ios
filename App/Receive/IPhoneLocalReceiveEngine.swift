@@ -191,6 +191,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         } catch {
             job.lastError = IPhoneReceiveErrorMessage.message(error)
             try? jobStore.save(job)
+            emitOutcome(IPhoneReceiveErrorMessage.isCancellation(error) ? .paused : .failed, job: job)
             throw error
         }
     }
@@ -217,7 +218,11 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
             }) {
                 let existing = await scheduler.existingDeliveryIDs()
                 if existing.contains(active.delivery.deliveryID) { return }
-                try await reschedule(active)
+                do { try await reschedule(active) }
+                catch {
+                    emitOutcome(IPhoneReceiveErrorMessage.isCancellation(error) ? .paused : .failed, job: active)
+                    throw error
+                }
                 return
             }
             try await discoverAndSchedule()
@@ -376,6 +381,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
             job.lastError = nil
             try jobStore.save(job)
             publish(stage: .completed, job: job, message: job.mediaLibraryMessage)
+            emitOutcome(.completed, job: job)
             try? await discoverAndSchedule()
         } catch {
             guard verifiedLocalFile else {
@@ -391,6 +397,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
                 do {
                     try jobStore.save(job)
                     publish(stage: .savedWithoutReceipt, job: job, message: job.lastError)
+                    emitOutcome(.completed, job: job)
                     try? await discoverAndSchedule()
                     return
                 } catch {
@@ -403,6 +410,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
             try? jobStore.save(job)
             publish(stage: .receiptPending, job: job,
                     message: "iPhone 저장·검증 완료. 서버 완료 확인은 재시도 대기 중입니다. " + (job.lastError ?? "ACK failed"))
+            emitOutcome(.paused, job: job)
         }
     }
 
@@ -436,6 +444,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         job.lastError = IPhoneReceiveErrorMessage.message(error)
         try? jobStore.save(job)
         progressStore.publishFailure(job.lastError ?? "receive failed")
+        emitOutcome(IPhoneReceiveErrorMessage.isCancellation(error) ? .paused : .failed, job: job)
         try? await discoverAndSchedule()
     }
 
@@ -444,6 +453,11 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
             throw IPhoneLocalReceiveError.receiverNotRegistered
         }
         return value
+    }
+
+    private func emitOutcome(_ outcome: TransferNotificationOutcome, job: IPhoneLocalReceiveJob) {
+        progressStore.emitTransferEvent(TransferNotificationEvent(jobID: job.delivery.deliveryID.uuidString,
+            operation: .receive, outcome: outcome, count: 1))
     }
 
     private func publish(stage: USBReceiveStage, job: IPhoneLocalReceiveJob?, message: String? = nil) {

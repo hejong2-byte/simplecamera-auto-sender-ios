@@ -26,6 +26,8 @@ jobs:
             -resultBundlePath build/FileShareTests.xcresult \
             -only-testing:SimpleCameraAutoSenderTests/USBReceiverStoredFileSharingTests \
             -only-testing:SimpleCameraAutoSenderTests/USBReceiverFileFilterTests \
+            -only-testing:SimpleCameraAutoSenderTests/USBReceiverViewModelTests \
+            -only-testing:SimpleCameraAutoSenderTests/USBExportProgressRecoveryTests \
             -only-testing:SimpleCameraAutoSenderTests/StorageCapacityPreflightTests \
             -only-testing:SimpleCameraAutoSenderTests/TransferNotificationTests \
             -only-testing:SimpleCameraAutoSenderTests/USBReceiveServiceTests \

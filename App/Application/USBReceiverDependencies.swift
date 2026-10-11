@@ -2,7 +2,7 @@ import Foundation
 import UIKit
 
 final class USBReceiverDependencies: @unchecked Sendable {
-    static let shared: USBReceiverDependencies = {
+    @MainActor static let shared: USBReceiverDependencies = {
         let fileManager = FileManager.default
         let applicationSupport = try! fileManager.url(
             for: .applicationSupportDirectory,
@@ -84,6 +84,12 @@ final class USBReceiverDependencies: @unchecked Sendable {
         let exportProgressStore = USBReceiveProgressStore(
             fileURL: stateDirectory.appendingPathComponent("usb-export-progress.json")
         )
+        let notifications = TransferNotificationService(preferences: preferences)
+        let notificationHandler: @Sendable (TransferNotificationEvent) -> Void = { event in
+            Task { @MainActor in await notifications.handle(event) }
+        }
+        progressStore.setTransferEventHandler(notificationHandler)
+        exportProgressStore.setTransferEventHandler(notificationHandler)
         let directZIPExporter = IPhoneUSBExportService(
             deletionStore: deletionStore,
             progressStore: progressStore,
@@ -138,7 +144,8 @@ final class USBReceiverDependencies: @unchecked Sendable {
             deletionStore: deletionStore,
             progressStore: progressStore,
             exportProgressStore: exportProgressStore,
-            outcomeStore: outcomeStore
+            outcomeStore: outcomeStore,
+            notifications: notifications
         )
         Task { await localEngine.restore() }
         return dependencies
@@ -160,6 +167,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
     private let progressStore: USBReceiveProgressStore
     private let exportProgressStore: USBReceiveProgressStore
     private let outcomeStore: IPhoneReceiveOutcomeStore
+    private let notifications: TransferNotificationService
 
     private init(
         registrationStore: IPhoneReceiverRegistrationStore,
@@ -177,7 +185,8 @@ final class USBReceiverDependencies: @unchecked Sendable {
         deletionStore: IPhoneUSBDeletionDecisionStore,
         progressStore: USBReceiveProgressStore,
         exportProgressStore: USBReceiveProgressStore,
-        outcomeStore: IPhoneReceiveOutcomeStore
+        outcomeStore: IPhoneReceiveOutcomeStore,
+        notifications: TransferNotificationService
     ) {
         self.registrationStore = registrationStore
         self.bookmarkStore = bookmarkStore
@@ -195,6 +204,7 @@ final class USBReceiverDependencies: @unchecked Sendable {
         self.progressStore = progressStore
         self.exportProgressStore = exportProgressStore
         self.outcomeStore = outcomeStore
+        self.notifications = notifications
     }
 
     func restoreLocalReceiver() async {
@@ -335,7 +345,8 @@ final class USBReceiverDependencies: @unchecked Sendable {
                 try outcomeStore.clear(receiverID: receiverID)
             },
             defaultDeviceName: UIDevice.current.name,
-            preferences: preferences
+            preferences: preferences,
+            notificationService: notifications
         )
     }
 

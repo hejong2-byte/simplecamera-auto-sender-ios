@@ -5,6 +5,7 @@ struct USBReceiverView: View {
     @ObservedObject var model: USBReceiverViewModel
     @ObservedObject var incomingModel: IPhoneIncomingFilesViewModel
     @Environment(\.scenePhase) private var scenePhase
+    @FocusState private var isStoredFileSearchFocused: Bool
 
     var body: some View {
         ScrollView {
@@ -225,6 +226,10 @@ struct USBReceiverView: View {
                 dismissAction: model.canDismissReceiveOutcome ? { model.dismissReceiveOutcome() } : nil,
                 dismissalError: model.receiveOutcomeDismissalError)
 
+            if let check = model.receiveProgress?.capacityCheck {
+                Text(check.displayText).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+
             if model.receiveStatus.kind == .active,
                let progress = model.receiveProgress {
                 if !model.receiveByteText.isEmpty {
@@ -278,17 +283,50 @@ struct USBReceiverView: View {
             HStack {
                 Text("iPhone에 저장된 파일").font(.headline)
                 Spacer()
-                Text("\(model.storedFiles.count)개")
+                Text(model.storedFileCountText)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            if model.storedFiles.isEmpty {
-                Text("저장된 파일이 없습니다.")
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("파일 이름 검색", text: Binding(
+                        get: { model.storedFileSearchText }, set: { model.setStoredFileSearchText($0) }))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.done)
+                        .focused($isStoredFileSearchFocused)
+                        .onSubmit { isStoredFileSearchFocused = false }
+                        .accessibilityIdentifier("stored-file-search")
+                    if !model.storedFileSearchText.isEmpty {
+                        Button { model.setStoredFileSearchText("") } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .accessibilityLabel("파일 검색 지우기")
+                        .accessibilityIdentifier("stored-file-search-clear")
+                    }
+                }
+                .padding(8)
+                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                Menu {
+                    ForEach(IPhoneStoredFileTypeFilter.allCases) { filter in
+                        Button(filter.rawValue) { model.setStoredFileTypeFilter(filter) }
+                    }
+                } label: {
+                    Label(model.storedFileTypeFilter.rawValue, systemImage: "line.3.horizontal.decrease.circle")
+                }
+                .accessibilityIdentifier("stored-file-type-filter")
+                .accessibilityLabel("파일 종류 \(model.storedFileTypeFilter.rawValue)")
+            }
+            .font(.subheadline)
+            .disabled(!model.canEditStoredFileFilters)
+            if model.visibleStoredFiles.isEmpty {
+                Text(model.storedFileEmptyMessage)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(model.storedFiles) { file in
+                    ForEach(model.visibleStoredFiles) { file in
                         HStack(spacing: 8) {
                             Button {
                                 model.toggleStoredFileSelection(file.id)
@@ -477,6 +515,9 @@ struct USBReceiverView: View {
                 }
             }
             if let progress = model.visibleUSBExportProgress {
+                if let check = progress.capacityCheck {
+                    Text(check.displayText).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
                 if progress.stage != .failed && progress.stage != .cancelled, progress.totalBytes > 0 || progress.stage == .completed {
                     ProgressView(value: Double(model.usbExportDisplayedPercent), total: 100)
                         .tint(.cyan)

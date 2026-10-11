@@ -21,6 +21,8 @@ struct SafeZIPExtraction {
 
 struct SafeZIPExtractor {
     let fileManager: FileManager
+    var capacityQuery: StorageCapacityPreflight.Query = StorageCapacityPreflight.system
+    var capacityReport: (StorageCapacityCheck) -> Void = { _ in }
 
     private static let windowsKoreanEncoding = String.Encoding(
         rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(0x0422))
@@ -51,6 +53,9 @@ struct SafeZIPExtractor {
             }
             if entry.type == .file { totalBytes += size }
         }
+
+        try StorageCapacityPreflight.check(at: destination.deletingLastPathComponent(), requiredBytes: totalBytes, destination: .iphoneLocal,
+                                          query: capacityQuery, report: capacityReport)
 
         do {
             try fileManager.createDirectory(

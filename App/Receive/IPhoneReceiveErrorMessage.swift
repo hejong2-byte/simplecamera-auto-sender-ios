@@ -26,6 +26,7 @@ enum IPhoneReceiveErrorMessage {
     }
 
     static func message(_ error: Error) -> String {
+        if let shortage = error as? StorageCapacityInsufficient { return shortage.localizedDescription }
         if isCancellation(error) {
             return "수신이 일시정지되었습니다."
         }

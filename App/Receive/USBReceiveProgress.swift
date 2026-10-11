@@ -116,6 +116,9 @@ final class USBReceiveProgressStore: @unchecked Sendable {
     private let fileURL: URL?
     private var lastSavedAt: Date?
     private var interruption: USBReceiveProgress?
+    private var transferEventHandler: (@Sendable (TransferNotificationEvent) -> Void)?
+    private var exportJobID: String?
+    private var exportOutcomes: Set<TransferNotificationOutcome> = []
 
     init(fileURL: URL? = nil) {
         self.fileURL = fileURL
@@ -139,7 +142,11 @@ final class USBReceiveProgressStore: @unchecked Sendable {
         sourceFileIDs: [String] = [],
         archiveMode: IPhoneReceiveArchiveMode? = nil
     ) {
-        lock.withLock { interruption = nil }
+        lock.withLock {
+            interruption = nil
+            exportJobID = totalCount > 0 ? UUID().uuidString : nil
+            exportOutcomes = []
+        }
         publish(USBReceiveProgress(stage: .checkingSource, deliveryID: nil, fileName: fileName,
             currentIndex: 1, totalCount: totalCount, completedCount: 0, bytesReceived: 0,
             totalBytes: 0, startedAt: Date(), expiresAt: nil, errorMessage: nil,
@@ -166,7 +173,7 @@ final class USBReceiveProgressStore: @unchecked Sendable {
             completedCount: value.completedCount, bytesReceived: value.bytesReceived,
             totalBytes: value.totalBytes, startedAt: nil, expiresAt: nil, errorMessage: nil,
             detail: [value.detail, message].compactMap { $0 }.joined(separator: "\n"),
-            sourceFileIDs: value.sourceFileIDs, archiveMode: value.archiveMode)
+            sourceFileIDs: value.sourceFileIDs, archiveMode: value.archiveMode, capacityCheck: value.capacityCheck)
     }
 
     // Small local checkpoints, at most once a second while bytes advance. Stage
@@ -188,7 +195,7 @@ final class USBReceiveProgressStore: @unchecked Sendable {
                 totalBytes: latest.totalBytes, startedAt: latest.startedAt, expiresAt: latest.expiresAt,
                 errorMessage: latest.errorMessage,
                 detail: "USB 복사 진행 기록 저장 실패 · 앱을 종료하면 진행 표시를 복원하지 못할 수 있습니다.",
-                sourceFileIDs: latest.sourceFileIDs, archiveMode: latest.archiveMode)
+                sourceFileIDs: latest.sourceFileIDs, archiveMode: latest.archiveMode, capacityCheck: latest.capacityCheck)
         }
     }
 
@@ -196,10 +203,21 @@ final class USBReceiveProgressStore: @unchecked Sendable {
         lock.withLock { latest }
     }
 
-    func setTransferEventHandler(_ handler: @escaping @Sendable (TransferNotificationEvent) -> Void) {}
+    func setTransferEventHandler(_ handler: @escaping @Sendable (TransferNotificationEvent) -> Void) {
+        lock.withLock { transferEventHandler = handler }
+    }
+
+    // Receivers own actual outcomes; an exporter used by direct ZIP receive is
+    // subordinate and never begins the manual export notification scope.
+    func emitTransferEvent(_ event: TransferNotificationEvent) {
+        let handler = lock.withLock { transferEventHandler }
+        handler?(event)
+    }
 
     func publish(_ progress: USBReceiveProgress) {
         var delivered = progress
+        var event: TransferNotificationEvent?
+        var handler: (@Sendable (TransferNotificationEvent) -> Void)?
         let current = lock.withLock { () -> [
             AsyncStream<USBReceiveProgress>.Continuation
         ] in
@@ -210,9 +228,25 @@ final class USBReceiveProgressStore: @unchecked Sendable {
             latest = delivered
             persistLocked(force: oldStage != latest.stage || latest.stage == .paused)
             delivered = latest
+            if let jobID = exportJobID {
+                let outcome: TransferNotificationOutcome?
+                switch delivered.stage {
+                case .completed: outcome = .completed
+                case .failed: outcome = .failed
+                case .paused: outcome = .paused
+                default: outcome = nil
+                }
+                if let outcome, exportOutcomes.insert(outcome).inserted {
+                    event = TransferNotificationEvent(jobID: jobID, operation: .usbCopy,
+                        outcome: outcome, count: delivered.totalCount)
+                    handler = transferEventHandler
+                }
+                if delivered.stage == .completed || delivered.stage == .cancelled { exportJobID = nil }
+            }
             return Array(continuations.values)
         }
         current.forEach { _ = $0.yield(delivered) }
+        if let event { handler?(event) }
     }
 
     func publishFailure(_ message: String) {
@@ -231,7 +265,8 @@ final class USBReceiveProgressStore: @unchecked Sendable {
                 expiresAt: latest.expiresAt,
                 errorMessage: message,
                 sourceFileIDs: latest.sourceFileIDs,
-                archiveMode: latest.archiveMode
+                archiveMode: latest.archiveMode,
+                capacityCheck: latest.capacityCheck
             )
         }
         publish(failure)

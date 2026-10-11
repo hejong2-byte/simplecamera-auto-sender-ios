@@ -64,6 +64,7 @@ struct SettingsView: View {
                     set: { receiverModel.setAllowsCellular($0) }
                 )
             )
+            TransferNotificationSettings(service: receiverModel.notificationService)
         }
         .cardStyle()
         .task { await receiverModel.refresh() }
@@ -177,6 +178,31 @@ struct SettingsView: View {
         case .denied, .restricted: "사진 접근이 차단됨"
         case .notDetermined: "사진 접근 허용이 필요합니다"
         @unknown default: "사진 접근 상태를 확인해 주세요"
+        }
+    }
+}
+
+private struct TransferNotificationSettings: View {
+    @ObservedObject var service: TransferNotificationService
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("수신·USB 복사 알림", isOn: Binding(get: { service.isEnabled },
+                set: { enabled in Task { await service.setEnabled(enabled) } }))
+                .accessibilityIdentifier("transfer-notification-toggle")
+            Text(service.readinessMessage).font(.caption).foregroundStyle(.secondary)
+            if service.canOpenSettings {
+                Button("앱 알림 설정 열기") {
+                    guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                    UIApplication.shared.open(url)
+                }
+                .font(.subheadline)
+            }
+        }
+        .task { await service.refreshAuthorization() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await service.refreshAuthorization() } }
         }
     }
 }

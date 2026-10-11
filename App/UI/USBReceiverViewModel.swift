@@ -90,7 +90,9 @@ final class USBReceiverViewModel: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var allowsCellular: Bool
     @Published private(set) var selectedDestination: IPhoneReceiveDestination
-    @Published private(set) var storedFiles: [IPhoneStoredFile] = []
+    @Published private(set) var storedFiles: [IPhoneStoredFile] = [] {
+        didSet { pruneStoredFileSelection() }
+    }
     @Published private(set) var storedFileSearchText = ""
     @Published private(set) var storedFileTypeFilter = IPhoneStoredFileTypeFilter.all
     @Published private(set) var selectedStoredFileIDs: Set<String> = []
@@ -176,6 +178,7 @@ final class USBReceiverViewModel: ObservableObject {
     private let defaultDeviceName: String
     private let sleep: Sleep
     private let preferences: USBReceiverPreferences
+    let notificationService: TransferNotificationService
     private var progressTask: Task<Void, Never>?
     private var exportProgressTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
@@ -244,7 +247,8 @@ final class USBReceiverViewModel: ObservableObject {
         defaultDeviceName: String,
         preferences: USBReceiverPreferences = USBReceiverPreferences(),
         sleep: @escaping Sleep = { try await Task.sleep(for: .seconds(2)) },
-        storageExplorer: USBStorageFileExplorer = USBStorageFileExplorer()
+        storageExplorer: USBStorageFileExplorer = USBStorageFileExplorer(),
+        notificationService: TransferNotificationService? = nil
     ) {
         self.uploadCredentialStore = uploadCredentialStore
         self.registrationStore = registrationStore
@@ -281,6 +285,7 @@ final class USBReceiverViewModel: ObservableObject {
         self.now = now
         self.defaultDeviceName = defaultDeviceName
         self.preferences = preferences
+        self.notificationService = notificationService ?? TransferNotificationService(preferences: preferences)
         allowsCellular = preferences.allowsCellular
         selectedDestination = preferences.selectedDestination
         self.sleep = sleep
@@ -899,12 +904,44 @@ final class USBReceiverViewModel: ObservableObject {
         }
     }
 
-    var visibleStoredFiles: [IPhoneStoredFile] { storedFiles }
-    var storedFileCountText: String { "\(storedFiles.count)개" }
-    var storedFileEmptyMessage: String { "저장된 파일이 없습니다." }
-    var canEditStoredFileFilters: Bool { true }
-    func setStoredFileSearchText(_ text: String) { storedFileSearchText = text }
-    func setStoredFileTypeFilter(_ filter: IPhoneStoredFileTypeFilter) { storedFileTypeFilter = filter }
+    var visibleStoredFiles: [IPhoneStoredFile] {
+        let query = normalizedStoredFileQuery
+        return storedFiles.filter { file in
+            storedFileTypeFilter.includes(file.name)
+                && (query.isEmpty || file.name.precomposedStringWithCanonicalMapping
+                    .range(of: query, options: .caseInsensitive) != nil)
+        }
+    }
+    private var normalizedStoredFileQuery: String {
+        storedFileSearchText.trimmingCharacters(in: .whitespacesAndNewlines).precomposedStringWithCanonicalMapping
+    }
+    var storedFileCountText: String {
+        storedFileTypeFilter != .all || !normalizedStoredFileQuery.isEmpty
+            ? "\(visibleStoredFiles.count)/\(storedFiles.count)개" : "\(storedFiles.count)개"
+    }
+    var storedFileEmptyMessage: String {
+        storedFiles.isEmpty ? "저장된 파일이 없습니다." : "검색 조건에 맞는 파일이 없습니다."
+    }
+    var canEditStoredFileFilters: Bool {
+        !isExportingToUSB && !isReceivingFile && !isDeletingStoredFiles && !isCleaningTemporaryFiles
+            && !isVerifyingUSBCopies && !isCleaningUSBFolder && !needsStoredFileDeletionConfirmation
+            && !needsStoredZIPExportChoice && !needsStoredOverwriteConfirmation && !needsDeletionDecision
+            && !needsTemporaryCleanupConfirmation && sharingFile == nil && previewFile == nil
+    }
+    func setStoredFileSearchText(_ text: String) {
+        guard canEditStoredFileFilters, storedFileSearchText != text else { return }
+        storedFileSearchText = text
+        pruneStoredFileSelection()
+    }
+    func setStoredFileTypeFilter(_ filter: IPhoneStoredFileTypeFilter) {
+        guard canEditStoredFileFilters, storedFileTypeFilter != filter else { return }
+        storedFileTypeFilter = filter
+        pruneStoredFileSelection()
+    }
+    private func pruneStoredFileSelection() {
+        let visible = selectedStoredFileIDs.intersection(visibleStoredFiles.map(\.id))
+        if visible != selectedStoredFileIDs { selectedStoredFileIDs = visible }
+    }
 
     func requestStoredFileDeletion() {
         guard canDeleteStoredFiles, !needsStoredFileDeletionConfirmation,
@@ -916,7 +953,7 @@ final class USBReceiverViewModel: ObservableObject {
             return
         }
         storedFileDeletionError = nil
-        storedFilesPendingDeletion = storedFiles.filter { selectedStoredFileIDs.contains($0.id) }
+        storedFilesPendingDeletion = visibleStoredFiles.filter { selectedStoredFileIDs.contains($0.id) }
     }
 
     func cancelStoredFileDeletion() {
@@ -975,7 +1012,7 @@ final class USBReceiverViewModel: ObservableObject {
         guard !isExportingToUSB, !isReceivingFile, sharingFile == nil,
               !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation,
               !isCleaningUSBFolder, !needsStoredZIPExportChoice else { return }
-        let selected = storedFiles.filter { selectedStoredFileIDs.contains($0.id) }
+        let selected = visibleStoredFiles.filter { selectedStoredFileIDs.contains($0.id) }
         guard !selected.isEmpty else { return }
         if selected.contains(where: Self.isZIP) {
             storedZIPExportFilesPendingChoice = selected

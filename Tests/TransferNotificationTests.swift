@@ -25,6 +25,17 @@ final class TransferNotificationTests: XCTestCase {
         XCTAssertFalse(fixture.preferences.transferNotificationsEnabled)
     }
 
+    func testPersistedOptInSchedulesFromFreshServiceWithoutOpeningSettings() async throws {
+        let fixture = try makeFixture(status: .authorized)
+        fixture.preferences.transferNotificationsEnabled = true
+        let restarted = TransferNotificationService(preferences: fixture.preferences, client: fixture.client)
+        XCTAssertFalse(restarted.isReady)
+        await restarted.handle(event(.completed))
+        await assertRequestCount(1, fixture.client)
+        await assertPermissionCount(0, fixture.client)
+        XCTAssertTrue(restarted.isReady)
+    }
+
     func testDisablingWhilePermissionIsPendingCannotReenableOrReplayOldEvents() async throws {
         let suite = "DelayedNotificationPermission.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

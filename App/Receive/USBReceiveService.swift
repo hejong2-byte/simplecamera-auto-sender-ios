@@ -48,6 +48,9 @@ actor USBReceiveService {
     private let zipStagingDirectory: URL
     private let zipPipeline: USBZIPReceivePipeline
     private let zipExporter: IPhoneUSBExportService?
+    private let capacityQuery: StorageCapacityPreflight.Query
+    private var currentCapacityCheck: StorageCapacityCheck?
+    private var activeDeliveryID: UUID?
     private var isRunning = false
 
     init(
@@ -92,22 +95,28 @@ actor USBReceiveService {
             )
         )
         self.zipExporter = zipExporter
+        self.capacityQuery = capacityQuery
     }
 
     func runOnce() async throws -> USBReceiveSummary {
         guard !isRunning else { return USBReceiveSummary(discovered: 0, completed: 0) }
         isRunning = true
-        defer { isRunning = false }
+        activeDeliveryID = nil
+        currentCapacityCheck = nil
+        defer { isRunning = false; activeDeliveryID = nil }
         do {
             return try await performRunOnce()
         } catch let error where IPhoneReceiveErrorMessage.isCancellation(error) {
+            emitActiveOutcome(.paused)
             throw CancellationError()
         } catch let error as USBZIPReceivePipelineError {
             if case .overwriteRequired = error { throw error }
-            progressStore.publishFailure(Self.errorMessage(error))
+            publishRunFailure(error)
+            emitActiveOutcome(.failed)
             throw error
         } catch {
-            progressStore.publishFailure(Self.errorMessage(error))
+            publishRunFailure(error)
+            emitActiveOutcome(.failed)
             throw error
         }
     }
@@ -266,6 +275,10 @@ actor USBReceiveService {
             where !acknowledged.contains(delivery.deliveryID) {
             try Task.checkCancellation()
             if delivery.state == .ackDeleting { continue }
+            activeDeliveryID = delivery.deliveryID
+            currentCapacityCheck = nil
+            publish(.checkingSource, delivery: delivery, currentIndex: offset + 1,
+                    totalCount: deliveries.count, completedCount: completed, bytesReceived: 0, startedAt: now())
             _ = try await client.lease(
                 receiverID: credentials.identity.receiverID,
                 deliveryID: delivery.deliveryID,
@@ -282,6 +295,8 @@ actor USBReceiveService {
             )
             changeSummary = changeSummary.adding(receivedChanges)
             completed += 1
+            emitActiveOutcome(.completed)
+            activeDeliveryID = nil
         }
         if completed > 0 {
             progressStore.publish(USBReceiveProgress(
@@ -296,7 +311,8 @@ actor USBReceiveService {
                 startedAt: nil,
                 expiresAt: nil,
                 errorMessage: nil,
-                detail: changeSummary.totalFiles > 0 ? changeSummary.displayText : nil
+                detail: changeSummary.totalFiles > 0 ? changeSummary.displayText : nil,
+                capacityCheck: currentCapacityCheck
             ))
         }
         return USBReceiveSummary(discovered: deliveries.count, completed: completed)
@@ -362,6 +378,8 @@ actor USBReceiveService {
                 try ledger.save(reset)
                 continue
             }
+            activeDeliveryID = checkpoint.deliveryID
+            currentCapacityCheck = nil
             progressStore.publish(USBReceiveProgress(
                 stage: .acknowledging,
                 deliveryID: checkpoint.deliveryID,
@@ -388,6 +406,8 @@ actor USBReceiveService {
                 try? fileManager.removeItem(at: sourceZIP)
             }
             acknowledged.insert(checkpoint.deliveryID)
+            emitActiveOutcome(.completed)
+            activeDeliveryID = nil
         }
         return acknowledged
     }
@@ -716,7 +736,8 @@ actor USBReceiveService {
         )
         try validateCapacity(
             at: zipStagingDirectory,
-            requiredBytes: delivery.size - resumeOffset
+            requiredBytes: delivery.size - resumeOffset,
+            destination: .iphoneLocal
         )
 
         var hasher = SHA256()
@@ -838,8 +859,12 @@ actor USBReceiveService {
                     preservePartialOnCancellation: true,
                     overwriteExisting: overwriteExisting
                 )
+                currentCapacityCheck = progressStore.snapshot().capacityCheck
                 if exported.cancelled { throw CancellationError() }
                 if let failure = exported.failed.first {
+                    if failure.error == .insufficientSpace, let check = currentCapacityCheck {
+                        throw StorageCapacityInsufficient(check: check)
+                    }
                     if failure.error == .overwriteConfirmationRequired {
                         throw USBZIPReceivePipelineError.overwriteRequired(
                             USBZIPOverwriteRequest(
@@ -916,7 +941,8 @@ actor USBReceiveService {
                         bytesReceived: bytes,
                         totalBytes: total,
                         startedAt: pipelinePhaseStartedAt,
-                        detail: detail
+                        detail: detail,
+                        capacityCheck: currentCapacityCheck
                     )
                 }
             }
@@ -1026,13 +1052,30 @@ actor USBReceiveService {
         return value
     }
 
-    private func validateCapacity(at url: URL, requiredBytes: Int64) throws {
-        let attributes = try fileManager.attributesOfFileSystem(forPath: url.path)
-        guard let free = (attributes[.systemFreeSize] as? NSNumber)?.int64Value else {
-            return
+    private func validateCapacity(at url: URL, requiredBytes: Int64, destination: IPhoneReceiveDestination = .usb) throws {
+        try StorageCapacityPreflight.check(at: url, requiredBytes: requiredBytes,
+                                          destination: destination, query: capacityQuery) { check in
+            currentCapacityCheck = check
+            let value = progressStore.snapshot()
+            progressStore.publish(USBReceiveProgress(stage: value.stage, destination: value.destination,
+                deliveryID: value.deliveryID, fileName: value.fileName, currentIndex: value.currentIndex,
+                totalCount: value.totalCount, completedCount: value.completedCount, bytesReceived: value.bytesReceived,
+                totalBytes: value.totalBytes, startedAt: value.startedAt, expiresAt: value.expiresAt,
+                errorMessage: value.errorMessage, detail: value.detail, capacityCheck: check))
         }
-        if free < max(0, requiredBytes) {
-            throw USBReceiveServiceError.insufficientSpace
+    }
+
+    private func emitActiveOutcome(_ outcome: TransferNotificationOutcome) {
+        guard let activeDeliveryID else { return }
+        progressStore.emitTransferEvent(TransferNotificationEvent(jobID: activeDeliveryID.uuidString,
+            operation: .receive, outcome: outcome, count: 1))
+    }
+
+    private func publishRunFailure(_ error: Error) {
+        if activeDeliveryID == nil {
+            progressStore.publishDiscoveryFailure(Self.errorMessage(error), destination: .usb)
+        } else {
+            progressStore.publishFailure(Self.errorMessage(error))
         }
     }
 
@@ -1201,7 +1244,8 @@ actor USBReceiveService {
             startedAt: startedAt,
             expiresAt: delivery.expiresAt,
             errorMessage: nil,
-            detail: detail
+            detail: detail,
+            capacityCheck: currentCapacityCheck
         ))
     }
 

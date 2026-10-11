@@ -4,6 +4,12 @@ import ZIPFoundation
 @testable import SimpleCameraAutoSender
 
 final class StorageCapacityPreflightTests: XCTestCase {
+    func testUnavailableCapacityURLDoesNotClimbIntoAnotherVolume() throws {
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("removed-provider/usb")
+        XCTAssertNil(try StorageCapacityPreflight.system(missing))
+    }
+
     func testOldProgressCheckpointDecodesWithoutCapacityAndNewExportClearsPreviousCheck() throws {
         let old = """
         {"stage":"completed","destination":"usb","currentIndex":1,"totalCount":1,"completedCount":1,"bytesReceived":10,"totalBytes":10}

@@ -196,6 +196,8 @@ actor IPhoneUSBExportService {
     private let zipWorkingDirectory: URL
     private let now: @Sendable () -> Date
     private let coordinateWrite: CoordinateWrite
+    private let capacityQuery: StorageCapacityPreflight.Query
+    private var currentCapacityCheck: StorageCapacityCheck?
     private var cleanupFailures: [String] = []
     private var activeSourceFileIDs: [String]?
     private var activeArchiveMode: IPhoneReceiveArchiveMode?
@@ -226,6 +228,7 @@ actor IPhoneUSBExportService {
         self.zipWorkingDirectory = zipWorkingDirectory
         self.now = now
         self.coordinateWrite = coordinateWrite
+        self.capacityQuery = capacityQuery
     }
 
     static func coordinateWriteSystem(_ url: URL, operation: (URL) throws -> Void) throws {
@@ -327,6 +330,7 @@ actor IPhoneUSBExportService {
         var cancelled = false
         cleanupFailures = []
         for (index, file) in files.enumerated() {
+            currentCapacityCheck = nil
             activeSourceFileIDs = Array(files[index...].map(\.id))
             activeArchiveMode = archiveMode
             do {
@@ -362,7 +366,8 @@ actor IPhoneUSBExportService {
                 stage: .cancelled, deliveryID: nil, fileName: nil, currentIndex: verified.count,
                 totalCount: files.count, completedCount: verified.count, bytesReceived: 0,
                 totalBytes: 0, startedAt: nil, expiresAt: nil, errorMessage: summary.cleanupWarning,
-                detail: cleanupFailures.isEmpty ? "복사 취소 · 임시파일 정리 완료 · 원본 유지" : "복사 취소 · 일부 임시파일 정리 실패"))
+                detail: cleanupFailures.isEmpty ? "복사 취소 · 임시파일 정리 완료 · 원본 유지" : "복사 취소 · 일부 임시파일 정리 실패",
+                capacityCheck: currentCapacityCheck))
         } else if failed.isEmpty {
             let copiedBytes = verified.reduce(Int64(0)) { total, record in
                 total + (record.copiedFiles?.reduce(Int64(0)) { $0 + $1.size } ?? record.sourceSize)
@@ -380,7 +385,8 @@ actor IPhoneUSBExportService {
                 startedAt: nil,
                 expiresAt: nil,
                 errorMessage: nil,
-                detail: summary.changeSummary.displayText
+                detail: summary.changeSummary.displayText,
+                capacityCheck: currentCapacityCheck
             ))
         } else {
             let failedIndex = files.firstIndex { $0.id == failed[0].sourceID } ?? 0
@@ -400,7 +406,8 @@ actor IPhoneUSBExportService {
                 errorMessage: summary.errorMessage,
                 detail: summary.changeSummary.displayText,
                 sourceFileIDs: failed.map(\.sourceID),
-                archiveMode: archiveMode
+                archiveMode: archiveMode,
+                capacityCheck: currentCapacityCheck
             ))
         }
         return summary
@@ -574,10 +581,6 @@ actor IPhoneUSBExportService {
             Self.partialDirectoryName,
             isDirectory: true
         )
-        try fileManager.createDirectory(
-            at: partialDirectory,
-            withIntermediateDirectories: true
-        )
         let resumeIdentifier = Self.resumeIdentifier(
             for: file,
             destination: destination,
@@ -589,6 +592,7 @@ actor IPhoneUSBExportService {
             "export-\(resumeIdentifier.uuidString.lowercased()).partial"
         )
         var resumeOffset: Int64 = 0
+        var rejectedPartial = false
         if fileManager.fileExists(atPath: partialURL.path) {
             let existingSize = (try? fileSize(partialURL)) ?? -1
             if existingSize >= 0,
@@ -600,9 +604,17 @@ actor IPhoneUSBExportService {
                )) == true {
                 resumeOffset = existingSize
             } else {
-                try fileManager.removeItem(at: partialURL)
+                rejectedPartial = true
             }
         }
+        try StorageCapacityPreflight.check(at: destination.url, requiredBytes: sourceSize - resumeOffset,
+                                          destination: .usb, query: capacityQuery) { check in
+            currentCapacityCheck = check
+            publish(file: file, currentIndex: currentIndex, totalCount: totalCount,
+                    completedCount: completedCount, bytes: resumeOffset, startedAt: startedAt)
+        }
+        try fileManager.createDirectory(at: partialDirectory, withIntermediateDirectories: true)
+        if rejectedPartial { try fileManager.removeItem(at: partialURL) }
         if !fileManager.fileExists(atPath: partialURL.path),
            !fileManager.createFile(atPath: partialURL.path, contents: nil) {
             throw IPhoneUSBExportError.destinationNotWritable
@@ -742,8 +754,9 @@ actor IPhoneUSBExportService {
             "extract-\(resumeIdentifier.uuidString.lowercased())",
             isDirectory: true
         )
+        var retainForCapacity = false
         defer {
-            if !preservePartialOnCancellation || !Task.isCancelled {
+            if !retainForCapacity && (!preservePartialOnCancellation || !Task.isCancelled) {
                 removeExportTemporaryItem(extractionRoot)
             }
         }
@@ -763,7 +776,11 @@ actor IPhoneUSBExportService {
                 try fileManager.removeItem(at: extractionRoot)
             }
             do {
-                extraction = try SafeZIPExtractor(fileManager: fileManager)
+                extraction = try SafeZIPExtractor(fileManager: fileManager, capacityQuery: capacityQuery,
+                    capacityReport: { check in
+                        self.currentCapacityCheck = check
+                        report(.checkingSource, 0, check.requiredBytes, "압축 해제 전 용량 확인")
+                    })
                     .extract(file.url, to: extractionRoot) { bytes, total, name, done, count in
                         report(.extracting, bytes, total, "1/2 · 압축 해제·손상 검사 \(done)/\(count)개\n\(name)")
                     }
@@ -845,9 +862,8 @@ actor IPhoneUSBExportService {
         )
         let isResumingUSBPartial = fileManager.fileExists(atPath: partialURL.path)
         if !isResumingUSBPartial { try checkRootConflicts() }
-        try fileManager.createDirectory(at: partialURL, withIntermediateDirectories: true)
         defer {
-            if !preservePartialOnCancellation || !Task.isCancelled {
+            if !retainForCapacity && (!preservePartialOnCancellation || !Task.isCancelled) {
                 removeExportTemporaryItem(partialURL, destination: destination)
             }
         }
@@ -867,23 +883,42 @@ actor IPhoneUSBExportService {
         }
 
         var existingOffsets: [String: Int64] = [:]
+        var rejectedPartials: [URL] = []
         var resumableBytes = extraction.files
             .filter { topLevelName($0.relativePath).map(finalizedTopLevelNames.contains) == true }
             .reduce(Int64(0)) { $0 + $1.size }
-        for extractedFile in extraction.files {
+        for (index, extractedFile) in extraction.files.enumerated() {
+            try Task.checkCancellation()
+            report(.checkingSource, resumableBytes, extraction.totalBytes,
+                   "이어받기 확인 \(index + 1)/\(extraction.files.count)개\n\(extractedFile.relativePath)")
             if topLevelName(extractedFile.relativePath).map(finalizedTopLevelNames.contains) == true {
                 continue
             }
             let partialFile = partialURL.appendingPathComponent(extractedFile.relativePath)
             guard fileManager.fileExists(atPath: partialFile.path) else { continue }
-            if let existingSize = try? fileSize(partialFile),
-               existingSize <= extractedFile.size {
+            if let existingSize = try? fileSize(partialFile), existingSize >= 0,
+               existingSize <= extractedFile.size,
+               (try? resumeBoundaryMatches(source: extractedFile.url, partial: partialFile,
+                                           offset: existingSize)) == true {
                 existingOffsets[extractedFile.relativePath] = existingSize
                 resumableBytes += existingSize
             } else {
-                try fileManager.removeItem(at: partialFile)
+                rejectedPartials.append(partialFile)
             }
         }
+
+        do {
+            try StorageCapacityPreflight.check(at: destination.url,
+                requiredBytes: extraction.totalBytes - resumableBytes, destination: .usb, query: capacityQuery) { check in
+                    currentCapacityCheck = check
+                    report(.copyingToUSB, resumableBytes, extraction.totalBytes, "USB 복사 전 용량 확인")
+                }
+        } catch let shortage as StorageCapacityInsufficient {
+            retainForCapacity = true
+            throw shortage
+        }
+        try fileManager.createDirectory(at: partialURL, withIntermediateDirectories: true)
+        for rejected in rejectedPartials { try fileManager.removeItem(at: rejected) }
 
         phaseStartedAt = now()
         let resumeSummary = resumableBytes > 0
@@ -931,23 +966,7 @@ actor IPhoneUSBExportService {
                 continue
             }
             let partialFile = partialURL.appendingPathComponent(extractedFile.relativePath)
-            var resumeOffset: Int64 = 0
-            let previouslyCounted = existingOffsets[extractedFile.relativePath] ?? 0
-            if fileManager.fileExists(atPath: partialFile.path) {
-                let existingSize = (try? fileSize(partialFile)) ?? -1
-                if existingSize >= 0,
-                   existingSize <= extractedFile.size,
-                   (try? resumeBoundaryMatches(
-                       source: extractedFile.url,
-                       partial: partialFile,
-                       offset: existingSize
-                   )) == true {
-                    resumeOffset = existingSize
-                } else {
-                    try fileManager.removeItem(at: partialFile)
-                    resumableBytes -= previouslyCounted
-                }
-            }
+            let resumeOffset = existingOffsets[extractedFile.relativePath] ?? 0
             if !fileManager.fileExists(atPath: partialFile.path),
                !fileManager.createFile(atPath: partialFile.path, contents: nil) {
                 throw IPhoneUSBExportError.destinationNotWritable
@@ -1418,11 +1437,16 @@ actor IPhoneUSBExportService {
             errorMessage: nil,
             detail: detail,
             sourceFileIDs: activeSourceFileIDs,
-            archiveMode: activeArchiveMode
+            archiveMode: activeArchiveMode,
+            capacityCheck: currentCapacityCheck
         ))
     }
 
     private static func failure(sourceID: String, error: Error) -> IPhoneUSBExportFailure {
+        if let shortage = error as? StorageCapacityInsufficient {
+            return IPhoneUSBExportFailure(sourceID: sourceID, error: .insufficientSpace,
+                                          detail: shortage.localizedDescription)
+        }
         if let known = error as? IPhoneUSBExportError {
             return IPhoneUSBExportFailure(sourceID: sourceID, error: known)
         }
