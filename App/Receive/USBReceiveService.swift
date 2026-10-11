@@ -941,8 +941,7 @@ actor USBReceiveService {
                         bytesReceived: bytes,
                         totalBytes: total,
                         startedAt: pipelinePhaseStartedAt,
-                        detail: detail,
-                        capacityCheck: currentCapacityCheck
+                        detail: detail
                     )
                 }
             }
