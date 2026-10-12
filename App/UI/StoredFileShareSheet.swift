@@ -10,12 +10,22 @@ extension IPhoneStoredFile {
 }
 
 struct StoredFileShareSheet: UIViewControllerRepresentable {
-    let file: IPhoneStoredFile
+    let files: [IPhoneStoredFile]
     let onFinish: @MainActor (Error?) -> Void
+
+    init(file: IPhoneStoredFile, onFinish: @escaping @MainActor (Error?) -> Void) {
+        self.files = [file]
+        self.onFinish = onFinish
+    }
+
+    init(files: [IPhoneStoredFile], onFinish: @escaping @MainActor (Error?) -> Void) {
+        self.files = files
+        self.onFinish = onFinish
+    }
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
         // Share the original URL without loading the file or extracting ZIP contents.
-        let controller = UIActivityViewController(activityItems: [file.url], applicationActivities: nil)
+        let controller = UIActivityViewController(activityItems: files.map(\.url), applicationActivities: nil)
         controller.completionWithItemsHandler = { _, _, _, error in
             Task { @MainActor in onFinish(error) }
         }

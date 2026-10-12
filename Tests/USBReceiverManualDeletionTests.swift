@@ -105,6 +105,7 @@ final class USBReceiverManualDeletionTests: XCTestCase {
         try FileManager.default.removeItem(at: file.url)
 
         fixture.model.openStoredFile(file)
+        await fixture.model.refresh()
 
         XCTAssertNil(fixture.model.previewFile)
         XCTAssertNotNil(fixture.model.storedFilePreviewError)

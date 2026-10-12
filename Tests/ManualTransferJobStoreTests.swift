@@ -3,6 +3,73 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class ManualTransferJobStoreTests: XCTestCase {
+    func testOnlyOneConcurrentRetryClaimIsAcceptedAndFailedPreparationReleasesIt() async throws {
+        let root = temporaryDirectory().appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ManualTransferJobStore(fileURL: root.appendingPathComponent("queue.json"))
+        let entry = ManualTransferHistoryEntry(id: UUID(), fileName: "image.jpg", kind: .photo,
+            recipientMailboxID: UUID(), completedAt: Date(), failure: .network,
+            assetIdentifier: "original", sha256: nil, recipientCredentialBinding: nil)
+        try await store.recordHistory(entry)
+        let accepted = await withTaskGroup(of: Bool.self) { group in
+            for _ in 0..<20 {
+                group.addTask { (try? await store.claimRetry(id: entry.id)) != nil }
+            }
+            var count = 0
+            for await result in group { if result { count += 1 } }
+            return count
+        }
+        XCTAssertEqual(accepted, 1)
+        try await store.finishRetry(id: entry.id, enqueued: false)
+        _ = try await store.claimRetry(id: entry.id)
+        try await store.finishRetry(id: entry.id, enqueued: true)
+        let reopened = ManualTransferJobStore(fileURL: root.appendingPathComponent("queue.json"))
+        do {
+            _ = try await reopened.claimRetry(id: entry.id)
+            XCTFail("The retry marker must survive reopening")
+        } catch { XCTAssertEqual(error as? ManualTransferRetryError, .alreadyRetrying) }
+    }
+
+    func testOldQueueWithoutHistoryMigratesAndAtomicUpdatesPreserveConcurrentCounts() async throws {
+        let root = temporaryDirectory().appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("queue.json")
+        try Data(#"{"batches":[],"jobs":[]}"#.utf8).write(to: url)
+        let store = ManualTransferJobStore(fileURL: url)
+        let loaded = try await store.load()
+        XCTAssertTrue(loaded.history.isEmpty)
+        let id = UUID()
+        try await store.upsertBatch(.init(id: id, kind: .photo, selectedCount: 100,
+            preparedCount: 0, uploadedCount: 0, failedCount: 0))
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<100 {
+                group.addTask { _ = try await store.advanceBatch(id: id, preparedBy: 1, failedBy: 1) }
+            }
+            try await group.waitForAll()
+        }
+        let persisted = try await ManualTransferJobStore(fileURL: url).load()
+        XCTAssertEqual(persisted.batches.first?.preparedCount, 100)
+        XCTAssertEqual(persisted.batches.first?.failedCount, 100)
+    }
+
+    func testFailedReplacementDoesNotPublishUndurableCachedState() async throws {
+        let root = temporaryDirectory().appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("queue.json")
+        let store = ManualTransferJobStore(fileURL: url)
+        try await store.replace(.empty)
+        try FileManager.default.removeItem(at: root)
+        try Data("blocks directory creation".utf8).write(to: root)
+        do {
+            try await store.upsertBatch(.init(id: UUID(), kind: .photo, selectedCount: 1,
+                preparedCount: 0, uploadedCount: 0, failedCount: 0))
+            XCTFail("Replacement must fail without a writable parent directory")
+        } catch {}
+        let state = try await store.load()
+        XCTAssertEqual(state, .empty)
+    }
+
     func testQueueStateRoundTripsWithoutPersistingCredentials() async throws {
         let directory = temporaryDirectory()
         let storeURL = directory.appendingPathComponent("queue.json")

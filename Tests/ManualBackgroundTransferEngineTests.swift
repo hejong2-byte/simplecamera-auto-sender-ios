@@ -3,6 +3,88 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class ManualBackgroundTransferEngineTests: XCTestCase {
+    func testSuspendedRetryDelayDoesNotBlockUnrelatedCompletionOrSystemHandler() async throws {
+        let retrying = try await makeFixture(totalBytes: 10, uploadID: nil)
+        let successful = try await makeFixture(totalBytes: 10, uploadID: nil)
+        try await retrying.store.replace(.init(
+            batches: [retrying.batch, successful.batch], jobs: [retrying.job, successful.job]
+        ))
+        let sleeper = PausedManualRetrySleeper()
+        addTeardownBlock { await sleeper.release() }
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("test-secret")
+        let engine = ManualBackgroundTransferEngine(
+            scheduler: FakeManualUploadScheduler(), jobStore: retrying.store,
+            credentialStore: credentials, sleep: { _ in await sleeper.pause() }
+        )
+        let registry = BackgroundSessionCompletionRegistry()
+        let session = BackgroundManualUploadSession(completionRegistry: registry)
+        session.bind(engine: engine)
+        let retryRecorded = expectation(description: "retry state is durable")
+        let successfulCompletion = expectation(description: "unrelated success was processed")
+        let updates = await engine.updates()
+        let consumer = Task {
+            for await progress in updates {
+                if progress.batchID == retrying.batch.id, progress.stage == .retrying {
+                    retryRecorded.fulfill()
+                }
+                if progress.batchID == successful.batch.id, progress.stage == .completed {
+                    successfulCompletion.fulfill()
+                    break
+                }
+            }
+        }
+        defer { consumer.cancel() }
+        let failedTask = URLSession.shared.dataTask(with: URL(string: "https://relay.example")!)
+        failedTask.taskDescription = try ManualUploadTaskDescriptor(
+            batchID: retrying.batch.id, jobID: retrying.job.id, operation: .single
+        ).encodedTaskDescription()
+        session.urlSession(URLSession.shared, task: failedTask, didCompleteWithError: URLError(.timedOut))
+        await fulfillment(of: [retryRecorded], timeout: 5)
+
+        // A described, never-resumed test task supplies an already received HTTP success.
+        let completedTask = SuccessfulManualUploadTask()
+        completedTask.taskDescription = try ManualUploadTaskDescriptor(
+            batchID: successful.batch.id, jobID: successful.job.id, operation: .single
+        ).encodedTaskDescription()
+        session.urlSession(URLSession.shared, task: completedTask, didCompleteWithError: nil)
+        let finished = expectation(description: "system handler excludes future retry delay")
+        let drained = expectation(description: "callback cleanup finished")
+        registry.store(identifier: AppConfiguration.manualBackgroundSessionIdentifier) {
+            finished.fulfill()
+            drained.fulfill()
+        }
+        session.urlSessionDidFinishEvents(forBackgroundURLSession: URLSession.shared)
+        await fulfillment(of: [successfulCompletion, finished], timeout: 1)
+        let state = try await retrying.store.load()
+        XCTAssertEqual(state.batches.first(where: { $0.id == successful.batch.id })?.uploadedCount, 1)
+        XCTAssertFalse(state.jobs.contains(where: { $0.id == successful.job.id }))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: successful.job.exportedFileURL.path))
+        XCTAssertEqual(state.jobs.first(where: { $0.id == retrying.job.id })?.stage, .retrying)
+
+        await sleeper.release()
+        await fulfillment(of: [drained], timeout: 5)
+    }
+
+    func testRetryMarkerAndQueuedJobPersistTogether() async throws {
+        let original = try await makeFixture(totalBytes: 10, uploadID: nil)
+        let engine = makeEngine(fixture: original, scheduler: FakeManualUploadScheduler())
+        await engine.taskCompleted(.init(batchID: original.batch.id, jobID: original.job.id, operation: .single),
+            response: .status(403), body: Data(), error: nil)
+        let retry = try await makeFixture(totalBytes: 10, uploadID: nil)
+        var job = retry.job
+        job.retryHistoryID = original.job.id
+        try await original.store.enqueue([job])
+        let reopened = ManualTransferJobStore(fileURL: original.directory.appendingPathComponent("queue.json"))
+        let state = try await reopened.load()
+        XCTAssertTrue(state.jobs.contains(where: { $0.id == job.id }))
+        XCTAssertNotNil(state.history.first(where: { $0.id == original.job.id })?.retriedAt)
+        do {
+            _ = try await reopened.claimRetry(id: original.job.id)
+            XCTFail("A durable queued retry must prevent duplicate retry after restart")
+        } catch { XCTAssertEqual(error as? ManualTransferRetryError, .alreadyRetrying) }
+    }
+
     func testFailureHistoryKeepsMostRecent100OutcomesWithoutPruningActiveJob() async throws {
         let active = try await makeFixture(totalBytes: 10, uploadID: nil)
         let engine = makeEngine(fixture: active, scheduler: FakeManualUploadScheduler())
@@ -471,6 +553,27 @@ private struct EngineFixture {
     let store: ManualTransferJobStore
     let batch: ManualTransferBatch
     let job: ManualTransferJob
+}
+
+private final class SuccessfulManualUploadTask: URLSessionTask, @unchecked Sendable {
+    override var response: URLResponse? { HTTPURLResponse.success() }
+}
+
+private actor PausedManualRetrySleeper {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    func pause() async {
+        guard !released else { return }
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+    func release() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+    }
 }
 
 private final class PausedManualCredentialStore: CredentialStore, @unchecked Sendable {

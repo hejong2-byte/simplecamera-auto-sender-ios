@@ -20,6 +20,7 @@ struct ContentView: View {
     private enum Destination: Hashable {
         case receiver
         case text
+        case history
         case settings
     }
 
@@ -43,6 +44,10 @@ struct ContentView: View {
                 VStack(spacing: 12) {
                     automaticStatusCard
                     manualTransferCard
+                    Button { navigationPath.append(.history) } label: {
+                        Label("수동 전송 기록", systemImage: "clock.arrow.circlepath")
+                    }
+                    .accessibilityIdentifier("manual-transfer-history")
                     if model.shouldShowManualStatus {
                         manualStatusCard
                     }
@@ -69,6 +74,9 @@ struct ContentView: View {
                     USBReceiverView(model: receiverModel, incomingModel: incomingModel)
                 case .text:
                     TextTransferView(model: textModel)
+                case .history:
+                    ManualTransferHistoryView(model: model, savedRecipients: textModel.savedRecipients)
+                        .task { await textModel.refreshRecipients() }
                 case .settings:
                     SettingsView(
                         model: model,
@@ -157,12 +165,14 @@ struct ContentView: View {
         }
         .task {
             let active = scenePhase == .active
+            if active { model.refreshPhotoAuthorization() }
             incomingModel.setActive(active)
             textModel.setActive(active)
             receiverModel.setAppActive(active)
         }
         .onChange(of: scenePhase) { _, phase in
             let active = phase == .active
+            if active { model.refreshPhotoAuthorization() }
             incomingModel.setActive(active)
             textModel.setActive(active)
             receiverModel.setAppActive(active)
@@ -233,9 +243,13 @@ struct ContentView: View {
             && !receiverModel.isChoosingUSBFolder && !receiverModel.isShowingSettingsConfirmation
             && !receiverModel.isDeletingStoredFiles && !receiverModel.needsStoredFileDeletionConfirmation
             && !receiverModel.needsStoredZIPExportChoice
+            && receiverModel.zipContentsFile == nil
             && !receiverModel.isCleaningUSBFolder
             && receiverModel.previewFile == nil && receiverModel.storedFilePreviewError == nil
-            && receiverModel.sharingFile == nil && receiverModel.storedFileShareError == nil
+            && receiverModel.sharingFile == nil && receiverModel.sharingSelection == nil
+            && !navigationPath.contains(.history)
+            && model.manualHistoryReselectionID == nil && !model.isRetryingManualHistory
+            && receiverModel.storedFileShareError == nil
             && !receiverModel.isExportingToUSB && !receiverIsBusy
     }
 

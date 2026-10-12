@@ -26,6 +26,8 @@ enum IPhoneReceiveErrorMessage {
     }
 
     static func message(_ error: Error) -> String {
+        if let failure = error as? IPhoneUSBExportFailure { return failure.message }
+        if let recovery = error as? USBCommitRecoveryError { return recovery.localizedDescription }
         if let shortage = error as? StorageCapacityInsufficient { return shortage.localizedDescription }
         if isCancellation(error) {
             return "수신이 일시정지되었습니다."
@@ -91,6 +93,8 @@ enum IPhoneReceiveErrorMessage {
         case IPhoneUSBExportError.zipExtractionFailed,
              USBZIPReceivePipelineError.extractionFailed:
             return "ZIP 압축 해제에 실패했습니다. 손상 또는 암호화 여부를 확인해 주세요. 원본은 유지했습니다."
+        case IPhoneUSBExportError.invalidZIPSelection:
+            return "압축 해제할 파일 또는 폴더를 선택해 주세요. 목록이 바뀌었다면 ZIP 내용을 다시 열어 선택해 주세요."
         case USBZIPReceivePipelineError.destinationNotWritable:
             return "USB에 압축 해제 파일을 쓸 수 없습니다. 연결과 폴더 권한을 확인해 주세요."
         case IPhoneUSBExportError.overwriteConfirmationRequired:

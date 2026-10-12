@@ -97,6 +97,14 @@ struct USBStorageManagementView: View {
                 Text("저장장치 파일 탐색")
                     .font(.headline)
                 Spacer()
+                Menu {
+                    ForEach(USBStorageSort.allCases) { sort in
+                        Button(sort.rawValue) { model.storageSort = sort }
+                    }
+                } label: {
+                    Label(model.storageSort.rawValue, systemImage: "arrow.up.arrow.down")
+                }
+                .accessibilityIdentifier("storage-sort")
                 Button {
                     Task { await model.refreshStorageFiles() }
                 } label: {
@@ -130,10 +138,11 @@ struct USBStorageManagementView: View {
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
             } else if model.hasUSBDestination {
+                let entries = model.sortedStorageEntries
                 LazyVStack(spacing: 0) {
-                    ForEach(model.storageEntries) { entry in
+                    ForEach(entries) { entry in
                         storageEntryRow(entry)
-                        if entry.id != model.storageEntries.last?.id {
+                        if entry.id != entries.last?.id {
                             Divider()
                         }
                     }

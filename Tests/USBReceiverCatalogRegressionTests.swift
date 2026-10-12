@@ -1,9 +1,47 @@
 import Foundation
+import Combine
 import XCTest
 @testable import SimpleCameraAutoSender
 
 @MainActor
 final class USBReceiverCatalogRegressionTests: XCTestCase {
+    func testConcurrentCatalogRefreshesCoalesceAndNeverPublishSupersededSnapshot() async throws {
+        let root = try directory()
+        let old = IPhoneStoredFile(id: "old", url: root.appendingPathComponent("old.pdf"), name: "old.pdf",
+                                   size: 1, modifiedAt: Date(), receivedRecord: nil)
+        let newest = IPhoneStoredFile(id: "new", url: root.appendingPathComponent("new.pdf"), name: "new.pdf",
+                                      size: 1, modifiedAt: Date(), receivedRecord: nil)
+        let started = expectation(description: "first catalog read started")
+        let release = DispatchSemaphore(value: 0)
+        let counter = CatalogReadCounter()
+        let model = try makeModel(root: root, storedFiles: {
+            if counter.next() == 1 {
+                started.fulfill()
+                _ = release.wait(timeout: .now() + 5)
+                return [old]
+            }
+            return [newest]
+        })
+        var publishedIDs: [[String]] = []
+        let observation = model.$storedFiles.dropFirst().sink { publishedIDs.append($0.map(\.id)) }
+        defer { observation.cancel(); release.signal() }
+        let first = Task { await model.refresh() }
+        await fulfillment(of: [started], timeout: 2)
+        let queued = expectation(description: "all refresh requests queued")
+        queued.expectedFulfillmentCount = 12
+        let refreshes = (0..<12).map { _ in Task {
+            queued.fulfill()
+            await model.refresh()
+        } }
+        await fulfillment(of: [queued], timeout: 2)
+        release.signal()
+        await first.value
+        for refresh in refreshes { await refresh.value }
+
+        XCTAssertEqual(model.storedFiles.map(\.id), ["new"])
+        XCTAssertEqual(publishedIDs, [["new"]])
+        XCTAssertEqual(counter.count, 2)
+    }
     func testSelectingAnotherUSBRootClearsPreviousFolderAndSelection() async throws {
         let first = try directory()
         let nested = first.appendingPathComponent("old", isDirectory: true)
@@ -112,6 +150,13 @@ final class USBReceiverCatalogRegressionTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return url
     }
+}
+
+private final class CatalogReadCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    var count: Int { lock.withLock { value } }
+    func next() -> Int { lock.withLock { value += 1; return value } }
 }
 
 private struct RegressionBookmarkCodec: USBBookmarkCoding {

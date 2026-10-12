@@ -14,6 +14,8 @@ final class ContentViewModel: ObservableObject {
     ) async -> ManualMediaTransferSummary
     typealias ManualUpdatesAction = @Sendable () async -> AsyncStream<ManualTransferProgress>
     typealias AutomaticUpdatesAction = @Sendable () -> AsyncStream<AutomaticTransferProgress>
+    typealias ManualHistoryAction = @Sendable () async throws -> [ManualTransferHistoryEntry]
+    typealias ManualHistoryRetryAction = @Sendable (UUID, URL?) async throws -> ManualMediaTransferSummary
 
     @Published private(set) var photoAuthorizationStatus: PHAuthorizationStatus
     @Published private(set) var hasCredential = false
@@ -30,6 +32,12 @@ final class ContentViewModel: ObservableObject {
     @Published private(set) var manualTransferMessage: String?
     @Published private(set) var manualProgress: ManualTransferProgress?
     @Published private(set) var automaticProgress: AutomaticTransferProgress?
+    @Published private(set) var manualTransferHistory: [ManualTransferHistoryEntry] = []
+    @Published private(set) var isLoadingManualTransferHistory = false
+    @Published private(set) var isRetryingManualHistory = false
+    @Published var manualHistoryError: String?
+    @Published private(set) var manualHistoryReselectionID: UUID?
+    @Published private(set) var manualHistoryReselectionFileName: String?
 
     private let credentialStore: CredentialStore
     private let ledger: UploadLedger
@@ -38,6 +46,9 @@ final class ContentViewModel: ObservableObject {
     private let send: SendAction
     private let manualEnqueue: ManualEnqueueAction
     private let manualFileEnqueue: ManualFileEnqueueAction
+    private let manualHistory: ManualHistoryAction
+    private let manualHistoryRetry: ManualHistoryRetryAction
+    private let currentPhotoAuthorization: @Sendable () -> PHAuthorizationStatus
     private var manualProgressTask: Task<Void, Never>?
     private var automaticProgressTask: Task<Void, Never>?
 
@@ -55,7 +66,12 @@ final class ContentViewModel: ObservableObject {
         automaticUpdates: @escaping AutomaticUpdatesAction = {
             AsyncStream { continuation in continuation.finish() }
         },
-        photoAuthorizationStatus initialPhotoAuthorizationStatus: PHAuthorizationStatus? = nil
+        manualHistory: @escaping ManualHistoryAction = { [] },
+        manualHistoryRetry: @escaping ManualHistoryRetryAction = { _, _ in .empty },
+        photoAuthorizationStatus initialPhotoAuthorizationStatus: PHAuthorizationStatus? = nil,
+        currentPhotoAuthorization: @escaping @Sendable () -> PHAuthorizationStatus = {
+            PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        }
     ) {
         self.credentialStore = credentialStore
         self.ledger = ledger
@@ -64,8 +80,11 @@ final class ContentViewModel: ObservableObject {
         self.send = send
         self.manualEnqueue = manualEnqueue
         self.manualFileEnqueue = manualFileEnqueue
+        self.manualHistory = manualHistory
+        self.manualHistoryRetry = manualHistoryRetry
+        self.currentPhotoAuthorization = currentPhotoAuthorization
         photoAuthorizationStatus = initialPhotoAuthorizationStatus
-            ?? PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            ?? currentPhotoAuthorization()
         manualProgressTask = Task { [weak self] in
             let updates = await manualUpdates()
             for await progress in updates {
@@ -117,7 +136,7 @@ final class ContentViewModel: ObservableObject {
 
     func refresh() async {
         let status = await ledger.statusSummary()
-        let authorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        let authorization = currentPhotoAuthorization()
         let credentialAvailable = (try? credentialStore.load()) != nil
         let monitoringEnabled = status.baseline != nil
         let failureMessage = status.failures.uploadFailureDescription
@@ -128,6 +147,45 @@ final class ContentViewModel: ObservableObject {
         if uploadedCount != status.uploaded { uploadedCount = status.uploaded }
         if failedCount != status.failed { failedCount = status.failed }
         if automaticFailureMessage != failureMessage { automaticFailureMessage = failureMessage }
+    }
+
+    func refreshPhotoAuthorization() {
+        let authorization = currentPhotoAuthorization()
+        if photoAuthorizationStatus != authorization { photoAuthorizationStatus = authorization }
+    }
+
+    func refreshManualTransferHistory() async {
+        guard !isLoadingManualTransferHistory else { return }
+        isLoadingManualTransferHistory = true
+        defer { isLoadingManualTransferHistory = false }
+        do {
+            manualTransferHistory = try await manualHistory()
+            manualHistoryError = nil
+        } catch {
+            manualHistoryError = "전송 기록을 불러오지 못했습니다. \(error.localizedDescription)"
+        }
+    }
+
+    func retryManualHistoryEntry(id: UUID, reselectedFileURL: URL?) async {
+        guard !isRetryingManualHistory, !isManualTransferWorking else { return }
+        isRetryingManualHistory = true
+        manualHistoryError = nil
+        defer { isRetryingManualHistory = false }
+        do {
+            let summary = try await manualHistoryRetry(id, reselectedFileURL)
+            lastManualSummary = summary
+            await refreshManualTransferHistory()
+        } catch ManualTransferRetryError.documentReselectionRequired(let fileName) {
+            manualHistoryReselectionID = id
+            manualHistoryReselectionFileName = fileName
+        } catch {
+            manualHistoryError = "재전송을 시작하지 못했습니다. \(error.localizedDescription)"
+        }
+    }
+
+    func cancelManualHistoryReselection() {
+        manualHistoryReselectionID = nil
+        manualHistoryReselectionFileName = nil
     }
 
     func requestPhotoAccess() async {

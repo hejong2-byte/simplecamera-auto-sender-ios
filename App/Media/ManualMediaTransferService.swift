@@ -99,7 +99,50 @@ actor ManualMediaTransferService: ManualMediaTransferring {
     }
 
     func retryFailed(historyID: UUID, reselectedFileURL: URL? = nil) async throws -> ManualMediaTransferSummary {
-        throw ManualTransferRetryError.notFound
+        let entry = try await jobStore.claimRetry(id: historyID)
+        do {
+            if entry.recipientMailboxID == nil {
+                guard let binding = entry.recipientCredentialBinding,
+                      binding == ManualRecipientBinding.digest(try credentialStore.load()) else {
+                    throw ManualTransferRetryError.recipientChanged
+                }
+            }
+            if entry.kind == .file {
+                guard let reselectedFileURL else {
+                    throw ManualTransferRetryError.documentReselectionRequired(fileName: entry.fileName)
+                }
+                if entry.sha256 == nil, reselectedFileURL.lastPathComponent != entry.fileName {
+                    throw ManualTransferRetryError.sourceChanged
+                }
+            }
+            var validationError: ManualTransferRetryError?
+            let summary = await enqueue(
+                selection: .init(assetIdentifiers: [entry.assetIdentifier], unavailableCount: 0),
+                kind: entry.kind,
+                recipientMailboxID: entry.recipientMailboxID,
+                fileNames: [entry.assetIdentifier: entry.fileName],
+                recipientCredentialBinding: entry.recipientCredentialBinding,
+                expectedSHA256: entry.kind == .file ? entry.sha256 : nil,
+                retryHistoryID: entry.id,
+                onPreparationFailure: { validationError = $0 as? ManualTransferRetryError }
+            ) { [source, exportDirectory, maxBytes] identifier, onProgress in
+                if entry.kind == .file, let reselectedFileURL {
+                    return try await ManualDocumentSource(maxBytes: maxBytes).exportOriginal(
+                        fileURL: reselectedFileURL, identifier: identifier,
+                        to: exportDirectory, onProgress: onProgress
+                    )
+                }
+                return try await source.exportOriginal(
+                    assetIdentifier: identifier, kind: entry.kind, to: exportDirectory
+                )
+            }
+            try await jobStore.finishRetry(id: historyID, enqueued: summary.failed == 0)
+            if let validationError { throw validationError }
+            return summary
+        } catch {
+            try? await jobStore.finishRetry(id: historyID, enqueued: false)
+            throw error
+        }
     }
 
     func updates() async -> AsyncStream<ManualTransferProgress> {
@@ -153,7 +196,8 @@ actor ManualMediaTransferService: ManualMediaTransferring {
         return await enqueue(
             selection: ManualMediaSelection(assetIdentifiers: identifiers, unavailableCount: 0),
             kind: .file,
-            recipientMailboxID: recipientMailboxID
+            recipientMailboxID: recipientMailboxID,
+            fileNames: files.mapValues(\.lastPathComponent)
         ) { [exportDirectory] identifier, onProgress in
             guard let url = files[identifier] else { throw ManualDocumentSourceError.unavailable }
             return try await source.exportOriginal(
@@ -169,6 +213,11 @@ actor ManualMediaTransferService: ManualMediaTransferring {
         selection: ManualMediaSelection,
         kind: ManualMediaKind,
         recipientMailboxID: UUID? = nil,
+        fileNames: [String: String] = [:],
+        recipientCredentialBinding: String? = nil,
+        expectedSHA256: String? = nil,
+        retryHistoryID: UUID? = nil,
+        onPreparationFailure: ((Error) -> Void)? = nil,
         export: (
             String,
             (Int64, Int64) -> Void
@@ -178,6 +227,9 @@ actor ManualMediaTransferService: ManualMediaTransferring {
         let identifiers = selection.assetIdentifiers.filter { seen.insert($0).inserted }
         let selectedCount = identifiers.count + selection.unavailableCount
         guard selectedCount > 0 else { return .empty }
+        let binding = recipientMailboxID == nil
+            ? recipientCredentialBinding ?? ManualRecipientBinding.digest(try? credentialStore.load())
+            : nil
 
         let batchID = UUID()
         var batch = ManualTransferBatch(
@@ -213,6 +265,8 @@ actor ManualMediaTransferService: ManualMediaTransferring {
             var exportedFileURL: URL?
             var partURLs: [URL] = []
             var preparationRecorded = false
+            var fileName = fileNames[identifier] ?? identifier
+            var sha256: String?
             do {
                 let exported = try await export(identifier) { processedBytes, totalBytes in
                     publish(preparationProgress(
@@ -225,6 +279,7 @@ actor ManualMediaTransferService: ManualMediaTransferring {
                     ))
                 }
                 exportedFileURL = exported.fileURL
+                fileName = exported.fileName
                 let fingerprint = try UploadFileFingerprinter.fingerprint(
                     fileURL: exported.fileURL,
                     onProgress: { processedBytes, totalBytes in
@@ -238,6 +293,10 @@ actor ManualMediaTransferService: ManualMediaTransferring {
                         ))
                     }
                 )
+                sha256 = fingerprint.sha256
+                if let expectedSHA256, expectedSHA256 != fingerprint.sha256 {
+                    throw ManualTransferRetryError.sourceChanged
+                }
                 guard fingerprint.size <= maxBytes else {
                     throw ManualMediaUploadError.fileTooLarge(maxBytes: maxBytes)
                 }
@@ -283,7 +342,9 @@ actor ManualMediaTransferService: ManualMediaTransferring {
                     stage: .preparing,
                     uploadID: nil,
                     parts: parts,
-                    failure: nil
+                    failure: nil,
+                    recipientCredentialBinding: binding,
+                    retryHistoryID: retryHistoryID
                 )
                 try await engine.enqueue([job])
                 publish(preparationProgress(
@@ -293,6 +354,7 @@ actor ManualMediaTransferService: ManualMediaTransferring {
                     totalBytes: fingerprint.size
                 ))
             } catch {
+                onPreparationFailure?(error)
                 batch = (try? await jobStore.advanceBatch(
                     id: batchID,
                     preparedBy: preparationRecorded ? 0 : 1,
@@ -300,6 +362,14 @@ actor ManualMediaTransferService: ManualMediaTransferring {
                 )) ?? batch
                 let category = Self.failureCategory(for: error)
                 categories.insert(category)
+                if !(error is ManualTransferRetryError) {
+                    try? await jobStore.recordHistory(.init(
+                        id: UUID(), fileName: fileName, kind: kind,
+                        recipientMailboxID: recipientMailboxID, completedAt: Date(),
+                        failure: Self.progressFailure(for: error), assetIdentifier: identifier,
+                        sha256: expectedSHA256 ?? sha256, recipientCredentialBinding: binding
+                    ))
+                }
                 if let exportedFileURL {
                     try? FileManager.default.removeItem(at: exportedFileURL)
                 }

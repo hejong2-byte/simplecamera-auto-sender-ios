@@ -41,8 +41,14 @@ struct USBReceiverView: View {
         .sheet(item: $model.sharingFile) { file in
             StoredFileShareSheet(file: file, onFinish: model.finishSharingStoredFile)
         }
+        .sheet(item: $model.sharingSelection) { selection in
+            StoredFileShareSheet(files: selection.files, onFinish: model.finishSharingStoredFile)
+        }
+        .sheet(item: $model.zipContentsFile) { file in
+            ZIPContentsSelectionView(model: model, file: file)
+        }
         .alert("파일 공유 실패", isPresented: Binding(
-            get: { model.storedFileShareError != nil && model.sharingFile == nil },
+            get: { model.storedFileShareError != nil && model.sharingFile == nil && model.sharingSelection == nil },
             set: { if !$0 { model.storedFileShareError = nil } }
         )) {
             Button("확인", role: .cancel) { model.storedFileShareError = nil }
@@ -358,6 +364,16 @@ struct USBReceiverView: View {
                             .buttonStyle(.borderless)
                             .disabled(model.isDeletingStoredFiles)
                             .accessibilityIdentifier("stored-file-open-\(file.name)")
+                            if file.url.pathExtension.lowercased() == "zip" {
+                                Button { Task { await model.showZIPContents(file) } } label: {
+                                    Label("내용", systemImage: "list.bullet")
+                                        .font(.caption)
+                                        .frame(minHeight: 44)
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(!model.canShareStoredFile(file))
+                                .accessibilityIdentifier("stored-file-zip-contents-\(file.name)")
+                            }
                             if file.supportsDirectSharing {
                                 Button { model.shareStoredFile(file) } label: {
                                     Label("공유", systemImage: "square.and.arrow.up")
@@ -387,6 +403,13 @@ struct USBReceiverView: View {
                     || model.isDeletingStoredFiles || model.needsStoredZIPExportChoice)
                 .accessibilityIdentifier("stored-files-export")
                 .accessibilityLabel("선택 파일 USB로 복사")
+
+                Button { model.shareSelectedStoredFiles() } label: {
+                    Text("선택 공유").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!model.canShareSelectedStoredFiles)
+                .accessibilityIdentifier("stored-files-share")
 
                 Button(role: .destructive) {
                     model.requestStoredFileDeletion()

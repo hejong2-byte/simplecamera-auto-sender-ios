@@ -3,6 +3,19 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class USBStorageFileExplorerTests: XCTestCase {
+    func testSortKeepsFoldersFirstAndUsesStableNameAndPathTies() {
+        let date = Date(timeIntervalSince1970: 10)
+        let entries = [
+            USBStorageFileEntry(relativePath: "z", name: "z", kind: .file, size: 20, modifiedAt: date),
+            USBStorageFileEntry(relativePath: "b", name: "same", kind: .file, size: 10, modifiedAt: date),
+            USBStorageFileEntry(relativePath: "folder", name: "folder", kind: .directory, size: 0, modifiedAt: nil),
+            USBStorageFileEntry(relativePath: "a", name: "same", kind: .file, size: 10, modifiedAt: date)
+        ]
+        XCTAssertEqual(USBStorageSort.name.sorted(entries).map(\.id), ["folder", "a", "b", "z"])
+        XCTAssertEqual(USBStorageSort.date.sorted(entries).map(\.id), ["folder", "a", "b", "z"])
+        XCTAssertEqual(USBStorageSort.size.sorted(entries).map(\.id), ["folder", "z", "a", "b"])
+        XCTAssertEqual(USBStorageSort.size.sorted(Array(entries.reversed())).map(\.id), ["folder", "z", "a", "b"])
+    }
     func testRecoveryBackupsAreReachableWithoutShowingActiveStagingFiles() throws {
         let root = temporaryDirectory()
         let internalPath = USBReceiveService.partialDirectoryName

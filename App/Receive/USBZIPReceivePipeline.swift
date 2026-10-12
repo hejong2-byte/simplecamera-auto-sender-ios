@@ -85,6 +85,15 @@ enum USBZIPReceivePipelineError: Error, Equatable {
     case overwriteRequired(USBZIPOverwriteRequest)
 }
 
+struct USBCommitRecoveryError: LocalizedError {
+    let recoveryPaths: [String]
+
+    var errorDescription: String? {
+        "USB 저장과 기존 파일 복구에 실패했습니다. 복구용 백업은 유지했습니다. USB를 다시 연결한 뒤 다음 경로의 원본을 복구해 주세요.\n"
+            + recoveryPaths.joined(separator: "\n")
+    }
+}
+
 struct USBZIPReceivePipeline {
     private struct ManifestFile: Equatable {
         let path: String
@@ -124,6 +133,8 @@ struct USBZIPReceivePipeline {
                 progress: progress
             )
         } catch let error as USBZIPReceivePipelineError {
+            throw error
+        } catch let error as USBCommitRecoveryError {
             throw error
         } catch {
             if error is CancellationError { throw error }
@@ -292,7 +303,6 @@ struct USBZIPReceivePipeline {
             "overwrite-\(UUID().uuidString.lowercased()).backup",
             isDirectory: true
         )
-        defer { try? fileManager.removeItem(at: backupURL) }
         let committer = USBStagedTreeCommitter(
             fileManager: fileManager,
             moveItem: coordinatedMove
@@ -587,6 +597,10 @@ struct USBStagedTreeCommitter {
         var backups: [(original: URL, backup: URL)] = []
         var installedFiles: [URL] = []
         var createdDirectories: [URL] = []
+        var retainBackup = false
+        defer {
+            if !retainBackup { try? fileManager.removeItem(at: backupRoot) }
+        }
 
         do {
             for relativePath in directoryPaths {
@@ -629,15 +643,28 @@ struct USBStagedTreeCommitter {
             for url in createdDirectories.reversed() where fileManager.fileExists(atPath: url.path) {
                 try? fileManager.removeItem(at: url)
             }
-            for item in backups.reversed() where fileManager.fileExists(atPath: item.backup.path) {
-                if fileManager.fileExists(atPath: item.original.path) {
-                    try? fileManager.removeItem(at: item.original)
+            var recoveryPaths: [String] = []
+            for item in backups.reversed() {
+                guard fileManager.fileExists(atPath: item.backup.path) else {
+                    recoveryPaths.append(item.backup.path)
+                    continue
                 }
-                try? fileManager.createDirectory(
-                    at: item.original.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
-                try? moveItem(item.backup, item.original)
+                do {
+                    if fileManager.fileExists(atPath: item.original.path) {
+                        try fileManager.removeItem(at: item.original)
+                    }
+                    try fileManager.createDirectory(
+                        at: item.original.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                    try moveItem(item.backup, item.original)
+                } catch {
+                    recoveryPaths.append(item.backup.path)
+                }
+            }
+            if !recoveryPaths.isEmpty {
+                retainBackup = true
+                throw USBCommitRecoveryError(recoveryPaths: recoveryPaths)
             }
             throw error
         }

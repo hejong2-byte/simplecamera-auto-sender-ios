@@ -48,7 +48,8 @@ final class AppDependencies: @unchecked Sendable {
             jobStore: manualJobStore,
             engine: manualTransferEngine,
             exportDirectory: uploadsDirectory
-                .appendingPathComponent("Manual", isDirectory: true)
+                .appendingPathComponent("Manual", isDirectory: true),
+            credentialStore: credentialStore
         )
         return AppDependencies(
             credentialStore: credentialStore,
@@ -124,6 +125,12 @@ final class AppDependencies: @unchecked Sendable {
             },
             automaticUpdates: { [automaticProgressStore] in
                 automaticProgressStore.updates()
+            },
+            manualHistory: { [manualTransferService] in
+                try await manualTransferService.history()
+            },
+            manualHistoryRetry: { [manualTransferService] id, url in
+                try await manualTransferService.retryFailed(historyID: id, reselectedFileURL: url)
             }
         )
     }

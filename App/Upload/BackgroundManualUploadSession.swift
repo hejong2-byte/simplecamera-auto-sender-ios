@@ -64,6 +64,7 @@ final class BackgroundManualUploadSession: NSObject, ManualUploadTaskScheduling,
     private let lock = NSLock()
     private weak var engine: ManualBackgroundTransferEngine?
     private var responseBodies: [Int: Data] = [:]
+    private var completionDrain: Task<Void, Never>?
 
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.background(
@@ -159,25 +160,32 @@ extension BackgroundManualUploadSession: URLSessionDataDelegate {
         didCompleteWithError error: Error?
     ) {
         guard let descriptor = Self.descriptor(for: task) else { return }
-        let (currentEngine, body) = lock.withLock { () -> (ManualBackgroundTransferEngine?, Data) in
+        lock.withLock {
             let body = responseBodies.removeValue(forKey: task.taskIdentifier) ?? Data()
-            return (engine, body)
-        }
-        Task {
-            await currentEngine?.taskCompleted(
-                descriptor,
-                response: task.response as? HTTPURLResponse,
-                body: body,
-                error: error
-            )
+            let currentEngine = engine
+            let previous = completionDrain
+            completionDrain = Task {
+                await previous?.value
+                await currentEngine?.taskCompleted(
+                    descriptor,
+                    response: task.response as? HTTPURLResponse,
+                    body: body,
+                    error: error
+                )
+            }
         }
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-        DispatchQueue.main.async { [completionRegistry] in
-            completionRegistry.finish(
-                identifier: AppConfiguration.manualBackgroundSessionIdentifier
-            )
+        // Snapshot only the completions delivered before this delegate callback.
+        let delivered = lock.withLock { completionDrain }
+        Task { [completionRegistry] in
+            await delivered?.value
+            await MainActor.run {
+                completionRegistry.finish(
+                    identifier: AppConfiguration.manualBackgroundSessionIdentifier
+                )
+            }
         }
     }
 }

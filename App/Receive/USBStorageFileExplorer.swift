@@ -15,6 +15,25 @@ struct USBStorageFileEntry: Identifiable, Sendable, Equatable {
     var id: String { relativePath }
 }
 
+enum USBStorageSort: String, CaseIterable, Identifiable {
+    case name = "이름순"
+    case date = "날짜순"
+    case size = "크기순"
+    var id: String { rawValue }
+
+    func sorted(_ entries: [USBStorageFileEntry]) -> [USBStorageFileEntry] {
+        entries.sorted { lhs, rhs in
+            if lhs.kind != rhs.kind { return lhs.kind == .directory }
+            if self == .date, lhs.modifiedAt != rhs.modifiedAt {
+                return (lhs.modifiedAt ?? .distantPast) > (rhs.modifiedAt ?? .distantPast)
+            }
+            if self == .size, lhs.size != rhs.size { return lhs.size > rhs.size }
+            let order = lhs.name.localizedStandardCompare(rhs.name)
+            return order == .orderedSame ? lhs.relativePath < rhs.relativePath : order == .orderedAscending
+        }
+    }
+}
+
 enum USBStorageFileExplorerError: LocalizedError, Equatable {
     case destinationMissing
     case permissionExpired
@@ -83,12 +102,21 @@ struct USBStorageFileExplorer: @unchecked Sendable {
             )
             let prefix = try validatedComponents(relativePath)
             return try urls.compactMap { url in
-                guard url.lastPathComponent != Self.internalDirectoryName else {
-                    return nil
-                }
                 let itemAttributes = try fileManager.attributesOfItem(atPath: url.path)
                 let type = itemAttributes[.type] as? FileAttributeType
                 guard type != .typeSymbolicLink else { return nil }
+                if prefix.isEmpty, url.lastPathComponent == Self.internalDirectoryName {
+                    guard type == .typeDirectory else { return nil }
+                    let recoveries = try fileManager.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
+                    guard recoveries.contains(where: { candidate in
+                        Self.isRecoveryBackup(candidate.lastPathComponent)
+                            && (try? fileManager.attributesOfItem(atPath: candidate.path)[.type] as? FileAttributeType) == .typeDirectory
+                    }) else { return nil }
+                }
+                if prefix == [Self.internalDirectoryName],
+                   (!Self.isRecoveryBackup(url.lastPathComponent) || type != .typeDirectory) {
+                    return nil
+                }
                 let kind: USBStorageFileEntryKind
                 let size: Int64
                 switch type {
@@ -111,7 +139,8 @@ struct USBStorageFileExplorer: @unchecked Sendable {
             }
             .sorted { lhs, rhs in
                 if lhs.kind != rhs.kind { return lhs.kind == .directory }
-                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+                let order = lhs.name.localizedStandardCompare(rhs.name)
+                return order == .orderedSame ? lhs.relativePath < rhs.relativePath : order == .orderedAscending
             }
         }
     }
@@ -255,7 +284,15 @@ struct USBStorageFileExplorer: @unchecked Sendable {
         }) else {
             throw USBStorageFileExplorerError.invalidPath
         }
+        if components.first == Self.internalDirectoryName, components.count > 1,
+           !Self.isRecoveryBackup(components[1]) {
+            throw USBStorageFileExplorerError.invalidPath
+        }
         return components
+    }
+
+    private static func isRecoveryBackup(_ name: String) -> Bool {
+        name.hasPrefix("overwrite-") && name.hasSuffix(".backup")
     }
 
     private func coordinatedDelete(_ url: URL) throws {

@@ -5,6 +5,7 @@ import ZIPFoundation
 enum SafeZIPExtractorError: Error, Equatable {
     case unsafeArchive
     case extractionFailed
+    case invalidSelection
 }
 
 struct SafeZIPExtractedFile {
@@ -17,6 +18,7 @@ struct SafeZIPExtraction {
     let files: [SafeZIPExtractedFile]
     let directories: [String]
     let totalBytes: Int64
+    var archiveDirectories: [String]? = nil
 }
 
 struct SafeZIPEntry: Identifiable, Equatable, Sendable {
@@ -36,7 +38,13 @@ struct SafeZIPExtractor {
     )
 
     func contents(of source: URL) throws -> [SafeZIPEntry] {
-        []
+        let archive: Archive
+        do {
+            archive = try Archive(url: source, accessMode: .read)
+        } catch {
+            throw SafeZIPExtractorError.extractionFailed
+        }
+        return try metadata(in: archive)
     }
 
     func extract(_ source: URL, to destination: URL, selectedPaths: Set<String>? = nil,
@@ -49,21 +57,23 @@ struct SafeZIPExtractor {
             throw SafeZIPExtractorError.extractionFailed
         }
 
-        var entryCount = 0
-        var totalBytes: Int64 = 0
-        for entry in archive {
-            try Task.checkCancellation()
-            entryCount += 1
-            let entryPath = Self.decodedPath(for: entry)
-            let entryURL = destination.appendingPathComponent(entryPath)
-            guard entryURL.isContained(in: destination), entry.type != .symlink else {
-                throw SafeZIPExtractorError.unsafeArchive
+        // Validate every entry before filtering: an unselected unsafe path still
+        // makes the archive unsafe. Metadata also supplies implicit directories.
+        let archiveMetadata = try metadata(in: archive)
+        if let selectedPaths {
+            let knownPaths = Set(archiveMetadata.map(\.path))
+            guard !selectedPaths.isEmpty, selectedPaths.isSubset(of: knownPaths) else {
+                throw SafeZIPExtractorError.invalidSelection
             }
-            guard let size = Int64(exactly: entry.uncompressedSize), size <= Int64.max - totalBytes else {
-                throw SafeZIPExtractorError.unsafeArchive
-            }
-            if entry.type == .file { totalBytes += size }
         }
+        func isSelected(_ path: String) -> Bool {
+            guard let selectedPaths else { return true }
+            return selectedPaths.contains { path == $0 || path.hasPrefix($0 + "/") }
+        }
+        let entries = try archive.filter { isSelected(try Self.validatedPath(for: $0)) }
+        let entryCount = entries.count
+        let totalBytes = archiveMetadata.filter { !$0.isDirectory && isSelected($0.path) }
+            .reduce(Int64(0)) { $0 + $1.size }
 
         try StorageCapacityPreflight.check(at: destination.deletingLastPathComponent(), requiredBytes: totalBytes, destination: .iphoneLocal,
                                           query: capacityQuery, report: capacityReport)
@@ -74,10 +84,13 @@ struct SafeZIPExtractor {
                 withIntermediateDirectories: true
             )
             var completedBytes: Int64 = 0
-            for (index, entry) in archive.enumerated() {
+            for (index, entry) in entries.enumerated() {
                 try autoreleasepool {
                     try Task.checkCancellation()
-                    let entryPath = Self.decodedPath(for: entry)
+                    let entryPath = try Self.validatedPath(for: entry)
+                    guard destination.appendingPathComponent(entryPath).isContained(in: destination) else {
+                        throw SafeZIPExtractorError.unsafeArchive
+                    }
                     let base = completedBytes
                     let entrySize = entry.type == .file ? Int64(entry.uncompressedSize) : 0
                     let entryProgress = Progress(totalUnitCount: entrySize)
@@ -109,7 +122,51 @@ struct SafeZIPExtractor {
             throw SafeZIPExtractorError.extractionFailed
         }
 
-        return try inventory(in: destination)
+        var extraction = try inventory(in: destination)
+        extraction.archiveDirectories = archiveMetadata.filter(\.isDirectory).map(\.path)
+        return extraction
+    }
+
+    private func metadata(in archive: Archive) throws -> [SafeZIPEntry] {
+        var items: [String: SafeZIPEntry] = [:]
+        var explicitPaths = Set<String>()
+        var totalBytes: Int64 = 0
+        for entry in archive {
+            try Task.checkCancellation()
+            let path = try Self.validatedPath(for: entry)
+            guard explicitPaths.insert(path).inserted,
+                  let size = Int64(exactly: entry.uncompressedSize), size <= Int64.max - totalBytes else {
+                throw SafeZIPExtractorError.unsafeArchive
+            }
+            let isDirectory = entry.type == .directory
+            if let existing = items[path], existing.isDirectory != isDirectory {
+                throw SafeZIPExtractorError.unsafeArchive
+            }
+            items[path] = SafeZIPEntry(path: path, isDirectory: isDirectory, size: isDirectory ? 0 : size)
+            if !isDirectory { totalBytes += size }
+            var components = path.split(separator: "/").map(String.init)
+            components.removeLast()
+            while !components.isEmpty {
+                let parent = components.joined(separator: "/")
+                if let existing = items[parent], !existing.isDirectory {
+                    throw SafeZIPExtractorError.unsafeArchive
+                }
+                items[parent] = SafeZIPEntry(path: parent, isDirectory: true, size: 0)
+                components.removeLast()
+            }
+        }
+        return items.values.sorted { $0.path < $1.path }
+    }
+
+    private static func validatedPath(for entry: Entry) throws -> String {
+        let raw = decodedPath(for: entry)
+        let path = raw.hasSuffix("/") ? String(raw.dropLast()) : raw
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard entry.type != .symlink, !path.isEmpty, !raw.hasPrefix("/"), !raw.contains("\\"),
+              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            throw SafeZIPExtractorError.unsafeArchive
+        }
+        return path
     }
 
     private static func decodedPath(for entry: Entry) -> String {

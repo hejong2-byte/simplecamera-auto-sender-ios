@@ -1,9 +1,29 @@
 import Combine
+import Photos
 import XCTest
 @testable import SimpleCameraAutoSender
 
 @MainActor
 final class ContentViewModelTests: XCTestCase {
+    func testForegroundRefreshRechecksDeniedAndLimitedPhotoAccess() async throws {
+        let status = MutablePhotoAuthorization(.denied)
+        let model = ContentViewModel(
+            credentialStore: InMemoryCredentialStore(),
+            ledger: try UploadLedger(fileURL: temporaryLedgerURL()),
+            uploader: NoOpUploader(), now: Date.init,
+            send: { _ in .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
+            photoAuthorizationStatus: .denied,
+            currentPhotoAuthorization: { status.value }
+        )
+        XCTAssertFalse(model.hasFullPhotoAccess)
+        status.value = .limited
+        model.refreshPhotoAuthorization()
+        XCTAssertFalse(model.hasFullPhotoAccess)
+        status.value = .authorized
+        model.refreshPhotoAuthorization()
+        XCTAssertTrue(model.hasFullPhotoAccess)
+    }
+
     func testRefreshSkipsUnchangedPublicationsButStillPublishesNewLedgerState() async throws {
         let ledger = try UploadLedger(fileURL: temporaryLedgerURL())
         try await ledger.setBaseline(Date(timeIntervalSince1970: 1_234))
@@ -635,4 +655,16 @@ private final class NoOpUploader: UploadCoordinating, @unchecked Sendable {
     ) async throws {}
     func authenticationBlocked() -> Bool { false }
     func credentialDidChange() {}
+}
+
+private final class MutablePhotoAuthorization: @unchecked Sendable {
+    private let lock = NSLock()
+    private var status: PHAuthorizationStatus
+
+    init(_ status: PHAuthorizationStatus) { self.status = status }
+
+    var value: PHAuthorizationStatus {
+        get { lock.withLock { status } }
+        set { lock.withLock { status = newValue } }
+    }
 }

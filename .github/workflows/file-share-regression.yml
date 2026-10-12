@@ -10,7 +10,7 @@ permissions:
 jobs:
   share:
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - run: brew install xcodegen
@@ -24,11 +24,12 @@ jobs:
             -destination "platform=iOS Simulator,id=${DEVICE_ID}" \
             -parallel-testing-enabled NO \
             -resultBundlePath build/FileShareTests.xcresult \
-            -only-testing:SimpleCameraAutoSenderTests/IPhoneUSBExportServiceTests \
-            -only-testing:SimpleCameraAutoSenderTests/SafeZIPExtractionProgressTests \
-            -only-testing:SimpleCameraAutoSenderTests/USBReceiveServiceTests \
-            -only-testing:SimpleCameraAutoSenderTests/USBZIPSelectionCheckpointTests \
-            -only-testing:SimpleCameraAutoSenderTests/USBZIPReceivePipelineTests/testDirectZIPCommitPreservesOriginalBackupWhenInstallAndRollbackFail \
+            -only-testing:SimpleCameraAutoSenderTests \
+            -only-testing:SimpleCameraAutoSenderUITests/FileConveniencesUITests \
+            -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testMainScreenOmitsFixedMenuDescriptions \
+            -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testTextTransferShowsComposeHistoryAndRecordActions \
+            -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testReceivedPhotoAndPDFShareSheetsKeepOriginalsAndSelectionAfterCancel \
+            -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testReceivedZIPShareSheetKeepsArchiveAndSelectionAfterCancel \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/file-share-tests.log
       - name: Export screenshots
         if: always()

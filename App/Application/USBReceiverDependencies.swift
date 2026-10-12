@@ -346,7 +346,17 @@ final class USBReceiverDependencies: @unchecked Sendable {
             },
             defaultDeviceName: UIDevice.current.name,
             preferences: preferences,
-            notificationService: notifications
+            notificationService: notifications,
+            selectedExportFiles: { [exporter] files, destination, archiveMode, overwrite, selections in
+                await exporter.export(files, to: destination, archiveMode: archiveMode,
+                                      preservePartialOnCancellation: true,
+                                      overwriteExisting: overwrite, zipSelections: selections)
+            },
+            beginSelectedExportProgress: { [exportProgressStore] name, count, ids, mode, selections in
+                exportProgressStore.beginExport(fileName: name, totalCount: count,
+                                                sourceFileIDs: ids, archiveMode: mode,
+                                                zipSelections: selections)
+            }
         )
     }
 

@@ -12,12 +12,13 @@ enum IPhoneUSBExportError: String, Error, Codable, Equatable, Sendable {
     case shaMismatch
     case unsafeZIPArchive
     case zipExtractionFailed
+    case invalidZIPSelection
     case copyFailed
     case verificationRecordMissing
     case overwriteConfirmationRequired
 }
 
-struct IPhoneUSBExportFailure: Equatable, Sendable {
+struct IPhoneUSBExportFailure: Error, Equatable, Sendable {
     let sourceID: String
     let error: IPhoneUSBExportError
     let detail: String?
@@ -112,6 +113,11 @@ private struct ZIPExportResumeManifest: Codable {
     let totalBytes: Int64
 }
 
+private struct ZIPCommittedRoots: Codable {
+    let jobID: UUID
+    var names: Set<String>
+}
+
 final class IPhoneUSBDeletionDecisionStore: @unchecked Sendable {
     private struct State: Codable {
         let version: Int
@@ -143,13 +149,13 @@ final class IPhoneUSBDeletionDecisionStore: @unchecked Sendable {
         lock.withLock { state.copies ?? [] }
     }
 
-    func save(_ decision: IPhoneUSBDeletionDecision) throws {
+    func save(_ decision: IPhoneUSBDeletionDecision, allowDeletion: Bool = true) throws {
         try lock.withLock {
             var next = state
             next.decisions.removeAll {
                 $0.id == decision.id || $0.sourceID == decision.sourceID
             }
-            next.decisions.append(decision)
+            if allowDeletion { next.decisions.append(decision) }
             if decision.copiedFiles != nil {
                 var copies = next.copies ?? []
                 copies.removeAll { $0.sourceID == decision.sourceID && $0.usbVolumeID == decision.usbVolumeID }
@@ -201,6 +207,7 @@ actor IPhoneUSBExportService {
     private var cleanupFailures: [String] = []
     private var activeSourceFileIDs: [String]?
     private var activeArchiveMode: IPhoneReceiveArchiveMode?
+    private var activeZIPSelections: [String: Set<String>]?
 
     init(
         deletionStore: IPhoneUSBDeletionDecisionStore,
@@ -335,6 +342,7 @@ actor IPhoneUSBExportService {
             currentCapacityCheck = nil
             activeSourceFileIDs = Array(files[index...].map(\.id))
             activeArchiveMode = archiveMode
+            activeZIPSelections = zipSelections.isEmpty ? nil : zipSelections
             do {
                 try Task.checkCancellation()
                 let decision = try exportOne(
@@ -345,7 +353,8 @@ actor IPhoneUSBExportService {
                     completedCount: verified.count,
                     archiveMode: archiveMode,
                     preservePartialOnCancellation: preservePartialOnCancellation,
-                    overwriteExisting: overwriteExisting
+                    overwriteExisting: overwriteExisting,
+                    selectedZIPPaths: zipSelections[file.id]
                 )
                 verified.append(decision)
             } catch is CancellationError {
@@ -362,6 +371,7 @@ actor IPhoneUSBExportService {
         }
         activeSourceFileIDs = nil
         activeArchiveMode = nil
+        activeZIPSelections = nil
         let summary = IPhoneUSBExportSummary(verified: verified, failed: failed,
             cancelled: cancelled, cleanupWarning: cleanupFailures.isEmpty ? nil : cleanupFailures.joined(separator: "\n"))
         if cancelled {
@@ -370,7 +380,8 @@ actor IPhoneUSBExportService {
                 totalCount: files.count, completedCount: verified.count, bytesReceived: 0,
                 totalBytes: 0, startedAt: nil, expiresAt: nil, errorMessage: summary.cleanupWarning,
                 detail: cleanupFailures.isEmpty ? "복사 취소 · 임시파일 정리 완료 · 원본 유지" : "복사 취소 · 일부 임시파일 정리 실패",
-                capacityCheck: currentCapacityCheck))
+                capacityCheck: currentCapacityCheck,
+                zipSelections: zipSelections.isEmpty ? nil : zipSelections))
         } else if failed.isEmpty {
             let copiedBytes = verified.reduce(Int64(0)) { total, record in
                 total + (record.copiedFiles?.reduce(Int64(0)) { $0 + $1.size } ?? record.sourceSize)
@@ -389,7 +400,8 @@ actor IPhoneUSBExportService {
                 expiresAt: nil,
                 errorMessage: nil,
                 detail: summary.changeSummary.displayText,
-                capacityCheck: currentCapacityCheck
+                capacityCheck: currentCapacityCheck,
+                zipSelections: zipSelections.isEmpty ? nil : zipSelections
             ))
         } else {
             let failedIndex = files.firstIndex { $0.id == failed[0].sourceID } ?? 0
@@ -410,7 +422,8 @@ actor IPhoneUSBExportService {
                 detail: summary.changeSummary.displayText,
                 sourceFileIDs: failed.map(\.sourceID),
                 archiveMode: archiveMode,
-                capacityCheck: firstFailedCapacityCheck
+                capacityCheck: firstFailedCapacityCheck,
+                zipSelections: zipSelections.isEmpty ? nil : zipSelections
             ), notifyExportOutcome: failed.contains { $0.error != .overwriteConfirmationRequired })
         }
         return summary
@@ -526,7 +539,8 @@ actor IPhoneUSBExportService {
         completedCount: Int,
         archiveMode: IPhoneReceiveArchiveMode,
         preservePartialOnCancellation: Bool,
-        overwriteExisting: Bool
+        overwriteExisting: Bool,
+        selectedZIPPaths: Set<String>?
     ) throws -> IPhoneUSBDeletionDecision {
         let startedAt = now()
         publish(
@@ -573,7 +587,8 @@ actor IPhoneUSBExportService {
                 completedCount: completedCount,
                 startedAt: startedAt,
                 preservePartialOnCancellation: preservePartialOnCancellation,
-                overwriteExisting: overwriteExisting
+                overwriteExisting: overwriteExisting,
+                selectedZIPPaths: selectedZIPPaths
             )
         }
         // Actual writes, close errors and size checks gate completion. Full USB
@@ -732,7 +747,8 @@ actor IPhoneUSBExportService {
         completedCount: Int,
         startedAt: Date,
         preservePartialOnCancellation: Bool,
-        overwriteExisting: Bool
+        overwriteExisting: Bool,
+        selectedZIPPaths: Set<String>?
     ) throws -> IPhoneUSBDeletionDecision {
         var phaseStartedAt = startedAt
         func report(_ stage: USBReceiveStage, _ bytes: Int64, _ total: Int64, _ detail: String) {
@@ -746,7 +762,8 @@ actor IPhoneUSBExportService {
             destination: destination,
             archiveMode: .extract,
             sourceSize: sourceSize,
-            sourceModifiedAt: sourceModifiedAt
+            sourceModifiedAt: sourceModifiedAt,
+            selectedZIPPaths: selectedZIPPaths
         )
 
         try fileManager.createDirectory(
@@ -778,19 +795,25 @@ actor IPhoneUSBExportService {
             if fileManager.fileExists(atPath: extractionRoot.path) {
                 try fileManager.removeItem(at: extractionRoot)
             }
+            // App checkpoints live at the job root; archive entries are confined
+            // to its content directory and cannot replace or forge those records.
+            try fileManager.createDirectory(at: extractionRoot, withIntermediateDirectories: true)
+            let contentRoot = extractionRoot.appendingPathComponent("content", isDirectory: true)
             do {
                 extraction = try SafeZIPExtractor(fileManager: fileManager, capacityQuery: capacityQuery,
                     capacityReport: { check in
                         self.currentCapacityCheck = check
                         report(.checkingSource, 0, check.requiredBytes, "압축 해제 전 용량 확인")
                     })
-                    .extract(file.url, to: extractionRoot) { bytes, total, name, done, count in
+                    .extract(file.url, to: contentRoot, selectedPaths: selectedZIPPaths) { bytes, total, name, done, count in
                         report(.extracting, bytes, total, "1/2 · 압축 해제·손상 검사 \(done)/\(count)개\n\(name)")
                     }
             } catch SafeZIPExtractorError.unsafeArchive {
                 throw IPhoneUSBExportError.unsafeZIPArchive
             } catch SafeZIPExtractorError.extractionFailed {
                 throw IPhoneUSBExportError.zipExtractionFailed
+            } catch SafeZIPExtractorError.invalidSelection {
+                throw IPhoneUSBExportError.invalidZIPSelection
             }
         }
 
@@ -814,7 +837,7 @@ actor IPhoneUSBExportService {
         return try withCoordinatedDestination(destination) {
         let topLevelNames = Set((extraction.directories + extraction.files.map(\.relativePath))
             .compactMap { $0.split(separator: "/").first.map(String.init) }).sorted()
-        func checkRootConflicts() throws {
+        func checkRootConflicts(committedNames: Set<String>) throws {
             for name in topLevelNames {
                 if name == Self.partialDirectoryName {
                     throw IPhoneUSBExportError.destinationNotWritable
@@ -826,7 +849,9 @@ actor IPhoneUSBExportService {
                 files: extraction.files.map(\.relativePath),
                 fileManager: fileManager
             )
-            if !overwriteExisting, !conflicts.isEmpty {
+            if !overwriteExisting, conflicts.contains(where: {
+                $0.split(separator: "/").first.map { !committedNames.contains(String($0)) } ?? true
+            }) {
                 throw IPhoneUSBExportError.overwriteConfirmationRequired
             }
         }
@@ -864,7 +889,6 @@ actor IPhoneUSBExportService {
             isDirectory: true
         )
         let isResumingUSBPartial = fileManager.fileExists(atPath: partialURL.path)
-        if !isResumingUSBPartial { try checkRootConflicts() }
         defer {
             if !retainForCapacity && (!preservePartialOnCancellation || !Task.isCancelled) {
                 removeExportTemporaryItem(partialURL, destination: destination)
@@ -872,18 +896,21 @@ actor IPhoneUSBExportService {
         }
 
         var finalizedTopLevelNames: Set<String> = []
-        if isResumingUSBPartial {
-            for name in topLevelNames {
-                let staged = partialURL.appendingPathComponent(name)
+        let committedRootsURL = extractionRoot.appendingPathComponent(".simplecamera-committed.json")
+        if isResumingUSBPartial,
+           let data = try? Data(contentsOf: committedRootsURL),
+           let committed = try? JSONDecoder().decode(ZIPCommittedRoots.self, from: data),
+           committed.jobID == resumeIdentifier {
+            for name in topLevelNames where committed.names.contains(name) {
                 let target = destination.url.appendingPathComponent(name)
                 guard fileManager.fileExists(atPath: target.path) else { continue }
-                if fileManager.fileExists(atPath: staged.path) { continue }
                 guard try finalizedRootItemMatches(name) else {
-                    throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
+                    continue
                 }
                 finalizedTopLevelNames.insert(name)
             }
         }
+        try checkRootConflicts(committedNames: finalizedTopLevelNames)
 
         var existingOffsets: [String: Int64] = [:]
         var rejectedPartials: [URL] = []
@@ -1049,8 +1076,7 @@ actor IPhoneUSBExportService {
             report(.finalizing, copiedBytes, extraction.totalBytes,
                    "USB 루트에 저장 확정 \(index)/\(topLevelNames.count)개\n\(name)")
             if finalizedTopLevelNames.contains(name) {
-                guard !fileManager.fileExists(atPath: staged.path),
-                      try finalizedRootItemMatches(name) else {
+                guard try finalizedRootItemMatches(name) else {
                     throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
                 }
                 continue
@@ -1067,7 +1093,6 @@ actor IPhoneUSBExportService {
                     "overwrite-\(UUID().uuidString.lowercased()).backup",
                     isDirectory: true
                 )
-                defer { try? fileManager.removeItem(at: backup) }
                 try committer.commit(
                     stagedRoot: partialURL,
                     destinationRoot: destination.url,
@@ -1079,6 +1104,11 @@ actor IPhoneUSBExportService {
             } else {
                 try fileManager.moveItem(at: staged, to: target)
             }
+            // Only this job's successful commit proves completion. A crash before
+            // this atomic record is written causes safe reprocessing on retry.
+            finalizedTopLevelNames.insert(name)
+            try JSONEncoder().encode(ZIPCommittedRoots(jobID: resumeIdentifier, names: finalizedTopLevelNames))
+                .write(to: committedRootsURL, options: .atomic)
         }
         // Cleanup trouble must not turn successfully placed data into a copy
         // failure. Report it separately and retain the original ZIP.
@@ -1111,7 +1141,7 @@ actor IPhoneUSBExportService {
             sourceModifiedAt: sourceModifiedAt,
             changeSummary: changeSummary
         )
-        try deletionStore.save(decision)
+        try deletionStore.save(decision, allowDeletion: selectedZIPPaths == nil)
         return decision
         }
     }
@@ -1121,18 +1151,23 @@ actor IPhoneUSBExportService {
         archiveName: String
     ) -> SafeZIPExtraction {
         var extraction = original
+        var layoutDirectories = original.archiveDirectories ?? original.directories
         let archiveBaseName = (archiveName as NSString).deletingPathExtension
         let archiveKey = packagingNameKey(archiveBaseName)
         let knownWrapperKeys: Set<String> = ["root", "sdcardroot", "usbroot"]
 
         while true {
-            guard let wrapper = extraction.directories.first(where: { path in
+            guard let wrapper = layoutDirectories.first(where: { path in
                 guard !path.contains("/") else { return false }
                 let key = packagingNameKey(path)
                 return knownWrapperKeys.contains(key)
                     || (!archiveKey.isEmpty && key == archiveKey)
             }) else { break }
             let prefix = wrapper + "/"
+            layoutDirectories = layoutDirectories.compactMap {
+                guard $0 != wrapper else { return nil }
+                return $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : $0
+            }
             extraction = SafeZIPExtraction(
                 files: extraction.files.map {
                     SafeZIPExtractedFile(
@@ -1311,7 +1346,7 @@ actor IPhoneUSBExportService {
             )
         }
         let manifest = ZIPExportResumeManifest(
-            version: 1,
+            version: 2,
             sourceID: sourceID,
             sourceSize: sourceSize,
             sourceModifiedAt: sourceModifiedAt,
@@ -1334,14 +1369,15 @@ actor IPhoneUSBExportService {
         let manifestURL = root.appendingPathComponent(".simplecamera-resume.json")
         guard let data = try? Data(contentsOf: manifestURL),
               let manifest = try? JSONDecoder().decode(ZIPExportResumeManifest.self, from: data),
-              manifest.version == 1,
+              manifest.version == 2,
               manifest.sourceID == sourceID,
               manifest.sourceSize == sourceSize,
               manifest.sourceModifiedAt == sourceModifiedAt else { return nil }
         var files: [SafeZIPExtractedFile] = []
+        let contentRoot = root.appendingPathComponent("content", isDirectory: true).standardizedFileURL
         for item in manifest.files {
             let url = root.appendingPathComponent(item.stagingPath).standardizedFileURL
-            guard url.path.hasPrefix(root.standardizedFileURL.path + "/"),
+            guard url.path.hasPrefix(contentRoot.path + "/"),
                   (try? fileSize(url)) == item.size else { return nil }
             files.append(SafeZIPExtractedFile(
                 relativePath: item.relativePath,
@@ -1441,11 +1477,16 @@ actor IPhoneUSBExportService {
             detail: detail,
             sourceFileIDs: activeSourceFileIDs,
             archiveMode: activeArchiveMode,
-            capacityCheck: currentCapacityCheck
+            capacityCheck: currentCapacityCheck,
+            zipSelections: activeZIPSelections
         ))
     }
 
     private static func failure(sourceID: String, error: Error) -> IPhoneUSBExportFailure {
+        if let recovery = error as? USBCommitRecoveryError {
+            return IPhoneUSBExportFailure(sourceID: sourceID, error: .copyFailed,
+                                          detail: recovery.localizedDescription)
+        }
         if let shortage = error as? StorageCapacityInsufficient {
             return IPhoneUSBExportFailure(sourceID: sourceID, error: .insufficientSpace,
                                           detail: shortage.localizedDescription)
@@ -1498,7 +1539,8 @@ actor IPhoneUSBExportService {
         destination: USBBookmarkDestination,
         archiveMode: IPhoneReceiveArchiveMode,
         sourceSize: Int64,
-        sourceModifiedAt: Date?
+        sourceModifiedAt: Date?,
+        selectedZIPPaths: Set<String>? = nil
     ) -> UUID {
         let modified = sourceModifiedAt.map {
             String($0.timeIntervalSinceReferenceDate.bitPattern)
@@ -1506,9 +1548,13 @@ actor IPhoneUSBExportService {
         let material = [
             file.id,
             destination.volumeID,
+            destination.url.standardizedFileURL.path,
             archiveMode.rawValue,
             String(sourceSize),
-            modified
+            modified,
+            selectedZIPPaths.map { paths in
+                paths.sorted().map { "\($0.utf8.count):\($0)" }.joined()
+            } ?? "all"
         ].joined(separator: "\n")
         let digest = Self.hex(SHA256.hash(data: Data(material.utf8)))
         let characters = Array(digest.prefix(32))

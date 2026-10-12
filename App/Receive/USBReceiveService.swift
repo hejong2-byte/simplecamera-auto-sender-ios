@@ -167,7 +167,6 @@ actor USBReceiveService {
                         let barePartial = String(name.dropLast(".partial".count))
                         return (name.hasSuffix(".partial") && UUID(uuidString: barePartial) != nil)
                             || (name.hasPrefix("zip-") && name.hasSuffix(".partial"))
-                            || (name.hasPrefix("overwrite-") && name.hasSuffix(".backup"))
                     }
                     candidates.append(contentsOf: directCandidates)
                 }
@@ -873,7 +872,7 @@ actor USBReceiveService {
                             )
                         )
                     }
-                    throw failure.error
+                    throw failure
                 }
                 guard let completed = exported.verified.first else {
                     throw IPhoneUSBExportError.copyFailed

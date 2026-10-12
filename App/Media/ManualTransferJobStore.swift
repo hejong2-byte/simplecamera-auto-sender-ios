@@ -37,6 +37,7 @@ struct ManualTransferJob: Codable, Sendable, Equatable, Identifiable {
     var parts: [ManualTransferPart]
     var failure: ManualTransferFailure?
     var recipientCredentialBinding: String? = nil
+    var retryHistoryID: UUID? = nil
 }
 
 struct ManualTransferHistoryEntry: Codable, Sendable, Equatable, Identifiable {
@@ -150,13 +151,36 @@ actor ManualTransferJobStore {
                     state.batches.append(.init(id: job.batchID, kind: job.kind,
                         selectedCount: job.selectedCount, preparedCount: 1, uploadedCount: 0, failedCount: 0))
                 }
-                if !state.jobs.contains(where: { $0.id == job.id }) { state.jobs.append(job) }
+                if !state.jobs.contains(where: { $0.id == job.id }) {
+                    state.jobs.append(job)
+                    if let historyID = job.retryHistoryID,
+                       let index = state.history.firstIndex(where: { $0.id == historyID }) {
+                        state.history[index].retriedAt = Date()
+                    }
+                }
             }
         }
     }
 
     func recordHistory(_ entry: ManualTransferHistoryEntry) throws {
         try transaction { state in Self.insertHistory(entry, into: &state) }
+    }
+
+    func finishJob(id: UUID, failure: ManualTransferFailure?) throws -> ManualTransferQueueState {
+        try transaction { state in
+            guard let index = state.jobs.firstIndex(where: { $0.id == id }),
+                  state.jobs[index].stage != .completed, state.jobs[index].stage != .failed,
+                  let batch = state.batches.firstIndex(where: { $0.id == state.jobs[index].batchID }) else { return }
+            state.jobs[index].stage = failure == nil ? .completed : .failed
+            state.jobs[index].failure = failure
+            if failure == nil { state.batches[batch].uploadedCount += 1 }
+            else { state.batches[batch].failedCount += 1 }
+            let job = state.jobs[index]
+            Self.insertHistory(.init(id: job.id, fileName: job.originalFileName, kind: job.kind,
+                recipientMailboxID: job.recipientMailboxID, completedAt: Date(), failure: failure,
+                assetIdentifier: job.assetIdentifier, sha256: job.sha256,
+                recipientCredentialBinding: job.recipientCredentialBinding), into: &state)
+        }
     }
 
     static func insertHistory(_ entry: ManualTransferHistoryEntry, into state: inout ManualTransferQueueState) {
@@ -180,7 +204,7 @@ actor ManualTransferJobStore {
         defer { retryClaims.remove(id) }
         guard enqueued else { return }
         try transaction { state in
-            if let index = state.history.firstIndex(where: { $0.id == id }) {
+            if let index = state.history.firstIndex(where: { $0.id == id }), state.history[index].retriedAt == nil {
                 state.history[index].retriedAt = Date()
             }
         }

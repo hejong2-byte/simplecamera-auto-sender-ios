@@ -42,6 +42,7 @@ struct USBReceiveProgress: Codable, Sendable, Equatable {
     let sourceFileIDs: [String]?
     let archiveMode: IPhoneReceiveArchiveMode?
     let capacityCheck: StorageCapacityCheck?
+    let zipSelections: [String: Set<String>]?
 
     init(
         stage: USBReceiveStage,
@@ -59,7 +60,8 @@ struct USBReceiveProgress: Codable, Sendable, Equatable {
         detail: String? = nil,
         sourceFileIDs: [String]? = nil,
         archiveMode: IPhoneReceiveArchiveMode? = nil,
-        capacityCheck: StorageCapacityCheck? = nil
+        capacityCheck: StorageCapacityCheck? = nil,
+        zipSelections: [String: Set<String>]? = nil
     ) {
         self.stage = stage
         self.destination = destination
@@ -77,6 +79,7 @@ struct USBReceiveProgress: Codable, Sendable, Equatable {
         self.sourceFileIDs = sourceFileIDs
         self.archiveMode = archiveMode
         self.capacityCheck = capacityCheck
+        self.zipSelections = zipSelections
     }
 
     var percent: Int {
@@ -140,7 +143,8 @@ final class USBReceiveProgressStore: @unchecked Sendable {
         fileName: String?,
         totalCount: Int,
         sourceFileIDs: [String] = [],
-        archiveMode: IPhoneReceiveArchiveMode? = nil
+        archiveMode: IPhoneReceiveArchiveMode? = nil,
+        zipSelections: [String: Set<String>]? = nil
     ) {
         lock.withLock {
             interruption = nil
@@ -151,7 +155,7 @@ final class USBReceiveProgressStore: @unchecked Sendable {
             currentIndex: 1, totalCount: totalCount, completedCount: 0, bytesReceived: 0,
             totalBytes: 0, startedAt: Date(), expiresAt: nil, errorMessage: nil,
             detail: "USB 복사 준비 중", sourceFileIDs: sourceFileIDs,
-            archiveMode: archiveMode))
+            archiveMode: archiveMode, zipSelections: zipSelections))
     }
 
     func interruptExport() {
@@ -173,7 +177,8 @@ final class USBReceiveProgressStore: @unchecked Sendable {
             completedCount: value.completedCount, bytesReceived: value.bytesReceived,
             totalBytes: value.totalBytes, startedAt: nil, expiresAt: nil, errorMessage: nil,
             detail: [value.detail, message].compactMap { $0 }.joined(separator: "\n"),
-            sourceFileIDs: value.sourceFileIDs, archiveMode: value.archiveMode, capacityCheck: value.capacityCheck)
+            sourceFileIDs: value.sourceFileIDs, archiveMode: value.archiveMode,
+            capacityCheck: value.capacityCheck, zipSelections: value.zipSelections)
     }
 
     // Small local checkpoints, at most once a second while bytes advance. Stage
@@ -195,7 +200,8 @@ final class USBReceiveProgressStore: @unchecked Sendable {
                 totalBytes: latest.totalBytes, startedAt: latest.startedAt, expiresAt: latest.expiresAt,
                 errorMessage: latest.errorMessage,
                 detail: "USB 복사 진행 기록 저장 실패 · 앱을 종료하면 진행 표시를 복원하지 못할 수 있습니다.",
-                sourceFileIDs: latest.sourceFileIDs, archiveMode: latest.archiveMode, capacityCheck: latest.capacityCheck)
+                sourceFileIDs: latest.sourceFileIDs, archiveMode: latest.archiveMode,
+                capacityCheck: latest.capacityCheck, zipSelections: latest.zipSelections)
         }
     }
 
@@ -266,7 +272,8 @@ final class USBReceiveProgressStore: @unchecked Sendable {
                 errorMessage: message,
                 sourceFileIDs: latest.sourceFileIDs,
                 archiveMode: latest.archiveMode,
-                capacityCheck: latest.capacityCheck
+                capacityCheck: latest.capacityCheck,
+                zipSelections: latest.zipSelections
             )
         }
         publish(failure)

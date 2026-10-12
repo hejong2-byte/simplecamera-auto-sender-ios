@@ -513,6 +513,8 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
                 preservePartialOnCancellation: true, zipSelections: [file.id: ["a.txt"]])
         }.value
         XCTAssertTrue(interrupted.cancelled)
+        let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(context.progressStore.snapshot())) as? [String: Any])
+        XCTAssertEqual((saved["zipSelections"] as? [String: [String]])?[file.id], ["a.txt"])
         let resumed = await context.service.export([file], to: context.destination,
             preservePartialOnCancellation: true, zipSelections: [file.id: ["b.txt"]])
         XCTAssertTrue(resumed.failed.isEmpty, resumed.errorMessage ?? "")
@@ -529,6 +531,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         }
         let archive = context.sourceDirectory.appendingPathComponent("fixture.zip")
         try FileManager.default.zipItem(at: fixture, to: archive, shouldKeepParent: false)
+        XCTAssertEqual(Set(try Archive(url: archive, accessMode: .read).map(\.path)), Set(names))
         let file = try makeStoredFile(name: "metadata.zip", data: Data(contentsOf: archive), in: context.sourceDirectory)
         let result = await context.service.export([file], to: context.destination)
         XCTAssertTrue(result.failed.isEmpty, result.errorMessage ?? "")

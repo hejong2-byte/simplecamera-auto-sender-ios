@@ -52,25 +52,7 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
 
     func enqueue(_ jobs: [ManualTransferJob]) async throws {
         guard !jobs.isEmpty else { return }
-        var state = try await jobStore.load()
-        for job in jobs {
-            if !state.batches.contains(where: { $0.id == job.batchID }) {
-                state.batches.append(ManualTransferBatch(
-                    id: job.batchID,
-                    kind: job.kind,
-                    selectedCount: job.selectedCount,
-                    preparedCount: 1,
-                    uploadedCount: 0,
-                    failedCount: 0
-                ))
-            }
-            if let index = state.jobs.firstIndex(where: { $0.id == job.id }) {
-                state.jobs[index] = job
-            } else {
-                state.jobs.append(job)
-            }
-        }
-        try await jobStore.replace(state)
+        try await jobStore.enqueue(jobs)
         for job in jobs {
             await scheduleNeededOperations(jobID: job.id)
         }
@@ -228,20 +210,25 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
            await scheduler.existingDescriptors().contains(descriptor) {
             return
         }
-        guard var state = try? await jobStore.load(),
-              let index = state.jobs.firstIndex(where: { $0.id == descriptor.jobID }) else {
+        guard let state = try? await jobStore.load(),
+              let job = state.jobs.first(where: { $0.id == descriptor.jobID }) else {
             return
         }
-        let job = state.jobs[index]
         do {
             let (request, fileURL) = try requestAndFile(
                 descriptor: descriptor,
                 job: job
             )
             if job.stage != .failed {
-                state.jobs[index].stage = stage(for: descriptor.operation)
-                try await jobStore.replace(state)
-                publish(progress(for: state.jobs[index], in: state))
+                let nextStage = stage(for: descriptor.operation)
+                let updated = try await jobStore.transaction { state in
+                    guard let index = state.jobs.firstIndex(where: { $0.id == descriptor.jobID }),
+                          state.jobs[index].stage != .failed, state.jobs[index].stage != .completed else { return }
+                    state.jobs[index].stage = nextStage
+                }
+                guard let current = updated.jobs.first(where: { $0.id == job.id }),
+                      neededOperations(for: current).contains(descriptor.operation) else { return }
+                publish(progress(for: current, in: updated))
             }
             try await scheduler.schedule(
                 descriptor,
@@ -268,6 +255,10 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
         job: ManualTransferJob
     ) throws -> (URLRequest, URL) {
         guard let credential = try credentialStore.load() else {
+            throw UploadConfigurationError.missingCredential
+        }
+        if job.recipientMailboxID == nil, let binding = job.recipientCredentialBinding,
+           ManualRecipientBinding.digest(credential) != binding {
             throw UploadConfigurationError.missingCredential
         }
         let fingerprint = UploadFileFingerprint(
@@ -417,20 +408,20 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
         jobID: UUID,
         attempt: Int
     ) async {
-        guard var state = try? await jobStore.load(),
-              let jobIndex = state.jobs.firstIndex(where: { $0.id == jobID }) else {
-            return
-        }
-        state.jobs[jobIndex].stage = .retrying
-        if case let .part(number) = descriptor.operation,
-           let partIndex = state.jobs[jobIndex].parts.firstIndex(where: { $0.number == number }) {
-            state.jobs[jobIndex].parts[partIndex].retryAttempt = attempt
-        } else {
+        if case .part = descriptor.operation {} else {
             transientRetryAttempts[descriptor] = attempt
         }
-        try? await jobStore.replace(state)
+        guard let state = try? await jobStore.transaction({ state in
+            guard let index = state.jobs.firstIndex(where: { $0.id == jobID }),
+                  state.jobs[index].stage != .failed, state.jobs[index].stage != .completed else { return }
+            state.jobs[index].stage = .retrying
+            if case let .part(number) = descriptor.operation,
+               let part = state.jobs[index].parts.firstIndex(where: { $0.number == number }) {
+                state.jobs[index].parts[part].retryAttempt = attempt
+            }
+        }), let job = state.jobs.first(where: { $0.id == jobID }) else { return }
         publish(progress(
-            for: state.jobs[jobIndex],
+            for: job,
             in: state,
             stage: .retrying,
             retryAttempt: attempt
@@ -438,80 +429,52 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
     }
 
     private func storeUploadID(_ uploadID: String, jobID: UUID) async {
-        guard var state = try? await jobStore.load(),
-              let index = state.jobs.firstIndex(where: { $0.id == jobID }) else {
-            return
-        }
-        guard state.jobs[index].uploadID == nil else { return }
-        state.jobs[index].uploadID = uploadID
-        state.jobs[index].stage = .uploading
-        try? await jobStore.replace(state)
-        publish(progress(for: state.jobs[index], in: state))
+        guard let state = try? await jobStore.transaction({ state in
+            guard let index = state.jobs.firstIndex(where: { $0.id == jobID }),
+                  state.jobs[index].uploadID == nil,
+                  state.jobs[index].stage != .failed, state.jobs[index].stage != .completed else { return }
+            state.jobs[index].uploadID = uploadID
+            state.jobs[index].stage = .uploading
+        }), let job = state.jobs.first(where: { $0.id == jobID }) else { return }
+        publish(progress(for: job, in: state))
     }
 
     private func storeCompletedPart(
         _ uploaded: ManualMultipartPartResponse,
         jobID: UUID
     ) async {
-        guard var state = try? await jobStore.load(),
-              let jobIndex = state.jobs.firstIndex(where: { $0.id == jobID }),
-              let partIndex = state.jobs[jobIndex].parts.firstIndex(where: {
-                  $0.number == uploaded.partNumber
-              }) else {
-            return
-        }
-        if state.jobs[jobIndex].parts[partIndex].etag == uploaded.etag {
-            return
-        }
-        state.jobs[jobIndex].parts[partIndex].etag = uploaded.etag
-        state.jobs[jobIndex].parts[partIndex].retryAttempt = 0
-        state.jobs[jobIndex].stage = .uploading
-        do {
-            try await jobStore.replace(state)
-        } catch {
-            return
-        }
-        try? FileManager.default.removeItem(
-            at: state.jobs[jobIndex].parts[partIndex].fileURL
-        )
-        publish(progress(for: state.jobs[jobIndex], in: state))
+        let number = uploaded.partNumber
+        let etag = uploaded.etag
+        guard let state = try? await jobStore.transaction({ state in
+            guard let index = state.jobs.firstIndex(where: { $0.id == jobID }),
+                  state.jobs[index].stage != .failed, state.jobs[index].stage != .completed,
+                  let part = state.jobs[index].parts.firstIndex(where: { $0.number == number }) else { return }
+            guard state.jobs[index].parts[part].etag != etag else { return }
+            state.jobs[index].parts[part].etag = etag
+            state.jobs[index].parts[part].retryAttempt = 0
+            state.jobs[index].stage = .uploading
+        }), let job = state.jobs.first(where: { $0.id == jobID }),
+            let part = job.parts.first(where: { $0.number == number }), part.etag == etag else { return }
+        try? FileManager.default.removeItem(at: part.fileURL)
+        publish(progress(for: job, in: state))
     }
 
     private func finishSuccessfully(jobID: UUID) async {
-        guard var state = try? await jobStore.load(),
-              let jobIndex = state.jobs.firstIndex(where: { $0.id == jobID }),
-              let batchIndex = state.batches.firstIndex(where: {
-                  $0.id == state.jobs[jobIndex].batchID
-              }) else {
-            return
-        }
-        if state.jobs[jobIndex].stage != .completed {
-            state.jobs[jobIndex].stage = .completed
-            state.batches[batchIndex].uploadedCount += 1
-            try? await jobStore.replace(state)
-            publish(progress(for: state.jobs[jobIndex], in: state, stage: .completed))
-        }
-        await cleanupAndRemove(state.jobs[jobIndex])
+        guard let state = try? await jobStore.finishJob(id: jobID, failure: nil),
+              let job = state.jobs.first(where: { $0.id == jobID }), job.stage == .completed else { return }
+        publish(progress(for: job, in: state, stage: .completed))
+        await cleanupAndRemove(job)
     }
 
     private func markFailed(jobID: UUID, failure: ManualTransferFailure) async {
-        guard var state = try? await jobStore.load(),
-              let jobIndex = state.jobs.firstIndex(where: { $0.id == jobID }),
-              let batchIndex = state.batches.firstIndex(where: {
-                  $0.id == state.jobs[jobIndex].batchID
-              }) else {
-            return
-        }
-        if state.jobs[jobIndex].stage != .failed {
-            state.jobs[jobIndex].stage = .failed
-            state.jobs[jobIndex].failure = failure
-            state.batches[batchIndex].failedCount += 1
-            try? await jobStore.replace(state)
-            publish(progress(for: state.jobs[jobIndex], in: state, stage: .failed))
-            await scheduler.cancel(jobID: jobID)
-        }
-        if state.jobs[jobIndex].uploadID == nil {
-            await cleanupAndRemove(state.jobs[jobIndex])
+        guard let state = try? await jobStore.finishJob(id: jobID, failure: failure),
+              let job = state.jobs.first(where: { $0.id == jobID }), job.stage == .failed else { return }
+        publish(progress(for: job, in: state, stage: .failed))
+        await scheduler.cancel(jobID: jobID)
+        // Abort needs only metadata; discard large payloads even if the abort remains queued.
+        cleanupPayload(job)
+        if job.uploadID == nil {
+            await cleanupAndRemove(job)
         } else {
             await scheduleNeededOperations(jobID: jobID)
         }
@@ -519,12 +482,20 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
 
     private func cleanupAndRemove(_ job: ManualTransferJob) async {
         activeTaskBytes = activeTaskBytes.filter { $0.key.jobID != job.id }
+        cleanupPayload(job)
+        try? FileManager.default.removeItem(at: controlDirectory(for: job))
+        try? await jobStore.removeJob(id: job.id)
+    }
+
+    private func cleanupPayload(_ job: ManualTransferJob) {
         try? FileManager.default.removeItem(at: job.exportedFileURL)
         for part in job.parts {
             try? FileManager.default.removeItem(at: part.fileURL)
         }
-        try? FileManager.default.removeItem(at: controlDirectory(for: job))
-        try? await jobStore.removeJob(id: job.id)
+        if let directory = job.parts.first?.fileURL.deletingLastPathComponent(),
+           directory.lastPathComponent == "Multipart-\(job.id.uuidString)" {
+            try? FileManager.default.removeItem(at: directory)
+        }
     }
 
     private func controlDirectory(for job: ManualTransferJob) -> URL {
