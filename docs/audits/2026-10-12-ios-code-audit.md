@@ -1,5 +1,7 @@
 # iPhone 앱 코드 점검 및 최적화 제안
 
+> 아래는 수정 전 점검 기록입니다. 이후 승인된 구현과 시험 결과는 [후속 검증 기록](2026-10-12-ios-audit-fix-verification.md)을 참조하세요.
+
 - 점검일: 2026-10-12
 - 대상: `codex/received-file-sharing`, `e949db50` (앱 v0.3.48 / build 59)
 - 범위: 현재 송신·수신·ZIP·USB·화면·알림 코드와 관련 회귀 테스트.

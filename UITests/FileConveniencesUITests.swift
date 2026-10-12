@@ -24,7 +24,7 @@ final class FileConveniencesUITests: XCTestCase {
         XCTAssertTrue(share.waitForExistence(timeout: 5), "Selected files need one shared URL sheet")
         XCTAssertTrue(share.isEnabled)
         share.tap()
-        let sheet = app.navigationBars["UIActivityContentView"]
+        let sheet = app.otherElements["ActivityListView"]
         let appeared = sheet.waitForExistence(timeout: 30)
         if !appeared {
             keepScreenshot("multi-share-sheet-missing", app: app)
@@ -33,9 +33,18 @@ final class FileConveniencesUITests: XCTestCase {
             print(app.debugDescription)
         }
         XCTAssertTrue(appeared)
-        sheet.buttons["header.closeButton"].tap()
+        let header = sheet.navigationBars["2 Documents"]
+        XCTAssertTrue(header.exists, "The activity sheet must contain both selected files")
+        XCTAssertTrue(header.otherElements["1 Image and 1 Document"].exists,
+                      "Both the PNG and PDF must be passed to the system share sheet")
+        XCTAssertTrue(sheet.collectionViews["activityCollectionView"].exists)
+        keepScreenshot("multi-share-two-originals", app: app)
+        header.buttons["header.closeButton"].tap()
+        let shareEnabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: share)
+        XCTAssertEqual(XCTWaiter.wait(for: [shareEnabled], timeout: 5), .completed)
         for name in ["받은 문서.pdf", "받은 사진.png"] {
             XCTAssertTrue(app.buttons["stored-file-\(name)"].exists)
+            XCTAssertTrue(app.buttons["stored-file-\(name)"].isSelected)
         }
     }
 
