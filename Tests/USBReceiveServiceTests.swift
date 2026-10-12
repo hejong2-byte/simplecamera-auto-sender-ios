@@ -681,7 +681,7 @@ final class USBReceiveServiceTests: XCTestCase {
 
     func testSharedZIPExporterReportsRetainedRecoveryPath() async throws {
         let fileManager = RecoveryFailureFileManager()
-        let fixture = try makeFixture(payload: validZIPData(), fileName: "archive.zip",
+        let fixture = try makeFixture(payload: validZIPData(), fileName: "archive.zip", chunkSize: 4,
             archiveMode: .extract, overwriteExisting: true, useSharedZIPExporter: true,
             exportFileManager: fileManager)
         let original = Data("original-data".utf8)
