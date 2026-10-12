@@ -509,7 +509,8 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
     }
 
     func testZIPExportPreservesOriginalBackupWhenInstallAndRollbackFail() async throws {
-        let context = try makeContext(fileManager: FailingExportInstallAndRollbackFileManager())
+        let fileManager = FailingExportInstallAndRollbackFileManager()
+        let context = try makeContext(fileManager: fileManager)
         let fixture = temporaryDirectory()
         try Data("replacement".utf8).write(to: fixture.appendingPathComponent("root.txt"))
         let archiveURL = context.sourceDirectory.appendingPathComponent("fixture.zip")
@@ -523,6 +524,8 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
 
         XCTAssertEqual(result.failed.count, 1)
         XCTAssertTrue(result.verified.isEmpty)
+        XCTAssertTrue(fileManager.installFailed, "Must exercise installation failure")
+        XCTAssertTrue(fileManager.rollbackFailed, "Must exercise restoration failure")
         let remaining = (FileManager.default.enumerator(at: context.usbDirectory, includingPropertiesForKeys: nil)?.allObjects as? [URL]) ?? []
         XCTAssertTrue(remaining.contains { (try? Data(contentsOf: $0)) == original }, "The original must survive in its destination or recovery backup")
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
@@ -1197,10 +1200,18 @@ private struct ExportContext {
 }
 
 private final class FailingExportInstallAndRollbackFileManager: FileManager, @unchecked Sendable {
+    private(set) var installFailed = false
+    private(set) var rollbackFailed = false
+
     override func moveItem(at srcURL: URL, to dstURL: URL) throws {
-        if srcURL.path.contains(".partial/"),
-           dstURL.deletingLastPathComponent().lastPathComponent == "usb",
-           dstURL.lastPathComponent == "root.txt" {
+        if dstURL.deletingLastPathComponent().lastPathComponent == "usb",
+           dstURL.lastPathComponent == "root.txt",
+           srcURL.pathComponents.contains(where: { $0.hasSuffix(".partial") || $0.hasSuffix(".backup") }) {
+            if srcURL.pathComponents.contains(where: { $0.hasSuffix(".backup") }) {
+                rollbackFailed = true
+            } else {
+                installFailed = true
+            }
             throw CocoaError(.fileWriteNoPermission)
         }
         try super.moveItem(at: srcURL, to: dstURL)

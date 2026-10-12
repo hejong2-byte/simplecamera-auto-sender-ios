@@ -210,8 +210,9 @@ final class USBZIPReceivePipelineTests: XCTestCase {
         let target = context.usb.appendingPathComponent("root.txt")
         let original = Data("irreplaceable-original".utf8)
         try original.write(to: target)
+        let fileManager = FailingDirectZIPInstallAndRollbackFileManager()
         let pipeline = USBZIPReceivePipeline(
-            fileManager: FailingDirectZIPInstallAndRollbackFileManager(),
+            fileManager: fileManager,
             workingDirectory: context.work
         )
 
@@ -220,6 +221,8 @@ final class USBZIPReceivePipelineTests: XCTestCase {
             overwriteExisting: true, progress: { _ in }
         ))
 
+        XCTAssertTrue(fileManager.installFailed, "Must exercise installation failure")
+        XCTAssertTrue(fileManager.rollbackFailed, "Must exercise restoration failure")
         let remaining = (FileManager.default.enumerator(at: context.usb, includingPropertiesForKeys: nil)?.allObjects as? [URL]) ?? []
         XCTAssertTrue(remaining.contains { (try? Data(contentsOf: $0)) == original }, "The original must survive in its destination or recovery backup")
         XCTAssertTrue(FileManager.default.fileExists(atPath: context.zip.path))
@@ -287,10 +290,18 @@ private struct Context {
 }
 
 private final class FailingDirectZIPInstallAndRollbackFileManager: FileManager, @unchecked Sendable {
+    private(set) var installFailed = false
+    private(set) var rollbackFailed = false
+
     override func moveItem(at srcURL: URL, to dstURL: URL) throws {
-        if srcURL.path.contains(".partial/"),
-           dstURL.deletingLastPathComponent().lastPathComponent == "usb",
-           dstURL.lastPathComponent == "root.txt" {
+        if dstURL.deletingLastPathComponent().lastPathComponent == "usb",
+           dstURL.lastPathComponent == "root.txt",
+           srcURL.pathComponents.contains(where: { $0.hasSuffix(".partial") || $0.hasSuffix(".backup") }) {
+            if srcURL.pathComponents.contains(where: { $0.hasSuffix(".backup") }) {
+                rollbackFailed = true
+            } else {
+                installFailed = true
+            }
             throw CocoaError(.fileWriteNoPermission)
         }
         try super.moveItem(at: srcURL, to: dstURL)

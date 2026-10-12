@@ -57,3 +57,7 @@ Files: App/UI/*, App/Application/USBReceiverDependencies.swift, App/Receive/USBS
 ## Execution ledger
 - Baseline tracked worktree clean; existing untracked artifacts preserved.
 - Backup completed before edits. Native tests not yet run for this change.
+- 2026-10-12 resumed after explicit stop. Test-only commits: 484a1c4 and 49e7223; no production edits at resumption.
+- Recovered cancelled native runs 38211160962 and 38211479456: their unit suites completed (551 tests / 18 failed assertions; 555 / 23). These are RED evidence, not successful CI runs.
+- Confirmed behavioral failures: same-size uncommitted ZIP resume, recovery-backup cleanup, upload lost updates/completion ordering/progress disk dependence, USB catalog/reset races, missing history metadata and approved feature controls.
+- Two rollback fault-injection tests unexpectedly passed. Repair and assert actual install/rollback failure injection before using them as regression evidence. Sort UI, foreground permission and catalog coalescing coverage still require verification.
