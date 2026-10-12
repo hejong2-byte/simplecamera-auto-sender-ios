@@ -36,11 +36,43 @@ struct ManualTransferJob: Codable, Sendable, Equatable, Identifiable {
     var uploadID: String?
     var parts: [ManualTransferPart]
     var failure: ManualTransferFailure?
+    var recipientCredentialBinding: String? = nil
+}
+
+struct ManualTransferHistoryEntry: Codable, Sendable, Equatable, Identifiable {
+    let id: UUID
+    let fileName: String
+    let kind: ManualMediaKind
+    let recipientMailboxID: UUID?
+    let completedAt: Date
+    let failure: ManualTransferFailure?
+    let assetIdentifier: String
+    let sha256: String?
+    let recipientCredentialBinding: String?
+    var retriedAt: Date? = nil
+
+    var canRetry: Bool { failure != nil && retriedAt == nil }
 }
 
 struct ManualTransferQueueState: Codable, Sendable, Equatable {
     var batches: [ManualTransferBatch]
     var jobs: [ManualTransferJob]
+    var history: [ManualTransferHistoryEntry] = []
+
+    init(batches: [ManualTransferBatch], jobs: [ManualTransferJob], history: [ManualTransferHistoryEntry] = []) {
+        self.batches = batches
+        self.jobs = jobs
+        self.history = history
+    }
+
+    private enum CodingKeys: String, CodingKey { case batches, jobs, history }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        batches = try values.decode([ManualTransferBatch].self, forKey: .batches)
+        jobs = try values.decode([ManualTransferJob].self, forKey: .jobs)
+        history = try values.decodeIfPresent([ManualTransferHistoryEntry].self, forKey: .history) ?? []
+    }
 
     static let empty = ManualTransferQueueState(batches: [], jobs: [])
 }
@@ -53,6 +85,8 @@ actor ManualTransferJobStore {
     private let fileURL: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private var cachedState: ManualTransferQueueState?
+    private var retryClaims: Set<UUID> = []
 
     init(fileURL: URL) {
         self.fileURL = fileURL
@@ -66,13 +100,17 @@ actor ManualTransferJobStore {
     }
 
     func load() throws -> ManualTransferQueueState {
+        if let cachedState { return cachedState }
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            cachedState = .empty
             return .empty
         }
-        return try decoder.decode(
+        let state = try decoder.decode(
             ManualTransferQueueState.self,
             from: Data(contentsOf: fileURL)
         )
+        cachedState = state
+        return state
     }
 
     func replace(_ state: ManualTransferQueueState) throws {
@@ -89,9 +127,62 @@ actor ManualTransferJobStore {
             } else {
                 try fileManager.moveItem(at: replacement, to: fileURL)
             }
+            cachedState = state
         } catch {
             try? fileManager.removeItem(at: replacement)
             throw error
+        }
+    }
+
+    // The mutation and durable replacement never suspend across another actor call.
+    @discardableResult
+    func transaction(_ mutate: @Sendable (inout ManualTransferQueueState) -> Void) throws -> ManualTransferQueueState {
+        var state = try load()
+        mutate(&state)
+        if state != cachedState { try replace(state) }
+        return state
+    }
+
+    func enqueue(_ jobs: [ManualTransferJob]) throws {
+        try transaction { state in
+            for job in jobs {
+                if !state.batches.contains(where: { $0.id == job.batchID }) {
+                    state.batches.append(.init(id: job.batchID, kind: job.kind,
+                        selectedCount: job.selectedCount, preparedCount: 1, uploadedCount: 0, failedCount: 0))
+                }
+                if !state.jobs.contains(where: { $0.id == job.id }) { state.jobs.append(job) }
+            }
+        }
+    }
+
+    func recordHistory(_ entry: ManualTransferHistoryEntry) throws {
+        try transaction { state in Self.insertHistory(entry, into: &state) }
+    }
+
+    static func insertHistory(_ entry: ManualTransferHistoryEntry, into state: inout ManualTransferQueueState) {
+        guard !state.history.contains(where: { $0.id == entry.id }) else { return }
+        state.history.insert(entry, at: 0)
+        state.history = Array(state.history.prefix(100))
+    }
+
+    func claimRetry(id: UUID) throws -> ManualTransferHistoryEntry {
+        guard let entry = try load().history.first(where: { $0.id == id }) else {
+            throw ManualTransferRetryError.notFound
+        }
+        guard entry.failure != nil else { throw ManualTransferRetryError.notFailed }
+        guard entry.retriedAt == nil, retryClaims.insert(id).inserted else {
+            throw ManualTransferRetryError.alreadyRetrying
+        }
+        return entry
+    }
+
+    func finishRetry(id: UUID, enqueued: Bool) throws {
+        defer { retryClaims.remove(id) }
+        guard enqueued else { return }
+        try transaction { state in
+            if let index = state.history.firstIndex(where: { $0.id == id }) {
+                state.history[index].retriedAt = Date()
+            }
         }
     }
 

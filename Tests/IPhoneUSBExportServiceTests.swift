@@ -479,6 +479,47 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: context.zipWorkingDirectory.path), [])
     }
 
+    func testSelectiveZIPExportPreservesLayoutAndNeverOffersOriginalDeletion() async throws {
+        let context = try makeContext()
+        let fixture = temporaryDirectory()
+        try FileManager.default.createDirectory(at: fixture.appendingPathComponent("USBROOT/MAP"), withIntermediateDirectories: true)
+        try Data("chosen".utf8).write(to: fixture.appendingPathComponent("USBROOT/MAP/a.dat"))
+        try Data("other".utf8).write(to: fixture.appendingPathComponent("USBROOT/b.dat"))
+        let archive = context.sourceDirectory.appendingPathComponent("fixture.zip")
+        try FileManager.default.zipItem(at: fixture, to: archive, shouldKeepParent: false)
+        let file = try makeStoredFile(name: "navigation.zip", data: Data(contentsOf: archive), in: context.sourceDirectory)
+
+        let result = await context.service.export([file], to: context.destination,
+            zipSelections: [file.id: ["USBROOT/MAP/a.dat"]])
+
+        XCTAssertTrue(result.failed.isEmpty, result.errorMessage ?? "")
+        XCTAssertEqual(result.verified.count, 1)
+        XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent("MAP/a.dat")), Data("chosen".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: context.usbDirectory.appendingPathComponent("b.dat").path))
+        XCTAssertTrue(context.deletionStore.pending().isEmpty, "A partial archive copy must never offer original ZIP deletion")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
+
+    func testChangedZIPSelectionStartsIndependentResumeJob() async throws {
+        let context = try makeContext(fileManager: CancelOnlyFirstExportFileFileManager())
+        let fixture = temporaryDirectory()
+        try Data("first".utf8).write(to: fixture.appendingPathComponent("a.txt"))
+        try Data("second".utf8).write(to: fixture.appendingPathComponent("b.txt"))
+        let archive = context.sourceDirectory.appendingPathComponent("fixture.zip")
+        try FileManager.default.zipItem(at: fixture, to: archive, shouldKeepParent: false)
+        let file = try makeStoredFile(name: "selection.zip", data: Data(contentsOf: archive), in: context.sourceDirectory)
+        let interrupted = await Task {
+            await context.service.export([file], to: context.destination,
+                preservePartialOnCancellation: true, zipSelections: [file.id: ["a.txt"]])
+        }.value
+        XCTAssertTrue(interrupted.cancelled)
+        let resumed = await context.service.export([file], to: context.destination,
+            preservePartialOnCancellation: true, zipSelections: [file.id: ["b.txt"]])
+        XCTAssertTrue(resumed.failed.isEmpty, resumed.errorMessage ?? "")
+        XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent("b.txt")), Data("second".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: context.usbDirectory.appendingPathComponent("a.txt").path))
+    }
+
     func testInterruptedZIPResumeReplacesUncommittedSameSizeRootFile() async throws {
         let context = try makeContext(fileManager: CancelOnlyFirstExportFileFileManager())
         let archiveData = try XCTUnwrap(Data(base64Encoded: "UEsDBBQAAAAIANJIKF03rc1dEwAAAAsAAAAPAAAAZG9jcy9yZXBvcnQudHh0KkotyC8q0U1JLEkEAAAA//8DAFBLAwQUAAAACADSSChd+/k8aREAAAAJAAAACAAAAHJvb3QudHh0KsrPL9FNSSxJBAAAAP//AwBQSwECFAAUAAAACADSSChdN63NXRMAAAALAAAADwAAAAAAAAAAAAAAAAAAAAAAZG9jcy9yZXBvcnQudHh0UEsBAhQAFAAAAAgA0kgoXfv5PGkRAAAACQAAAAgAAAAAAAAAAAAAAAAAQAAAAHJvb3QudHh0UEsFBgAAAAACAAIAcwAAAHcAAAAAAA=="))

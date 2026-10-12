@@ -19,6 +19,13 @@ struct SafeZIPExtraction {
     let totalBytes: Int64
 }
 
+struct SafeZIPEntry: Identifiable, Equatable, Sendable {
+    let path: String
+    let isDirectory: Bool
+    let size: Int64
+    var id: String { path }
+}
+
 struct SafeZIPExtractor {
     let fileManager: FileManager
     var capacityQuery: StorageCapacityPreflight.Query = { try StorageCapacityPreflight.system($0) }
@@ -28,7 +35,11 @@ struct SafeZIPExtractor {
         rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(0x0422))
     )
 
-    func extract(_ source: URL, to destination: URL,
+    func contents(of source: URL) throws -> [SafeZIPEntry] {
+        []
+    }
+
+    func extract(_ source: URL, to destination: URL, selectedPaths: Set<String>? = nil,
                  progress: @escaping (Int64, Int64, String, Int, Int) -> Void = { _, _, _, _, _ in }) throws -> SafeZIPExtraction {
         try Task.checkCancellation()
         let archive: Archive

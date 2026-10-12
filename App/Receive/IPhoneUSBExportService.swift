@@ -320,7 +320,8 @@ actor IPhoneUSBExportService {
         to destination: USBBookmarkDestination,
         archiveMode: IPhoneReceiveArchiveMode = .extract,
         preservePartialOnCancellation: Bool = false,
-        overwriteExisting: Bool = false
+        overwriteExisting: Bool = false,
+        zipSelections: [String: Set<String>] = [:]
     ) -> IPhoneUSBExportSummary {
         guard !files.isEmpty else {
             return IPhoneUSBExportSummary(verified: [], failed: [])

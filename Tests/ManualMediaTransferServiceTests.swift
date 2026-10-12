@@ -3,6 +3,89 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class ManualMediaTransferServiceTests: XCTestCase {
+    func testRetryPhotoReexportsOriginalAssetAndPreservesMailbox() async throws {
+        let root = temporaryDirectory()
+        let store = ManualTransferJobStore(fileURL: root.appendingPathComponent("queue.json"))
+        let entry = retryEntry(mailbox: UUID())
+        try await store.recordHistory(entry)
+        let source = FakeManualMediaSource(directory: root)
+        let engine = RecordingManualTransferEngine()
+        let service = ManualMediaTransferService(source: source, jobStore: store, engine: engine,
+            exportDirectory: root.appendingPathComponent("exports"))
+        let result = try await service.retryFailed(historyID: entry.id)
+        XCTAssertEqual(result.failed, 0)
+        let jobs = await engine.recordedJobs()
+        XCTAssertEqual(jobs.first?.assetIdentifier, entry.assetIdentifier)
+        XCTAssertEqual(jobs.first?.recipientMailboxID, entry.recipientMailboxID)
+        let history = try await service.history()
+        XCTAssertNotNil(history.first?.retriedAt)
+        do {
+            _ = try await service.retryFailed(historyID: entry.id)
+            XCTFail("Must not enqueue the same history entry twice")
+        } catch { XCTAssertEqual(error as? ManualTransferRetryError, .alreadyRetrying) }
+    }
+
+    func testRetryLegacyRecipientRejectsChangedOrMissingBinding() async throws {
+        for binding in [ManualRecipientBinding.digest("original-secret"), nil] {
+            let root = temporaryDirectory()
+            let store = ManualTransferJobStore(fileURL: root.appendingPathComponent("queue.json"))
+            let entry = retryEntry(mailbox: nil, binding: binding)
+            try await store.recordHistory(entry)
+            let credentials = InMemoryCredentialStore()
+            try credentials.save("different-secret")
+            let engine = RecordingManualTransferEngine()
+            let service = ManualMediaTransferService(source: FakeManualMediaSource(directory: root),
+                jobStore: store, engine: engine, exportDirectory: root.appendingPathComponent("exports"),
+                credentialStore: credentials)
+            do {
+                _ = try await service.retryFailed(historyID: entry.id)
+                XCTFail("Must preserve original recipient")
+            } catch { XCTAssertEqual(error as? ManualTransferRetryError, .recipientChanged) }
+            let jobs = await engine.recordedJobs()
+            XCTAssertTrue(jobs.isEmpty)
+        }
+    }
+
+    func testRetryDocumentRequiresReselectionAndRejectsDifferentContent() async throws {
+        let root = temporaryDirectory()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("report.txt")
+        try Data("original".utf8).write(to: file)
+        let fingerprint = try UploadFileFingerprinter.fingerprint(fileURL: file)
+        let entry = retryEntry(kind: .file, mailbox: UUID(), sha256: fingerprint.sha256)
+        let store = ManualTransferJobStore(fileURL: root.appendingPathComponent("queue.json"))
+        try await store.recordHistory(entry)
+        let engine = RecordingManualTransferEngine()
+        let service = ManualMediaTransferService(source: FakeManualMediaSource(directory: root),
+            jobStore: store, engine: engine, exportDirectory: root.appendingPathComponent("exports"))
+        do {
+            _ = try await service.retryFailed(historyID: entry.id)
+            XCTFail("Document permission must be explicitly renewed")
+        } catch {
+            XCTAssertEqual(error as? ManualTransferRetryError, .documentReselectionRequired(fileName: entry.fileName))
+        }
+        try Data("changed".utf8).write(to: file)
+        do {
+            _ = try await service.retryFailed(historyID: entry.id, reselectedFileURL: file)
+            XCTFail("Changed bytes must not be sent")
+        } catch { XCTAssertEqual(error as? ManualTransferRetryError, .sourceChanged) }
+        let jobs = await engine.recordedJobs()
+        XCTAssertTrue(jobs.isEmpty)
+        try Data("original".utf8).write(to: file)
+        let result = try await service.retryFailed(historyID: entry.id, reselectedFileURL: file)
+        XCTAssertEqual(result.failed, 0)
+        let retried = await engine.recordedJobs()
+        XCTAssertEqual(retried.first?.sha256, fingerprint.sha256)
+        XCTAssertEqual(retried.first?.recipientMailboxID, entry.recipientMailboxID)
+    }
+
+    private func retryEntry(kind: ManualMediaKind = .photo, mailbox: UUID?,
+                            sha256: String? = nil, binding: String? = nil) -> ManualTransferHistoryEntry {
+        .init(id: UUID(), fileName: "report.txt", kind: kind, recipientMailboxID: mailbox,
+              completedAt: Date(), failure: .network, assetIdentifier: "original-asset",
+              sha256: sha256, recipientCredentialBinding: binding)
+    }
+
     func testDocumentPreparationFailurePersistsNameAndOriginalRecipientInHistory() async throws {
         let root = temporaryDirectory()
         let storeURL = root.appendingPathComponent("queue.json")

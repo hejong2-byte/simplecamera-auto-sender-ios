@@ -1,4 +1,32 @@
 import Foundation
+import CryptoKit
+
+enum ManualTransferRetryError: Error, LocalizedError, Equatable {
+    case notFound
+    case notFailed
+    case alreadyRetrying
+    case recipientChanged
+    case documentReselectionRequired(fileName: String)
+    case sourceChanged
+
+    var errorDescription: String? {
+        switch self {
+        case .notFound: "전송 기록을 찾을 수 없습니다."
+        case .notFailed: "실패한 전송만 다시 보낼 수 있습니다."
+        case .alreadyRetrying: "이미 다시 보내기를 시작한 항목입니다."
+        case .recipientChanged: "원래 수신처의 인증 정보가 변경되었습니다."
+        case let .documentReselectionRequired(fileName): "다시 보낼 파일을 선택하세요: \(fileName)"
+        case .sourceChanged: "선택한 파일이 원래 보낸 파일과 다릅니다."
+        }
+    }
+}
+
+enum ManualRecipientBinding {
+    static func digest(_ credential: String?) -> String? {
+        guard let value = credential?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+}
 
 enum ManualTransferFailureCategory: String, Hashable, Sendable {
     case unavailable
@@ -42,6 +70,7 @@ actor ManualMediaTransferService: ManualMediaTransferring {
     private let maxBytes: Int64
     private let singleRequestMaxBytes: Int64
     private let multipartPartBytes: Int?
+    private let credentialStore: CredentialStore
     private var continuations: [UUID: AsyncStream<ManualTransferProgress>.Continuation] = [:]
     private var engineBridgeTask: Task<Void, Never>?
 
@@ -52,7 +81,8 @@ actor ManualMediaTransferService: ManualMediaTransferring {
         exportDirectory: URL,
         maxBytes: Int64 = ManualMediaUploadLimit.maxBytes,
         singleRequestMaxBytes: Int64 = ManualMediaUploadLimit.singleRequestMaxBytes,
-        multipartPartBytes: Int? = nil
+        multipartPartBytes: Int? = nil,
+        credentialStore: CredentialStore = KeychainCredentialStore()
     ) {
         self.source = source
         self.jobStore = jobStore
@@ -61,6 +91,15 @@ actor ManualMediaTransferService: ManualMediaTransferring {
         self.maxBytes = maxBytes
         self.singleRequestMaxBytes = singleRequestMaxBytes
         self.multipartPartBytes = multipartPartBytes
+        self.credentialStore = credentialStore
+    }
+
+    func history() async throws -> [ManualTransferHistoryEntry] {
+        try await jobStore.load().history
+    }
+
+    func retryFailed(historyID: UUID, reselectedFileURL: URL? = nil) async throws -> ManualMediaTransferSummary {
+        throw ManualTransferRetryError.notFound
     }
 
     func updates() async -> AsyncStream<ManualTransferProgress> {

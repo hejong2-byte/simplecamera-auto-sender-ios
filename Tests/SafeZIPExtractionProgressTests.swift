@@ -4,6 +4,43 @@ import ZIPFoundation
 @testable import SimpleCameraAutoSender
 
 final class SafeZIPExtractionProgressTests: XCTestCase {
+    func testMetadataAndFolderSelectionDoNotExtractUnselectedEntries() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let input = root.appendingPathComponent("input")
+        try FileManager.default.createDirectory(at: input.appendingPathComponent("docs"), withIntermediateDirectories: true)
+        try Data("document".utf8).write(to: input.appendingPathComponent("docs/report.txt"))
+        try Data("skip".utf8).write(to: input.appendingPathComponent("other.txt"))
+        let zip = root.appendingPathComponent("archive.zip")
+        try FileManager.default.zipItem(at: input, to: zip, shouldKeepParent: false)
+        let extractor = SafeZIPExtractor(fileManager: .default)
+
+        let entries = try extractor.contents(of: zip)
+        XCTAssertTrue(entries.contains { $0.path == "docs/report.txt" && $0.size == 8 && !$0.isDirectory })
+        XCTAssertTrue(entries.contains { $0.path == "docs" && $0.isDirectory })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("out").path))
+
+        let output = try extractor.extract(zip, to: root.appendingPathComponent("out"), selectedPaths: ["docs"])
+        XCTAssertEqual(output.files.map(\.relativePath), ["docs/report.txt"])
+        XCTAssertEqual(output.totalBytes, 8)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("out/other.txt").path))
+    }
+
+    func testEmptyAndUnknownZIPSelectionFailBeforeWriting() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("file.txt")
+        try Data("file".utf8).write(to: source)
+        let zip = root.appendingPathComponent("archive.zip")
+        try FileManager.default.zipItem(at: source, to: zip)
+        let extractor = SafeZIPExtractor(fileManager: .default)
+        XCTAssertThrowsError(try extractor.extract(zip, to: root.appendingPathComponent("empty"), selectedPaths: []))
+        XCTAssertThrowsError(try extractor.extract(zip, to: root.appendingPathComponent("unknown"), selectedPaths: ["missing"]))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("empty").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("unknown").path))
+    }
+
     func testCP949EntryNameWithoutUTF8FlagIsRestored() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
