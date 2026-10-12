@@ -1,6 +1,76 @@
 import XCTest
 
 final class FileConveniencesUITests: XCTestCase {
+    func testManualTransferHistoryScreenIsAccessible() {
+        let app = launchSimulation()
+        let history = app.buttons["manual-transfer-history"]
+        reveal(history, in: app)
+        XCTAssertTrue(history.waitForExistence(timeout: 5), "Manual transfer history needs an entry point")
+        history.tap()
+        XCTAssertTrue(app.navigationBars["수동 전송 기록"].waitForExistence(timeout: 5))
+    }
+
+    func testSelectedReceivedFilesCanOpenOneShareSheet() {
+        let app = launchSimulation()
+        app.buttons["open-receiver"].tap()
+        for name in ["받은 문서.pdf", "받은 사진.png"] {
+            let file = app.buttons["stored-file-\(name)"]
+            reveal(file, in: app)
+            XCTAssertTrue(file.waitForExistence(timeout: 5))
+            file.tap()
+        }
+        let share = app.buttons["stored-files-share"]
+        reveal(share, in: app)
+        XCTAssertTrue(share.waitForExistence(timeout: 5), "Selected files need one shared URL sheet")
+        XCTAssertTrue(share.isEnabled)
+        share.tap()
+        let sheet = app.navigationBars["UIActivityContentView"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 30))
+        sheet.buttons["header.closeButton"].tap()
+        for name in ["받은 문서.pdf", "받은 사진.png"] {
+            XCTAssertTrue(app.buttons["stored-file-\(name)"].exists)
+        }
+    }
+
+    func testStoredZIPContentsPickerStartsWithAllEntriesSelected() {
+        let app = launchSimulation()
+        app.buttons["open-receiver"].tap()
+        let contents = app.buttons["stored-file-zip-contents-받은 자료.zip"]
+        reveal(contents, in: app)
+        XCTAssertTrue(contents.waitForExistence(timeout: 5), "Stored ZIP files need a contents picker")
+        contents.tap()
+        XCTAssertTrue(app.navigationBars["ZIP 내용 선택"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["zip-contents-select-all"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["zip-contents-export"].isEnabled)
+        app.buttons["zip-contents-cancel"].tap()
+        XCTAssertTrue(app.buttons["stored-file-받은 자료.zip"].exists)
+    }
+
+    func testUSBExplorerOffersNameDateAndSizeSort() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-incoming", "--ui-test-incoming-delay", "3600",
+                               "--ui-test-storage-management"]
+        app.launch()
+        addTeardownBlock { app.terminate() }
+        let settings = app.buttons["open-settings"]
+        reveal(settings, in: app)
+        XCTAssertTrue(settings.waitForExistence(timeout: 20))
+        settings.tap()
+        let storage = app.buttons["storage-management"]
+        reveal(storage, in: app)
+        storage.tap()
+        let sort = app.buttons["storage-sort"]
+        reveal(sort, in: app)
+        XCTAssertTrue(sort.waitForExistence(timeout: 5), "USB file browsing needs sort choices")
+        sort.tap()
+        for title in ["이름순", "날짜순", "크기순"] {
+            XCTAssertTrue(app.buttons[title].exists)
+        }
+        app.buttons["날짜순"].tap()
+        XCTAssertTrue(app.buttons["storage-entry-nested"].exists)
+    }
+
     func testFilenameSearchTypeFilterResetAndOriginalSharing() {
         let app = launchSimulation()
         app.buttons["open-receiver"].tap()

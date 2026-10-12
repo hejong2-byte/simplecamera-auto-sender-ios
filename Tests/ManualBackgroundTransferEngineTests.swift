@@ -3,6 +3,38 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class ManualBackgroundTransferEngineTests: XCTestCase {
+    func testFailureHistoryKeepsMostRecent100OutcomesWithoutPruningActiveJob() async throws {
+        let active = try await makeFixture(totalBytes: 10, uploadID: nil)
+        let engine = makeEngine(fixture: active, scheduler: FakeManualUploadScheduler())
+        var failedIDs: [UUID] = []
+        for _ in 0..<101 {
+            let failed = try await makeFixture(totalBytes: 10, uploadID: nil)
+            failedIDs.append(failed.job.id)
+            try await engine.enqueue([failed.job])
+            await engine.taskCompleted(
+                .init(batchID: failed.batch.id, jobID: failed.job.id, operation: .single),
+                response: .status(403), body: Data(), error: nil
+            )
+            XCTAssertFalse(FileManager.default.fileExists(atPath: failed.job.exportedFileURL.path))
+        }
+
+        let data = try Data(contentsOf: active.directory.appendingPathComponent("queue.json"))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let history = try XCTUnwrap(json["history"] as? [[String: Any]], "Outcomes must survive staging cleanup")
+        XCTAssertEqual(history.count, 100)
+        XCTAssertEqual(history.first?["id"] as? String, failedIDs.last?.uuidString)
+        XCTAssertFalse(history.contains { $0["id"] as? String == failedIDs.first?.uuidString })
+        XCTAssertEqual(history.first?["fileName"] as? String, "video.mov")
+        XCTAssertEqual(history.first?["assetIdentifier"] as? String, "selected-video")
+        XCTAssertNotNil(history.first?["completedAt"])
+        XCTAssertNotNil(history.first?["failure"])
+        let state = try await active.store.load()
+        XCTAssertEqual(state.jobs.map(\.id), [active.job.id])
+        let text = String(decoding: data, as: UTF8.self)
+        XCTAssertFalse(text.contains("test-secret"))
+        XCTAssertFalse(text.localizedCaseInsensitiveContains("bearer"))
+    }
+
     func testSchedulingPreservesInterleavedCompletionPartETagAndEnqueuedJob() async throws {
         let first = try await makeFixture(totalBytes: 10, uploadID: nil)
         let completed = try await makeFixture(totalBytes: 10, uploadID: nil)

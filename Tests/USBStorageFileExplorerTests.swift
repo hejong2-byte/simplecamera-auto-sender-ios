@@ -3,6 +3,26 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class USBStorageFileExplorerTests: XCTestCase {
+    func testRecoveryBackupsAreReachableWithoutShowingActiveStagingFiles() throws {
+        let root = temporaryDirectory()
+        let internalPath = USBReceiveService.partialDirectoryName
+        let internalDirectory = root.appendingPathComponent(internalPath, isDirectory: true)
+        let backup = internalDirectory.appendingPathComponent("overwrite-test.backup", isDirectory: true)
+        try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: true)
+        try Data("original".utf8).write(to: backup.appendingPathComponent("original.bin"))
+        try Data("partial".utf8).write(to: internalDirectory.appendingPathComponent("active.partial"))
+        let explorer = makeExplorer()
+
+        let roots = try explorer.list(destination: destination(root), relativePath: "")
+        XCTAssertTrue(roots.contains { $0.relativePath == internalPath })
+        let recoveries = try explorer.list(destination: destination(root), relativePath: internalPath)
+        XCTAssertEqual(recoveries.map(\.name), ["overwrite-test.backup"])
+        let originals = try explorer.list(destination: destination(root),
+                                          relativePath: internalPath + "/overwrite-test.backup")
+        XCTAssertEqual(originals.map(\.name), ["original.bin"])
+        XCTAssertEqual(try Data(contentsOf: backup.appendingPathComponent("original.bin")), Data("original".utf8))
+    }
+
     func testListsDirectoriesBeforeFilesAndIncludesHiddenRegularFiles() throws {
         let root = temporaryDirectory()
         try FileManager.default.createDirectory(

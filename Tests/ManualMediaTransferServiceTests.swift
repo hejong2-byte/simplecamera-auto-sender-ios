@@ -3,6 +3,55 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class ManualMediaTransferServiceTests: XCTestCase {
+    func testDocumentPreparationFailurePersistsNameAndOriginalRecipientInHistory() async throws {
+        let root = temporaryDirectory()
+        let storeURL = root.appendingPathComponent("queue.json")
+        let engine = RecordingManualTransferEngine()
+        let service = ManualMediaTransferService(
+            source: FakeManualMediaSource(directory: root),
+            jobStore: ManualTransferJobStore(fileURL: storeURL), engine: engine,
+            exportDirectory: root.appendingPathComponent("exports")
+        )
+
+        let summary = await service.enqueueFiles(
+            [root.appendingPathComponent("다시 선택할 자료.pdf")], recipientCode: "651421"
+        )
+
+        XCTAssertEqual(summary.failed, 1)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: storeURL)) as? [String: Any])
+        let history = try XCTUnwrap(json["history"] as? [[String: Any]])
+        XCTAssertEqual(history.count, 1)
+        XCTAssertEqual(history.first?["fileName"] as? String, "다시 선택할 자료.pdf")
+        XCTAssertEqual(history.first?["recipientMailboxID"] as? String,
+                       "53434D52-0000-4000-8000-000000651421")
+        XCTAssertTrue((history.first?["assetIdentifier"] as? String)?.hasPrefix("document-") == true)
+        XCTAssertNotNil(history.first?["failure"])
+        let jobs = await engine.recordedJobs()
+        XCTAssertTrue(jobs.isEmpty)
+    }
+
+    func testPhotoExportFailurePersistsOriginalAssetIdentifierInHistory() async throws {
+        let root = temporaryDirectory()
+        let storeURL = root.appendingPathComponent("queue.json")
+        let service = ManualMediaTransferService(
+            source: FakeManualMediaSource(directory: root, failingIdentifiers: ["missing-photo"]),
+            jobStore: ManualTransferJobStore(fileURL: storeURL), engine: RecordingManualTransferEngine(),
+            exportDirectory: root.appendingPathComponent("exports")
+        )
+
+        let summary = await service.enqueue(
+            selection: .init(assetIdentifiers: ["missing-photo"], unavailableCount: 0), kind: .photo
+        )
+
+        XCTAssertEqual(summary.failed, 1)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: storeURL)) as? [String: Any])
+        let history = try XCTUnwrap(json["history"] as? [[String: Any]])
+        XCTAssertEqual(history.count, 1)
+        XCTAssertEqual(history.first?["assetIdentifier"] as? String, "missing-photo")
+        XCTAssertEqual(history.first?["kind"] as? String, "photo")
+        XCTAssertNotNil(history.first?["failure"])
+    }
+
     func testSelectedDocumentsKeepSameNamesDistinctContentsAndDoNotUsePhotoKit() async throws {
         let root = temporaryDirectory()
         let originals = try ["first", "second"].map { folder -> URL in
