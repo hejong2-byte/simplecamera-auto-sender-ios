@@ -27,6 +27,7 @@ jobs:
             -only-testing:SimpleCameraAutoSenderTests/IPhoneUSBExportServiceTests \
             -only-testing:SimpleCameraAutoSenderTests/SafeZIPExtractionProgressTests \
             -only-testing:SimpleCameraAutoSenderTests/ManualMediaTransferServiceTests \
+            -only-testing:SimpleCameraAutoSenderTests/USBZIPSelectionCheckpointTests \
             -only-testing:SimpleCameraAutoSenderTests/USBZIPReceivePipelineTests/testDirectZIPCommitPreservesOriginalBackupWhenInstallAndRollbackFail \
             -only-testing:SimpleCameraAutoSenderUITests/FileConveniencesUITests/testUSBExplorerOffersNameDateAndSizeSort \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/file-share-tests.log

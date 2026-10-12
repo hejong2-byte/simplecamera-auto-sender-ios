@@ -46,6 +46,59 @@ final class ManualMediaTransferServiceTests: XCTestCase {
         }
     }
 
+    func testRetryLegacyRecipientWithMatchingNormalizedBindingKeepsThatBinding() async throws {
+        let root = temporaryDirectory()
+        let store = ManualTransferJobStore(fileURL: root.appendingPathComponent("queue.json"))
+        let entry = retryEntry(mailbox: nil, binding: ManualRecipientBinding.digest(" original-secret\n"))
+        try await store.recordHistory(entry)
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("original-secret")
+        let engine = RecordingManualTransferEngine()
+        let service = ManualMediaTransferService(source: FakeManualMediaSource(directory: root),
+            jobStore: store, engine: engine, exportDirectory: root.appendingPathComponent("exports"),
+            credentialStore: credentials)
+        _ = try await service.retryFailed(historyID: entry.id)
+        let jobs = await engine.recordedJobs()
+        XCTAssertEqual(jobs.first?.recipientCredentialBinding, entry.recipientCredentialBinding)
+        XCTAssertNil(jobs.first?.recipientMailboxID)
+    }
+
+    func testRetrySuccessfulHistoryIsRejectedWithoutExporting() async throws {
+        let root = temporaryDirectory()
+        let store = ManualTransferJobStore(fileURL: root.appendingPathComponent("queue.json"))
+        let entry = ManualTransferHistoryEntry(id: UUID(), fileName: "photo.jpg", kind: .photo,
+            recipientMailboxID: UUID(), completedAt: Date(), failure: nil,
+            assetIdentifier: "photo", sha256: nil, recipientCredentialBinding: nil)
+        try await store.recordHistory(entry)
+        let source = FakeManualMediaSource(directory: root)
+        let service = ManualMediaTransferService(source: source, jobStore: store,
+            engine: RecordingManualTransferEngine(), exportDirectory: root.appendingPathComponent("exports"))
+        do {
+            _ = try await service.retryFailed(historyID: entry.id)
+            XCTFail("Successful transfers cannot be retried")
+        } catch { XCTAssertEqual(error as? ManualTransferRetryError, .notFailed) }
+        let exported = await source.recordedIdentifiers()
+        XCTAssertTrue(exported.isEmpty)
+    }
+
+    func testRetryEnqueueFailureLeavesOriginalEntryAvailable() async throws {
+        let root = temporaryDirectory()
+        let store = ManualTransferJobStore(fileURL: root.appendingPathComponent("queue.json"))
+        let entry = retryEntry(mailbox: UUID())
+        try await store.recordHistory(entry)
+        let engine = RecordingManualTransferEngine(failNextEnqueue: true)
+        let service = ManualMediaTransferService(source: FakeManualMediaSource(directory: root),
+            jobStore: store, engine: engine, exportDirectory: root.appendingPathComponent("exports"))
+        let first = try await service.retryFailed(historyID: entry.id)
+        XCTAssertEqual(first.failed, 1)
+        let history = try await service.history()
+        XCTAssertTrue(history.first(where: { $0.id == entry.id })?.canRetry == true)
+        let second = try await service.retryFailed(historyID: entry.id)
+        XCTAssertEqual(second.failed, 0)
+        let jobs = await engine.recordedJobs()
+        XCTAssertEqual(jobs.count, 1)
+    }
+
     func testRetryDocumentRequiresReselectionAndRejectsDifferentContent() async throws {
         let root = temporaryDirectory()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -435,8 +488,17 @@ private actor FakeManualMediaSource: ManualMediaSourcing {
 
 private actor RecordingManualTransferEngine: ManualTransferQueueing {
     private var jobs: [ManualTransferJob] = []
+    private var failNextEnqueue: Bool
+
+    init(failNextEnqueue: Bool = false) {
+        self.failNextEnqueue = failNextEnqueue
+    }
 
     func enqueue(_ jobs: [ManualTransferJob]) async throws {
+        if failNextEnqueue {
+            failNextEnqueue = false
+            throw CocoaError(.fileWriteOutOfSpace)
+        }
         self.jobs.append(contentsOf: jobs)
     }
 

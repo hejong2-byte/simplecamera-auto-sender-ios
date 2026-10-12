@@ -219,7 +219,9 @@ final class USBZIPReceivePipelineTests: XCTestCase {
         XCTAssertThrowsError(try pipeline.commit(
             zip: context.zip, delivery: context.delivery, destination: context.usb,
             overwriteExisting: true, progress: { _ in }
-        ))
+        )) { error in
+            XCTAssertTrue(IPhoneReceiveErrorMessage.message(error).contains(".backup"), "Report the retained recovery path")
+        }
 
         XCTAssertTrue(fileManager.installFailed, "Must exercise installation failure")
         XCTAssertTrue(fileManager.rollbackFailed, "Must exercise restoration failure")

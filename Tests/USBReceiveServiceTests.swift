@@ -679,6 +679,25 @@ final class USBReceiveServiceTests: XCTestCase {
         XCTAssertEqual(events.values.map(\.outcome), [.failed, .completed])
     }
 
+    func testSharedZIPExporterReportsRetainedRecoveryPath() async throws {
+        let fileManager = RecoveryFailureFileManager()
+        let fixture = try makeFixture(payload: validZIPData(), fileName: "archive.zip",
+            archiveMode: .extract, overwriteExisting: true, useSharedZIPExporter: true,
+            exportFileManager: fileManager)
+        let original = Data("original-data".utf8)
+        try original.write(to: fixture.destination.appendingPathComponent("root.txt"))
+        do {
+            _ = try await fixture.service.runOnce()
+            XCTFail("Expected installation and restoration failure")
+        } catch {
+            XCTAssertTrue(IPhoneReceiveErrorMessage.message(error).contains(".backup"))
+        }
+        XCTAssertTrue(fileManager.installFailed)
+        XCTAssertTrue(fileManager.rollbackFailed)
+        let remaining = (FileManager.default.enumerator(at: fixture.destination, includingPropertiesForKeys: nil)?.allObjects as? [URL]) ?? []
+        XCTAssertTrue(remaining.contains { (try? Data(contentsOf: $0)) == original })
+    }
+
     private func makeFixture(
         payload: Data,
         fileName: String = "업무.zip",
@@ -693,6 +712,7 @@ final class USBReceiveServiceTests: XCTestCase {
         archiveMode: IPhoneReceiveArchiveMode = .keepArchive,
         overwriteExisting: Bool = false,
         useSharedZIPExporter: Bool = false,
+        exportFileManager: FileManager = .default,
         capacityQuery: @escaping StorageCapacityPreflight.Query = { try StorageCapacityPreflight.system($0) }
     ) throws -> Fixture {
         let destination = temporaryDirectory()
@@ -732,7 +752,7 @@ final class USBReceiveServiceTests: XCTestCase {
                 deletionStore: try IPhoneUSBDeletionDecisionStore(
                     fileURL: temporaryDirectory().appendingPathComponent("direct-decisions.json")
                 ),
-                fileManager: .default,
+                fileManager: exportFileManager,
                 startAccessing: { _ in canAccessSecurityScope },
                 stopAccessing: { _ in },
                 volumeIdentity: { _ in currentVolumeID },
@@ -828,6 +848,25 @@ final class USBReceiveServiceTests: XCTestCase {
         )
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         return directory
+    }
+}
+
+private final class RecoveryFailureFileManager: FileManager, @unchecked Sendable {
+    private(set) var installFailed = false
+    private(set) var rollbackFailed = false
+
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        if dstURL.lastPathComponent == "root.txt",
+           !dstURL.pathComponents.contains(USBReceiveService.partialDirectoryName),
+           srcURL.pathComponents.contains(where: { $0.hasSuffix(".partial") || $0.hasSuffix(".backup") }) {
+            if srcURL.pathComponents.contains(where: { $0.hasSuffix(".backup") }) {
+                rollbackFailed = true
+            } else {
+                installFailed = true
+            }
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        try super.moveItem(at: srcURL, to: dstURL)
     }
 }
 

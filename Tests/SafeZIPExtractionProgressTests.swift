@@ -59,6 +59,57 @@ final class SafeZIPExtractionProgressTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: XCTUnwrap(output.files.first).url), Data("hello korean zip".utf8))
     }
 
+    func testSelectionCapacityUsesOnlySelectedUncompressedBytes() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let input = root.appendingPathComponent("input")
+        try FileManager.default.createDirectory(at: input, withIntermediateDirectories: true)
+        try Data("tiny".utf8).write(to: input.appendingPathComponent("small.txt"))
+        try Data(repeating: 1, count: 1_024).write(to: input.appendingPathComponent("large.bin"))
+        let zip = root.appendingPathComponent("archive.zip")
+        try FileManager.default.zipItem(at: input, to: zip, shouldKeepParent: false)
+        let extractor = SafeZIPExtractor(fileManager: .default, capacityQuery: { _ in 4 })
+        let output = try extractor.extract(zip, to: root.appendingPathComponent("out"), selectedPaths: ["small.txt"])
+        XCTAssertEqual(output.totalBytes, 4)
+        XCTAssertEqual(output.files.map(\.relativePath), ["small.txt"])
+    }
+
+    func testMetadataDoesNotReadCorruptBodyButSelectedExtractionStillChecksCRC() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("file.txt")
+        let payload = Data("unique-content-for-crc".utf8)
+        try payload.write(to: source)
+        let zip = root.appendingPathComponent("archive.zip")
+        try FileManager.default.zipItem(at: source, to: zip, compressionMethod: .none)
+        var bytes = try Data(contentsOf: zip)
+        let range = try XCTUnwrap(bytes.range(of: payload))
+        bytes[range.lowerBound] ^= 0xff
+        try bytes.write(to: zip)
+        let extractor = SafeZIPExtractor(fileManager: .default)
+        XCTAssertEqual(try extractor.contents(of: zip).map(\.path), ["file.txt"])
+        XCTAssertThrowsError(try extractor.extract(zip, to: root.appendingPathComponent("out"), selectedPaths: ["file.txt"]))
+    }
+
+    func testUnsafeUnselectedEntryIsRejectedByMetadataAndExtraction() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let zip = root.appendingPathComponent("unsafe.zip")
+        let bytes = try XCTUnwrap(Data(base64Encoded:
+            "UEsDBBQAAAAIANJIKF1Oa16IFQAAAA0AAAAQAAAALi4vLi4vZXNjYXBlLnR4dErJ183LL9FNLU5OLEgFAAAA//8DAFBLAQIUABQAAAAIANJIKF1Oa16IFQAAAA0AAAAQAAAAAAAAAAAAAAAAAAAAAAAuLi8uLi9lc2NhcGUudHh0UEsFBgAAAAABAAEAPgAAAEMAAAAAAA=="))
+        try bytes.write(to: zip)
+        let extractor = SafeZIPExtractor(fileManager: .default)
+        XCTAssertThrowsError(try extractor.contents(of: zip)) { error in
+            XCTAssertEqual(error as? SafeZIPExtractorError, .unsafeArchive)
+        }
+        XCTAssertThrowsError(try extractor.extract(zip, to: root.appendingPathComponent("out"), selectedPaths: ["safe.txt"])) { error in
+            XCTAssertEqual(error as? SafeZIPExtractorError, .unsafeArchive)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("out").path))
+    }
+
     func testSingleLargeEntryReportsBytesBeforeEntryCompletes() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

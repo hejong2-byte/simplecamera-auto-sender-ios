@@ -520,6 +520,23 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: context.usbDirectory.appendingPathComponent("a.txt").path))
     }
 
+    func testArchiveFilesNamedLikeResumeMetadataKeepTheirOriginalBytes() async throws {
+        let context = try makeContext()
+        let fixture = temporaryDirectory()
+        let names = [".simplecamera-resume.json", ".simplecamera-committed.json"]
+        for name in names {
+            try Data("user-data-\(name)".utf8).write(to: fixture.appendingPathComponent(name))
+        }
+        let archive = context.sourceDirectory.appendingPathComponent("fixture.zip")
+        try FileManager.default.zipItem(at: fixture, to: archive, shouldKeepParent: false)
+        let file = try makeStoredFile(name: "metadata.zip", data: Data(contentsOf: archive), in: context.sourceDirectory)
+        let result = await context.service.export([file], to: context.destination)
+        XCTAssertTrue(result.failed.isEmpty, result.errorMessage ?? "")
+        for name in names {
+            XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent(name)), Data("user-data-\(name)".utf8))
+        }
+    }
+
     func testInterruptedZIPResumeReplacesUncommittedSameSizeRootFile() async throws {
         let context = try makeContext(fileManager: CancelOnlyFirstExportFileFileManager())
         let archiveData = try XCTUnwrap(Data(base64Encoded: "UEsDBBQAAAAIANJIKF03rc1dEwAAAAsAAAAPAAAAZG9jcy9yZXBvcnQudHh0KkotyC8q0U1JLEkEAAAA//8DAFBLAwQUAAAACADSSChd+/k8aREAAAAJAAAACAAAAHJvb3QudHh0KsrPL9FNSSxJBAAAAP//AwBQSwECFAAUAAAACADSSChdN63NXRMAAAALAAAADwAAAAAAAAAAAAAAAAAAAAAAZG9jcy9yZXBvcnQudHh0UEsBAhQAFAAAAAgA0kgoXfv5PGkRAAAACQAAAAgAAAAAAAAAAAAAAAAAQAAAAHJvb3QudHh0UEsFBgAAAAACAAIAcwAAAHcAAAAAAA=="))
@@ -567,6 +584,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         XCTAssertTrue(result.verified.isEmpty)
         XCTAssertTrue(fileManager.installFailed, "Must exercise installation failure")
         XCTAssertTrue(fileManager.rollbackFailed, "Must exercise restoration failure")
+        XCTAssertTrue(result.errorMessage?.contains(".backup") == true, "Report the retained recovery path")
         let remaining = (FileManager.default.enumerator(at: context.usbDirectory, includingPropertiesForKeys: nil)?.allObjects as? [URL]) ?? []
         XCTAssertTrue(remaining.contains { (try? Data(contentsOf: $0)) == original }, "The original must survive in its destination or recovery backup")
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))

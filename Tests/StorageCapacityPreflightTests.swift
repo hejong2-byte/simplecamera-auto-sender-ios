@@ -204,6 +204,30 @@ final class StorageCapacityPreflightTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: context.usb.appendingPathComponent("data.bin")), Data(repeating: 0x4d, count: 131_072))
     }
 
+    func testUncommittedSameSizeRootIsNotDeductedFromResumedZIPCapacity() async throws {
+        let probe = CapacityTestProbe()
+        let context = try makeContext(capacity: { url in
+            url.lastPathComponent == "usb" ? probe.usbAvailable : probe.nextIPhoneCapacity()
+        }, fileManager: CapacityCancelFirstZIPPartialFileManager())
+        let data = try XCTUnwrap(Data(base64Encoded: "UEsDBBQAAAAIANJIKF03rc1dEwAAAAsAAAAPAAAAZG9jcy9yZXBvcnQudHh0KkotyC8q0U1JLEkEAAAA//8DAFBLAwQUAAAACADSSChd+/k8aREAAAAJAAAACAAAAHJvb3QudHh0KsrPL9FNSSxJBAAAAP//AwBQSwECFAAUAAAACADSSChdN63NXRMAAAALAAAADwAAAAAAAAAAAAAAAAAAAAAAZG9jcy9yZXBvcnQudHh0UEsBAhQAFAAAAAgA0kgoXfv5PGkRAAAACQAAAAgAAAAAAAAAAAAAAAAAQAAAAHJvb3QudHh0UEsFBgAAAAACAAIAcwAAAHcAAAAAAA=="))
+        let file = try storedFile("resume.zip", data: data, in: context.source)
+        let target = context.usb.appendingPathComponent("root.txt")
+        let original = Data("stale-xxx".utf8)
+        try original.write(to: target)
+        let first = await Task {
+            await context.service.export([file], to: context.destination,
+                preservePartialOnCancellation: true, overwriteExisting: true)
+        }.value
+        XCTAssertTrue(first.cancelled)
+        probe.setUSBAvailable(11)
+        let resumed = await context.service.export([file], to: context.destination,
+            preservePartialOnCancellation: true, overwriteExisting: true)
+        XCTAssertEqual(resumed.failed.first?.error, .insufficientSpace)
+        XCTAssertEqual(context.progress.snapshot().capacityCheck?.requiredBytes, 20)
+        XCTAssertEqual(try Data(contentsOf: target), original)
+        XCTAssertTrue(context.decisions.pending().isEmpty)
+    }
+
     func testZIPCapacityShortageRetainsValidatedExtractionAndPartial() async throws {
         let probe = CapacityTestProbe()
         let context = try makeContext(capacity: { url in
