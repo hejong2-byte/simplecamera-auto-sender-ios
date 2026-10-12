@@ -479,6 +479,55 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: context.zipWorkingDirectory.path), [])
     }
 
+    func testInterruptedZIPResumeReplacesUncommittedSameSizeRootFile() async throws {
+        let context = try makeContext(fileManager: CancelOnlyFirstExportFileFileManager())
+        let archiveData = try XCTUnwrap(Data(base64Encoded: "UEsDBBQAAAAIANJIKF03rc1dEwAAAAsAAAAPAAAAZG9jcy9yZXBvcnQudHh0KkotyC8q0U1JLEkEAAAA//8DAFBLAwQUAAAACADSSChd+/k8aREAAAAJAAAACAAAAHJvb3QudHh0KsrPL9FNSSxJBAAAAP//AwBQSwECFAAUAAAACADSSChdN63NXRMAAAALAAAADwAAAAAAAAAAAAAAAAAAAAAAZG9jcy9yZXBvcnQudHh0UEsBAhQAFAAAAAgA0kgoXfv5PGkRAAAACQAAAAgAAAAAAAAAAAAAAAAAQAAAAHJvb3QudHh0UEsFBgAAAAACAAIAcwAAAHcAAAAAAA=="))
+        let file = try makeStoredFile(name: "same-size.zip", data: archiveData, in: context.sourceDirectory)
+        let target = context.usbDirectory.appendingPathComponent("root.txt")
+        let original = Data("stale-xxx".utf8)
+        try original.write(to: target)
+
+        let interrupted = await Task {
+            await context.service.export(
+                [file], to: context.destination,
+                preservePartialOnCancellation: true, overwriteExisting: true
+            )
+        }.value
+        XCTAssertTrue(interrupted.cancelled)
+        XCTAssertEqual(try Data(contentsOf: target), original)
+
+        let resumed = await context.service.export(
+            [file], to: context.destination,
+            preservePartialOnCancellation: true, overwriteExisting: true
+        )
+
+        XCTAssertTrue(resumed.failed.isEmpty, resumed.errorMessage ?? "ZIP resume failed")
+        XCTAssertEqual(resumed.verified.count, 1)
+        XCTAssertEqual(try Data(contentsOf: target), Data("root-data".utf8))
+        XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent("docs/report.txt")), Data("report-data".utf8))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
+
+    func testZIPExportPreservesOriginalBackupWhenInstallAndRollbackFail() async throws {
+        let context = try makeContext(fileManager: FailingExportInstallAndRollbackFileManager())
+        let fixture = temporaryDirectory()
+        try Data("replacement".utf8).write(to: fixture.appendingPathComponent("root.txt"))
+        let archiveURL = context.sourceDirectory.appendingPathComponent("fixture.zip")
+        try FileManager.default.zipItem(at: fixture, to: archiveURL, shouldKeepParent: false)
+        let file = try makeStoredFile(name: "overwrite.zip", data: Data(contentsOf: archiveURL), in: context.sourceDirectory)
+        let target = context.usbDirectory.appendingPathComponent("root.txt")
+        let original = Data("irreplaceable-original".utf8)
+        try original.write(to: target)
+
+        let result = await context.service.export([file], to: context.destination, overwriteExisting: true)
+
+        XCTAssertEqual(result.failed.count, 1)
+        XCTAssertTrue(result.verified.isEmpty)
+        let remaining = (FileManager.default.enumerator(at: context.usbDirectory, includingPropertiesForKeys: nil)?.allObjects as? [URL]) ?? []
+        XCTAssertTrue(remaining.contains { (try? Data(contentsOf: $0)) == original }, "The original must survive in its destination or recovery backup")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+    }
+
     func testInterruptedZIPFinalizationResumesAfterOneRootItemWasAlreadyMoved() async throws {
         let fileManager = CancelAfterFirstRootMoveFileManager()
         let context = try makeContext(fileManager: fileManager)
@@ -1145,6 +1194,17 @@ private struct ExportContext {
     let deletionStore: IPhoneUSBDeletionDecisionStore
     let service: IPhoneUSBExportService
     let progressStore: USBReceiveProgressStore
+}
+
+private final class FailingExportInstallAndRollbackFileManager: FileManager, @unchecked Sendable {
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        if srcURL.path.contains(".partial/"),
+           dstURL.deletingLastPathComponent().lastPathComponent == "usb",
+           dstURL.lastPathComponent == "root.txt" {
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        try super.moveItem(at: srcURL, to: dstURL)
+    }
 }
 
 private final class CancelWhenExportPartialCreatedFileManager: FileManager, @unchecked Sendable {

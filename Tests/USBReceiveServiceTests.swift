@@ -519,6 +519,26 @@ final class USBReceiveServiceTests: XCTestCase {
         XCTAssertNil(fixture.ledger.checkpoint(for: fixture.delivery.deliveryID))
     }
 
+    func testTemporaryCleanupPreservesRecoveryBackupOriginalBytes() async throws {
+        let fixture = try makeFixture(payload: validZIPData(), chunkSize: 8)
+        let backup = fixture.destination
+            .appendingPathComponent(USBReceiveService.partialDirectoryName)
+            .appendingPathComponent("overwrite-\(UUID().uuidString.lowercased()).backup")
+        try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: true)
+        let original = backup.appendingPathComponent("original.txt")
+        try Data("irreplaceable-original".utf8).write(to: original)
+
+        let summary = await fixture.service.cleanupTemporaryFiles(
+            to: USBBookmarkDestination(
+                url: fixture.destination, volumeID: "test-volume",
+                displayName: "TEST USB", isStale: false
+            )
+        )
+
+        XCTAssertEqual(summary.deletedCount, 0)
+        XCTAssertEqual(try? Data(contentsOf: original), Data("irreplaceable-original".utf8))
+    }
+
     func testTemporaryCleanupRemovesDirectReceiveWorkButKeepsCompletedUSBFile() async throws {
         let fixture = try makeFixture(payload: validZIPData(), chunkSize: 8)
         try Data("direct-zip-temp".utf8).write(to: fixture.stagedZIP)

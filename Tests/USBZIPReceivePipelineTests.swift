@@ -205,6 +205,26 @@ final class USBZIPReceivePipelineTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: partial.path), [])
     }
 
+    func testDirectZIPCommitPreservesOriginalBackupWhenInstallAndRollbackFail() throws {
+        let context = try makeContext()
+        let target = context.usb.appendingPathComponent("root.txt")
+        let original = Data("irreplaceable-original".utf8)
+        try original.write(to: target)
+        let pipeline = USBZIPReceivePipeline(
+            fileManager: FailingDirectZIPInstallAndRollbackFileManager(),
+            workingDirectory: context.work
+        )
+
+        XCTAssertThrowsError(try pipeline.commit(
+            zip: context.zip, delivery: context.delivery, destination: context.usb,
+            overwriteExisting: true, progress: { _ in }
+        ))
+
+        let remaining = (FileManager.default.enumerator(at: context.usb, includingPropertiesForKeys: nil)?.allObjects as? [URL]) ?? []
+        XCTAssertTrue(remaining.contains { (try? Data(contentsOf: $0)) == original }, "The original must survive in its destination or recovery backup")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: context.zip.path))
+    }
+
     private func makeContext() throws -> Context {
         let root = temporaryDirectory()
         let usb = root.appendingPathComponent("usb", isDirectory: true)
@@ -264,6 +284,17 @@ private struct Context {
     let zip: URL
     let delivery: IPhoneDelivery
     let pipeline: USBZIPReceivePipeline
+}
+
+private final class FailingDirectZIPInstallAndRollbackFileManager: FileManager, @unchecked Sendable {
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        if srcURL.path.contains(".partial/"),
+           dstURL.deletingLastPathComponent().lastPathComponent == "usb",
+           dstURL.lastPathComponent == "root.txt" {
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        try super.moveItem(at: srcURL, to: dstURL)
+    }
 }
 
 private final class FailingZIPCommitFileManager: FileManager, @unchecked Sendable {

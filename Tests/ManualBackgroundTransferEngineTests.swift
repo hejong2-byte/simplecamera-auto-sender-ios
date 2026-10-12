@@ -3,6 +3,114 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class ManualBackgroundTransferEngineTests: XCTestCase {
+    func testSchedulingPreservesInterleavedCompletionPartETagAndEnqueuedJob() async throws {
+        let first = try await makeFixture(totalBytes: 10, uploadID: nil)
+        let completed = try await makeFixture(totalBytes: 10, uploadID: nil)
+        let multipart = try await makeFixture(totalBytes: 10, uploadID: "upload-1", partSizes: [10])
+        let added = try await makeFixture(totalBytes: 10, uploadID: nil)
+        try await first.store.replace(.init(
+            batches: [first.batch, completed.batch, multipart.batch],
+            jobs: [first.job, completed.job, multipart.job]
+        ))
+        let entered = expectation(description: "request construction has read the queue")
+        let credentials = PausedManualCredentialStore(entered: entered)
+        defer { credentials.release() }
+        let pausedEngine = ManualBackgroundTransferEngine(
+            scheduler: FakeManualUploadScheduler(), jobStore: first.store,
+            credentialStore: credentials, sleep: { _ in }
+        )
+        let restoration = Task { await pausedEngine.restore() }
+        await fulfillment(of: [entered], timeout: 5)
+
+        let otherEngine = makeEngine(fixture: first, scheduler: FakeManualUploadScheduler())
+        await otherEngine.taskCompleted(
+            .init(batchID: completed.batch.id, jobID: completed.job.id, operation: .single),
+            response: .success(), body: Data(), error: nil
+        )
+        await otherEngine.taskCompleted(
+            .init(batchID: multipart.batch.id, jobID: multipart.job.id, operation: .part(number: 1)),
+            response: .success(), body: Data(#"{"partNumber":1,"etag":"durable-etag"}"#.utf8), error: nil
+        )
+        try await otherEngine.enqueue([added.job])
+        credentials.release()
+        await restoration.value
+
+        let state = try await first.store.load()
+        XCTAssertEqual(state.batches.first { $0.id == completed.batch.id }?.uploadedCount, 1)
+        XCTAssertFalse(state.jobs.contains { $0.id == completed.job.id })
+        XCTAssertEqual(state.jobs.first { $0.id == multipart.job.id }?.parts.first?.etag, "durable-etag")
+        XCTAssertTrue(state.jobs.contains { $0.id == added.job.id })
+    }
+
+    func testFinishEventsWaitsForDeliveredCompletionCleanup() async throws {
+        let fixture = try await makeFixture(totalBytes: 10, uploadID: nil)
+        let cancellationEntered = expectation(description: "completion reached cancellation")
+        let scheduler = PausedManualCancellationScheduler(entered: cancellationEntered)
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("Bearer test-secret")
+        let engine = ManualBackgroundTransferEngine(
+            scheduler: scheduler, jobStore: fixture.store, credentialStore: credentials
+        )
+        let registry = BackgroundSessionCompletionRegistry()
+        let session = BackgroundManualUploadSession(completionRegistry: registry)
+        session.bind(engine: engine)
+        let task = URLSession.shared.dataTask(with: URL(string: "https://relay.example")!)
+        task.taskDescription = try ManualUploadTaskDescriptor(
+            batchID: fixture.batch.id, jobID: fixture.job.id, operation: .single
+        ).encodedTaskDescription()
+        session.urlSession(URLSession.shared, task: task, didCompleteWithError: URLError(.badURL))
+        await fulfillment(of: [cancellationEntered], timeout: 5)
+
+        let finished = expectation(description: "system completion")
+        let observation = ManualCompletionObservation()
+        registry.store(identifier: AppConfiguration.manualBackgroundSessionIdentifier) {
+            observation.markFinished()
+            finished.fulfill()
+        }
+        session.urlSessionDidFinishEvents(forBackgroundURLSession: URLSession.shared)
+        // This queue barrier runs after an incorrectly immediate main-queue handler.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertFalse(observation.finished, "System completion must wait for the delivered event's durable cleanup")
+        await scheduler.release()
+        await fulfillment(of: [finished], timeout: 5)
+        let state = try await fixture.store.load()
+        XCTAssertTrue(state.jobs.isEmpty)
+        XCTAssertEqual(state.batches.first?.failedCount, 1)
+    }
+
+    func testThousandProgressEventsUseLoadedStateWithoutDependingOnQueueFile() async throws {
+        let fixture = try await makeFixture(totalBytes: 1_000, uploadID: nil)
+        _ = try await fixture.store.load()
+        let engine = makeEngine(fixture: fixture, scheduler: FakeManualUploadScheduler())
+        let updates = await engine.updates()
+        let received = expectation(description: "all cached progress events")
+        received.expectedFulfillmentCount = 1_000
+        let consumer = Task { () -> ManualTransferProgress? in
+            var last: ManualTransferProgress?
+            for await progress in updates {
+                last = progress
+                received.fulfill()
+                if progress.taskBytesSent == 1_000 { break }
+            }
+            return last
+        }
+        // The store owns the loaded state; progress must not reopen/decode this file.
+        try FileManager.default.removeItem(at: fixture.directory.appendingPathComponent("queue.json"))
+        let descriptor = ManualUploadTaskDescriptor(
+            batchID: fixture.batch.id, jobID: fixture.job.id, operation: .single
+        )
+        for bytes in 1...1_000 {
+            await engine.taskProgress(descriptor, sent: Int64(bytes), expected: 1_000)
+        }
+        await fulfillment(of: [received], timeout: 2)
+        consumer.cancel()
+        let final = await consumer.value
+        XCTAssertEqual(final?.taskBytesSent, 1_000)
+        XCTAssertEqual(final?.totalBytes, 1_000)
+    }
+
     func testRestoreMaterializesAndSchedulesOnlyTheFirstMissingPart() async throws {
         let fixture = try await makeFixture(
             totalBytes: 10,
@@ -331,6 +439,58 @@ private struct EngineFixture {
     let store: ManualTransferJobStore
     let batch: ManualTransferBatch
     let job: ManualTransferJob
+}
+
+private final class PausedManualCredentialStore: CredentialStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var hasPaused = false
+    private let gate = DispatchSemaphore(value: 0)
+    private let entered: XCTestExpectation
+
+    init(entered: XCTestExpectation) { self.entered = entered }
+    func save(_ value: String) throws {}
+    func clear() throws {}
+    func load() throws -> String? {
+        let pause = lock.withLock {
+            if hasPaused { return false }
+            hasPaused = true
+            return true
+        }
+        if pause {
+            entered.fulfill()
+            guard gate.wait(timeout: .now() + 15) == .success else {
+                throw URLError(.timedOut)
+            }
+        }
+        return "Bearer test-secret"
+    }
+    func release() { gate.signal() }
+}
+
+private actor PausedManualCancellationScheduler: ManualUploadTaskScheduling {
+    private let entered: XCTestExpectation
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    init(entered: XCTestExpectation) { self.entered = entered }
+    func schedule(_ descriptor: ManualUploadTaskDescriptor, request: URLRequest, fileURL: URL) async throws {}
+    func existingDescriptors() async -> Set<ManualUploadTaskDescriptor> { [] }
+    func cancel(jobID: UUID) async {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            entered.fulfill()
+        }
+    }
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private final class ManualCompletionObservation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var finished: Bool { lock.withLock { value } }
+    func markFinished() { lock.withLock { value = true } }
 }
 
 private actor FakeManualUploadScheduler: ManualUploadTaskScheduling {
