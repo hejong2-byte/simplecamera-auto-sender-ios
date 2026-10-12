@@ -8,6 +8,10 @@ struct USBReceiverView: View {
     @FocusState private var isStoredFileSearchFocused: Bool
 
     var body: some View {
+        exportDialogs
+    }
+
+    private var receiverContent: some View {
         ScrollView {
             VStack(spacing: 16) {
                 if !incomingModel.pendingFiles.isEmpty {
@@ -35,6 +39,10 @@ struct USBReceiverView: View {
             if phase == .active { Task { await model.refresh() } }
         }
         .onDisappear { model.stopForegroundPolling() }
+    }
+
+    private var fileSheets: some View {
+        receiverContent
         .sheet(item: $model.previewFile) { file in
             StoredFilePreview(file: file, onClose: { model.previewFile = nil })
         }
@@ -81,6 +89,10 @@ struct USBReceiverView: View {
             guard case let .success(urls) = result, let url = urls.first else { return }
             Task { await model.selectDestination(url) }
         }
+    }
+
+    private var receiveDialogs: some View {
+        fileSheets
         .alert(
             "USB가 연결되지 않았습니다. iPhone에 저장할까요?",
             isPresented: Binding(
@@ -131,6 +143,10 @@ struct USBReceiverView: View {
         } message: {
             Text("USB 복사와 파일 크기 확인을 마쳤습니다. 정밀 SHA 검증은 선택 사항입니다. iPhone 원본을 삭제할까요? USB 복사본은 유지됩니다.")
         }
+    }
+
+    private var exportDialogs: some View {
+        receiveDialogs
         .alert(
             "선택한 iPhone 파일 \(model.storedFilesPendingDeletion.count)개를 삭제할까요?",
             isPresented: Binding(

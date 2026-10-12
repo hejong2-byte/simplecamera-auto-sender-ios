@@ -5,6 +5,58 @@ import XCTest
 
 @MainActor
 final class ContentViewModelTests: XCTestCase {
+    func testHistoryDocumentRetryRequestsOriginalReselectionWithoutStartingTransfer() async throws {
+        let id = UUID()
+        let model = ContentViewModel(
+            credentialStore: InMemoryCredentialStore(),
+            ledger: try UploadLedger(fileURL: temporaryLedgerURL()),
+            uploader: NoOpUploader(), now: Date.init,
+            send: { _ in .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
+            manualHistoryRetry: { requestedID, url in
+                XCTAssertEqual(requestedID, id)
+                XCTAssertNil(url)
+                throw ManualTransferRetryError.documentReselectionRequired(fileName: "원본.pdf")
+            }
+        )
+        await model.retryManualHistoryEntry(id: id, reselectedFileURL: nil)
+        XCTAssertEqual(model.manualHistoryReselectionID, id)
+        XCTAssertEqual(model.manualHistoryReselectionFileName, "원본.pdf")
+        XCTAssertFalse(model.isRetryingManualHistory)
+        XCTAssertFalse(model.isManualTransferWorking)
+        XCTAssertNil(model.manualHistoryError)
+        model.cancelManualHistoryReselection()
+        XCTAssertNil(model.manualHistoryReselectionID)
+        XCTAssertNil(model.manualHistoryReselectionFileName)
+    }
+
+    func testHistoryRetryPassesOriginalSelectionAndRefreshesOutcome() async throws {
+        let id = UUID()
+        let original = URL(fileURLWithPath: "/synthetic/original.pdf")
+        let entry = ManualTransferHistoryEntry(id: id, fileName: "original.pdf", kind: .file,
+            recipientMailboxID: UUID(), completedAt: .now, failure: .network,
+            assetIdentifier: original.path, sha256: nil, recipientCredentialBinding: nil,
+            retriedAt: .now)
+        let expected = ManualMediaTransferSummary(selected: 1, uploaded: 0, failed: 0, failureCategories: [])
+        let model = ContentViewModel(
+            credentialStore: InMemoryCredentialStore(),
+            ledger: try UploadLedger(fileURL: temporaryLedgerURL()),
+            uploader: NoOpUploader(), now: Date.init,
+            send: { _ in .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
+            manualHistory: { [entry] },
+            manualHistoryRetry: { requestedID, url in
+                XCTAssertEqual(requestedID, id)
+                XCTAssertEqual(url, original)
+                return expected
+            }
+        )
+        await model.retryManualHistoryEntry(id: id, reselectedFileURL: original)
+        XCTAssertEqual(model.lastManualSummary, expected)
+        XCTAssertEqual(model.manualTransferHistory, [entry])
+        XCTAssertFalse(model.isRetryingManualHistory)
+        XCTAssertFalse(model.isLoadingManualTransferHistory)
+        XCTAssertNil(model.manualHistoryError)
+    }
+
     func testForegroundRefreshRechecksDeniedAndLimitedPhotoAccess() async throws {
         let status = MutablePhotoAuthorization(.denied)
         let model = ContentViewModel(
