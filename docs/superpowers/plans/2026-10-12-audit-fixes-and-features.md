@@ -18,41 +18,41 @@ Swift, SwiftUI, UIKit, Foundation actors, XCTest/XCUITest, XcodeGen and GitHub m
 - Agents own disjoint files; root alone changes workflows, versions, commits/pushes and release. Each task receives independent spec/quality review. Publish only after full tests and IPA verification.
 
 ## Task A — ZIP/USB correctness and selective extraction
-- [ ] Reproduce old same-size root file being skipped after interrupted ZIP, plus install failure with rollback failure.
-- [ ] Replace size-based completion inference with durable committed-root provenance bound to source/destination/job. Ambiguous crash reprocesses the item; never claims completion from pre-existing size alone.
-- [ ] Preserve backup on failed rollback and return recovery information; cleanup must not discard the remaining original. Exercise both local export and direct USB pipeline callers.
-- [ ] Add ZIP entry metadata selection API without full-file reads. Selected entries and folder descendants retain existing wrapper-stripping layout, CRC, collision/capacity rules. Selection is part of resume identity; all-entry default remains compatible.
-- [ ] Verify resumed capacity, rollback, root layout, CRC, selective file/folder extraction, empty/unsafe selection and changed-selection resume tests.
+- [x] Reproduce old same-size root file being skipped after interrupted ZIP, plus install failure with rollback failure.
+- [x] Replace size-based completion inference with durable committed-root provenance bound to source/destination/job. Ambiguous crash reprocesses the item; never claims completion from pre-existing size alone.
+- [x] Preserve backup on failed rollback and return recovery information; cleanup must not discard the remaining original. Exercise both local export and direct USB pipeline callers.
+- [x] Add ZIP entry metadata selection API without full-file reads. Selected entries and folder descendants retain existing wrapper-stripping layout, CRC, collision/capacity rules. Selection is part of resume identity; all-entry default remains compatible.
+- [x] Verify resumed capacity, rollback, root layout, CRC, selective file/folder extraction, empty/unsafe selection and changed-selection resume tests.
 
 Files: App/Receive/IPhoneUSBExportService.swift, USBZIPReceivePipeline.swift, SafeZIPExtractor.swift and narrowly necessary related Receive types; their Tests. UI integration owned by Task C/root.
 
 ## Task B — upload atomicity, background drain and history/retry
-- [ ] Reproduce interleaved job completion/enqueue updates and finish-events preceding durable completion.
-- [ ] Move mutations into ManualTransferJobStore atomic operations; cache loaded state so progress reads do not decode disk repeatedly.
-- [ ] Drain already-delivered delegate completion processing before system completion handler; do not wait on whole future transfers.
-- [ ] Persist bounded manual-transfer outcome history (name, recipient identity, date, reason, retry source). Explicit retry targets failed entries only. Retain original recipient; stale document permission asks for re-selection instead of silent resend.
-- [ ] Verify concurrent updates preserve jobs/counts/ETags, 1000 progress events, old state migration, failure history, exact recipient retry and stale document source.
+- [x] Reproduce interleaved job completion/enqueue updates and finish-events preceding durable completion.
+- [x] Move mutations into ManualTransferJobStore atomic operations; cache loaded state so progress reads do not decode disk repeatedly.
+- [x] Drain already-delivered delegate completion processing before system completion handler; do not wait on whole future transfers.
+- [x] Persist bounded manual-transfer outcome history (name, recipient identity, date, reason, retry source). Explicit retry targets failed entries only. Retain original recipient; stale document permission asks for re-selection instead of silent resend.
+- [x] Verify concurrent updates preserve jobs/counts/ETags, 1000 progress events, old state migration, failure history, exact recipient retry and stale document source.
 
 Files: App/Media/ManualTransferJobStore.swift, App/Upload/ManualBackgroundTransferEngine.swift, BackgroundManualUploadSession.swift, related manual models plus Tests. Communicate public APIs to root for history UI; do not edit ContentView or USBReceiverViewModel.
 
 ## Task C — UI state correctness and file conveniences
-- [ ] Reproduce USB root re-selection retaining old path/selection, foreground stale photo permission, and old catalog snapshot replacing new data.
-- [ ] Reset browser state on successful root selection; use generation guards for stale async results.
-- [ ] Refresh photo authorization when active without changing automatic photo matching.
-- [ ] Move received-file catalog work off MainActor and coalesce refresh requests, retaining newest snapshot.
-- [ ] Add multi-file sharing with URL validation and original preservation.
-- [ ] Add folder-first name/date/size sort with stable ties to USB explorer.
-- [ ] Integrate ZIP contents picker (Task A API) and history/failed retry screen (Task B API) after core interfaces available. Compact UI, no redundant explanation text; actionable error/reselection messages remain.
-- [ ] Verify selection reset/race, foreground permissions, catalog responsiveness/latest list, multi-share supported/missing files, sorting stability and UI access to history/ZIP choices.
+- [x] Reproduce USB root re-selection retaining old path/selection, foreground stale photo permission, and old catalog snapshot replacing new data.
+- [x] Reset browser state on successful root selection; use generation guards for stale async results.
+- [x] Refresh photo authorization when active without changing automatic photo matching.
+- [x] Move received-file catalog work off MainActor and coalesce refresh requests, retaining newest snapshot.
+- [x] Add multi-file sharing with URL validation and original preservation.
+- [x] Add folder-first name/date/size sort with stable ties to USB explorer.
+- [x] Integrate ZIP contents picker (Task A API) and history/failed retry screen (Task B API) after core interfaces available. Compact UI, no redundant explanation text; actionable error/reselection messages remain.
+- [x] Verify selection reset/race, foreground permissions, catalog responsiveness/latest list, multi-share supported/missing files, sorting stability and UI access to history/ZIP choices.
 
 Files: App/UI/*, App/Application/USBReceiverDependencies.swift, App/Receive/USBStorageFileExplorer.swift, related UI/selection tests. Coordinate no overlapping edits with root.
 
 ## Task D — integration, independent review and delivery (root)
-- [ ] Run contract/QR checks; one native RED run for combined regression tests.
-- [ ] Inspect task diffs and independent review each group; fix important findings.
-- [ ] Run focused GREEN and complete unit/UI suite; build unsigned IPA.
-- [ ] Increment only iOS final version component/build after checking tags. Verify published IPA bundle/version/ZIP/aliases and installation QR.
-- [ ] Report exact test results, changes, physical-device limits and final install QR here.
+- [x] Run contract/QR checks; one native RED run for combined regression tests.
+- [x] Inspect task diffs and independent review each group; fix important findings.
+- [x] Run focused GREEN and complete unit/UI suite; build unsigned IPA.
+- [x] Increment only iOS final version component/build after checking tags. Verify published IPA bundle/version/ZIP/aliases and installation QR.
+- [x] Report exact test results, changes, physical-device limits and final install QR here.
 
 ## Execution ledger
 - Baseline tracked worktree clean; existing untracked artifacts preserved.
@@ -74,3 +74,7 @@ Files: App/UI/*, App/Application/USBReceiverDependencies.swift, App/Receive/USBS
 - The selected UI stage finished 9/10. The lone failure is confirmed to be the test's single-item navigation-bar locator: the screenshot and accessibility hierarchy show a working two-item activity sheet (`2 Documents`, `1 Image and 1 Document`). Corrected the locator and strengthened count/type, close, originals and selection assertions, without further production edits.
 - To avoid repeating the same native build twice, the final release workflow will provide the final GREEN for all unit and all UI tests, including the corrected shared-file test. Publication remains gated on those tests and the IPA build/validation.
 - Final screenshot inspection found the fourth action label truncated. Shortened its visible title to `임시 정리`, retaining the full accessibility label and confirmation logic. Cancelled unpublished release run 38218875720 and retained its tag unchanged; final candidate advanced only iOS to v0.3.50/build 61. Transfer logic remains identical to the 591-test GREEN candidate.
+- Checkbox verification scope: Tasks A/B/C are supported by source review, the recorded behavioral RED runs, 591 passing unit tests and 9 passing selected UI tests in 38217294375. Photo authorization coverage uses injected denied/limited-to-authorized transitions and the foreground lifecycle hook; a physical Settings transition is not claimed. The corrected two-item share-sheet assertions, full release suite, IPA verification and final delivery remain pending under Task D in release run 38219230463 (32686ed, v0.3.50/build 61).
+- Final GREEN: release run 38219230463 (32686ed) completed successfully with 591 unit + 35 UI tests, zero failures; unsigned IPA build and v0.3.50/build 61 publication succeeded. Final screenshots independently confirm multi-share and compact action controls.
+- Downloaded canonical/legacy/latest IPA files are identical (3,304,083 bytes; SHA256 4334eee275323f9559979d9b5dbfdcc946db9dbdf0547c557501901f9dc2d64b). Bundle/version/build, ZIP CRC, Files flags, icons and privacy declaration passed. Downloaded installation QR matches the expected SideStore URI exactly and was visually checked. Final delivery is QR in this conversation, not an external transfer or shutdown.
+- Final verification report records physical iPhone/USB/background/KakaoTalk limitations explicitly. No device throughput or physical media reliability claim is made.

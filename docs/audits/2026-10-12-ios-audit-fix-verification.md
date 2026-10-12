@@ -1,7 +1,7 @@
 # iOS audit fixes — verification record
 
-Candidate: **v0.3.50 / build 61**, based on `e949db50`.
-Implementation under final native verification: `e0ff618143927a7a9695adc9fd6d6e64da3d437d`.
+Released: **v0.3.50 / build 61**, based on `e949db50`.
+Verified release commit: `32686ed72c8248c8e5a1008f6d042392c169ffd4`.
 
 ## Scope delivered in code
 
@@ -33,9 +33,12 @@ Implementation under final native verification: `e0ff618143927a7a9695adc9fd6d6e6
 - Local install-contract, QR URI and whitespace checks pass.
 - Focused run `38217294375` completed **591 unit tests with zero failures** (`unit-tests.log`, suite completion 2026-10-12 07:28:51 UTC). Previously failing ZIP finalization, callback drain and ZIP selection races now pass.
 - Its selected UI suite passed 9 of 10 tests. The remaining failure was a wrong test locator: screenshot and accessibility hierarchy show `ActivityListView`, header `2 Documents` and `1 Image and 1 Document`, while the test expected a single-item header. The test now checks the observed multi-item sheet, both item types, activity list, close behavior and preserved selection. No production change followed this successful unit run.
-- The final release run will repeat all unit tests and the complete UI suite (including the corrected multi-file test) before building or publishing an IPA; an additional duplicate focused run is unnecessary.
-- Full release tests and downloaded IPA verification: **pending**.
+- Final release run [38219230463](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/actions/runs/38219230463) passed **591 unit tests and all 35 UI tests: 626 tests, zero failures**, including the corrected multi-file test. The test suite completed at 07:57:25 UTC; the unsigned IPA build succeeded at 07:58:59 UTC on 2026-10-12.
+- [v0.3.50](https://github.com/hejong2-byte/simplecamera-auto-sender-ios/releases/tag/v0.3.50) published at 07:59:06 UTC. Downloaded canonical, legacy alias and public latest IPA are byte-identical: **3,304,083 bytes**, SHA-256 `4334eee275323f9559979d9b5dbfdcc946db9dbdf0547c557501901f9dc2d64b`. IPA ZIP CRC, real Info.plist bundle ID/version/build, Files integration flags, icon assets and privacy API reasons passed verification.
+- Downloaded 924x924 installation QR matches the validated SideStore installation URI pixel-for-pixel and was visually inspected. Its latest-version target resolves to the same verified IPA. Delivery artifacts are in `release-v0.3.50-verify/`.
+- Final simulator screenshots confirm both originals in the multi-file share sheet and all four compact action buttons without clipping. These are simulator checks, not physical-device delivery tests.
 - Final visual inspection found the fourth action label truncated after adding multi-file sharing. Shortened its visible title to `임시 정리` while retaining `임시파일 삭제` for accessibility and the existing confirmation behavior. The unpublished v0.3.49 release run `38218875720` was cancelled; its tag is retained unchanged. Final candidate is v0.3.50/build 61, with no transfer-logic changes after the 591-test pass.
+- Xcode emitted an AppIntents metadata parsing diagnostic despite successful tests/build. The same diagnostic is present in successful v0.3.48 run `38099610117`; it is not a new regression in this change.
 
 ## Limits
 
