@@ -439,11 +439,12 @@ struct USBReceiverView: View {
                 .accessibilityLabel("선택 파일 삭제")
 
                 Button { model.requestTemporaryCleanup() } label: {
-                    Text("임시파일 삭제").frame(maxWidth: .infinity)
+                    Text("임시 정리").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
                 .disabled(!model.canCleanTemporaryFiles)
                 .accessibilityIdentifier("stored-files-clean-temp")
+                .accessibilityLabel("임시파일 삭제")
             }
             .font(.subheadline)
             .lineLimit(1)

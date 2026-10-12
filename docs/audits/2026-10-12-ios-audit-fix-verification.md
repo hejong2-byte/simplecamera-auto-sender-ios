@@ -1,6 +1,6 @@
 # iOS audit fixes — verification record
 
-Candidate: **v0.3.49 / build 60**, based on `e949db50`.
+Candidate: **v0.3.50 / build 61**, based on `e949db50`.
 Implementation under final native verification: `e0ff618143927a7a9695adc9fd6d6e64da3d437d`.
 
 ## Scope delivered in code
@@ -35,6 +35,7 @@ Implementation under final native verification: `e0ff618143927a7a9695adc9fd6d6e6
 - Its selected UI suite passed 9 of 10 tests. The remaining failure was a wrong test locator: screenshot and accessibility hierarchy show `ActivityListView`, header `2 Documents` and `1 Image and 1 Document`, while the test expected a single-item header. The test now checks the observed multi-item sheet, both item types, activity list, close behavior and preserved selection. No production change followed this successful unit run.
 - The final release run will repeat all unit tests and the complete UI suite (including the corrected multi-file test) before building or publishing an IPA; an additional duplicate focused run is unnecessary.
 - Full release tests and downloaded IPA verification: **pending**.
+- Final visual inspection found the fourth action label truncated after adding multi-file sharing. Shortened its visible title to `임시 정리` while retaining `임시파일 삭제` for accessibility and the existing confirmation behavior. The unpublished v0.3.49 release run `38218875720` was cancelled; its tag is retained unchanged. Final candidate is v0.3.50/build 61, with no transfer-logic changes after the 591-test pass.
 
 ## Limits
 
