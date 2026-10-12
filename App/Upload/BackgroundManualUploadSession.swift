@@ -35,10 +35,21 @@ protocol ManualUploadTaskScheduling: Sendable {
     func schedule(
         _ descriptor: ManualUploadTaskDescriptor,
         request: URLRequest,
-        fileURL: URL
+        fileURL: URL,
+        notBefore: Date?
     ) async throws
     func existingDescriptors() async -> Set<ManualUploadTaskDescriptor>
     func cancel(jobID: UUID) async
+}
+
+extension ManualUploadTaskScheduling {
+    func schedule(
+        _ descriptor: ManualUploadTaskDescriptor,
+        request: URLRequest,
+        fileURL: URL
+    ) async throws {
+        try await schedule(descriptor, request: request, fileURL: fileURL, notBefore: nil)
+    }
 }
 
 final class BackgroundSessionCompletionRegistry: @unchecked Sendable {
@@ -64,7 +75,7 @@ final class BackgroundManualUploadSession: NSObject, ManualUploadTaskScheduling,
     private let lock = NSLock()
     private weak var engine: ManualBackgroundTransferEngine?
     private var responseBodies: [Int: Data] = [:]
-    private var completionDrain: Task<Void, Never>?
+    private var pendingCompletions: [UUID: Task<Void, Never>] = [:]
 
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.background(
@@ -94,10 +105,12 @@ final class BackgroundManualUploadSession: NSObject, ManualUploadTaskScheduling,
     func schedule(
         _ descriptor: ManualUploadTaskDescriptor,
         request: URLRequest,
-        fileURL: URL
+        fileURL: URL,
+        notBefore: Date?
     ) async throws {
         let task = session.uploadTask(with: request, fromFile: fileURL)
         task.taskDescription = try descriptor.encodedTaskDescription()
+        task.earliestBeginDate = notBefore
         task.resume()
     }
 
@@ -122,6 +135,10 @@ final class BackgroundManualUploadSession: NSObject, ManualUploadTaskScheduling,
     private static func descriptor(for task: URLSessionTask) -> ManualUploadTaskDescriptor? {
         guard let description = task.taskDescription else { return nil }
         return try? ManualUploadTaskDescriptor(taskDescription: description)
+    }
+
+    private func removeCompletedCallback(_ id: UUID) {
+        _ = lock.withLock { pendingCompletions.removeValue(forKey: id) }
     }
 }
 
@@ -163,24 +180,24 @@ extension BackgroundManualUploadSession: URLSessionDataDelegate {
         lock.withLock {
             let body = responseBodies.removeValue(forKey: task.taskIdentifier) ?? Data()
             let currentEngine = engine
-            let previous = completionDrain
-            completionDrain = Task {
-                await previous?.value
+            let completionID = UUID()
+            pendingCompletions[completionID] = Task { [weak self] in
                 await currentEngine?.taskCompleted(
                     descriptor,
                     response: task.response as? HTTPURLResponse,
                     body: body,
                     error: error
                 )
+                self?.removeCompletedCallback(completionID)
             }
         }
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         // Snapshot only the completions delivered before this delegate callback.
-        let delivered = lock.withLock { completionDrain }
+        let delivered = lock.withLock { Array(pendingCompletions.values) }
         Task { [completionRegistry] in
-            await delivered?.value
+            for completion in delivered { await completion.value }
             await MainActor.run {
                 completionRegistry.finish(
                     identifier: AppConfiguration.manualBackgroundSessionIdentifier

@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: brew install xcodegen
-      - name: Received file sharing tests
+      - name: Unit regressions
         shell: bash
         run: |
           set -euo pipefail
@@ -23,8 +23,25 @@ jobs:
           xcodebuild test -project SimpleCameraAutoSender.xcodeproj -scheme SimpleCameraAutoSender \
             -destination "platform=iOS Simulator,id=${DEVICE_ID}" \
             -parallel-testing-enabled NO \
-            -resultBundlePath build/FileShareTests.xcresult \
+            -resultBundlePath build/UnitTests.xcresult \
             -only-testing:SimpleCameraAutoSenderTests \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/unit-tests.log
+      - name: Upload unit regression log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Unit-regression-log
+          path: build/unit-tests.log
+          retention-days: 3
+      - name: File sharing and UI regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEVICE_ID="$(xcrun simctl list devices available -j | /usr/bin/python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for ds in data["devices"].values() for d in ds if d["name"].startswith("iPhone")))')"
+          xcodebuild test-without-building -project SimpleCameraAutoSender.xcodeproj -scheme SimpleCameraAutoSender \
+            -destination "platform=iOS Simulator,id=${DEVICE_ID}" \
+            -parallel-testing-enabled NO \
+            -resultBundlePath build/FileShareTests.xcresult \
             -only-testing:SimpleCameraAutoSenderUITests/FileConveniencesUITests \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testMainScreenOmitsFixedMenuDescriptions \
             -only-testing:SimpleCameraAutoSenderUITests/ForegroundReceiveUITests/testTextTransferShowsComposeHistoryAndRecordActions \

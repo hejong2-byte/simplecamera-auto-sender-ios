@@ -623,6 +623,11 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
             FileManager.default.fileExists(atPath: context.usbDirectory.appendingPathComponent("MAP").path)
                 || FileManager.default.fileExists(atPath: context.usbDirectory.appendingPathComponent("_bin").path)
         )
+        let movedFile = try XCTUnwrap(["MAP/map.dat", "_bin/engine.bin"]
+            .map { context.usbDirectory.appendingPathComponent($0) }
+            .first { FileManager.default.fileExists(atPath: $0.path) })
+        let movedSize = try Data(contentsOf: movedFile).count
+        try Data(repeating: 0x78, count: movedSize).write(to: movedFile)
 
         let resumed = await context.service.export(
             [file],
@@ -631,6 +636,7 @@ final class IPhoneUSBExportServiceTests: XCTestCase {
         )
 
         XCTAssertTrue(resumed.failed.isEmpty, resumed.errorMessage ?? "finalization resume failed")
+        XCTAssertEqual(resumed.changeSummary.replacedFiles, 1, "An ambiguous move must be reprocessed, not size-skipped")
         XCTAssertEqual(
             try Data(contentsOf: context.usbDirectory.appendingPathComponent("MAP/map.dat")),
             Data("map".utf8)

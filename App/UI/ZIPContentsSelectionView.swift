@@ -42,7 +42,7 @@ struct ZIPContentsSelectionView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("USB로 추출") { Task { await model.exportSelectedZIPContents() } }
-                        .disabled(model.isLoadingZIPContents || model.selectedZIPPaths.isEmpty)
+                        .disabled(!model.canExportSelectedZIPContents)
                         .accessibilityIdentifier("zip-contents-export")
                 }
             }

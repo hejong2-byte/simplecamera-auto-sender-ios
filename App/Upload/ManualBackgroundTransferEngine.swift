@@ -20,14 +20,11 @@ protocol ManualTransferQueueing: Sendable {
 }
 
 actor ManualBackgroundTransferEngine: ManualTransferQueueing {
-    typealias Sleeper = @Sendable (UInt64) async -> Void
-
     private let scheduler: ManualUploadTaskScheduling
     private let jobStore: ManualTransferJobStore
     private let credentialStore: CredentialStore
     private let requestFactory: RelayRequestFactory
     private let retryPolicy: ManualRetryPolicy
-    private let sleep: Sleeper
     private var continuations: [UUID: AsyncStream<ManualTransferProgress>.Continuation] = [:]
     private var activeTaskBytes: [ManualUploadTaskDescriptor: Int64] = [:]
     private var transientRetryAttempts: [ManualUploadTaskDescriptor: Int] = [:]
@@ -37,17 +34,13 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
         jobStore: ManualTransferJobStore,
         credentialStore: CredentialStore,
         requestFactory: RelayRequestFactory = RelayRequestFactory(),
-        retryPolicy: ManualRetryPolicy = ManualRetryPolicy(),
-        sleep: @escaping Sleeper = { seconds in
-            try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
-        }
+        retryPolicy: ManualRetryPolicy = ManualRetryPolicy()
     ) {
         self.scheduler = scheduler
         self.jobStore = jobStore
         self.credentialStore = credentialStore
         self.requestFactory = requestFactory
         self.retryPolicy = retryPolicy
-        self.sleep = sleep
     }
 
     func enqueue(_ jobs: [ManualTransferJob]) async throws {
@@ -204,7 +197,8 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
 
     private func schedule(
         _ descriptor: ManualUploadTaskDescriptor,
-        avoidDuplicateCheck: Bool
+        avoidDuplicateCheck: Bool,
+        notBefore: Date? = nil
     ) async {
         if avoidDuplicateCheck,
            await scheduler.existingDescriptors().contains(descriptor) {
@@ -220,7 +214,7 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
                 job: job
             )
             if job.stage != .failed {
-                let nextStage = stage(for: descriptor.operation)
+                let nextStage = notBefore == nil ? stage(for: descriptor.operation) : .retrying
                 let updated = try await jobStore.transaction { state in
                     guard let index = state.jobs.firstIndex(where: { $0.id == descriptor.jobID }),
                           state.jobs[index].stage != .failed, state.jobs[index].stage != .completed else { return }
@@ -228,12 +222,13 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
                 }
                 guard let current = updated.jobs.first(where: { $0.id == job.id }),
                       neededOperations(for: current).contains(descriptor.operation) else { return }
-                publish(progress(for: current, in: updated))
+                if notBefore == nil { publish(progress(for: current, in: updated)) }
             }
             try await scheduler.schedule(
                 descriptor,
                 request: request,
-                fileURL: fileURL
+                fileURL: fileURL,
+                notBefore: notBefore
             )
         } catch {
             if descriptor.operation == .abort {
@@ -383,8 +378,8 @@ actor ManualBackgroundTransferEngine: ManualTransferQueueing {
                 jobID: job.id,
                 attempt: nextAttempt
             )
-            await sleep(retryPolicy.delaySeconds(attempt: attempt))
-            await schedule(descriptor, avoidDuplicateCheck: false)
+            let notBefore = Date().addingTimeInterval(TimeInterval(retryPolicy.delaySeconds(attempt: attempt)))
+            await schedule(descriptor, avoidDuplicateCheck: false, notBefore: notBefore)
             return
         }
         await markFailed(

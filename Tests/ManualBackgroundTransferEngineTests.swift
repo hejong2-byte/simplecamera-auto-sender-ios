@@ -3,19 +3,45 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class ManualBackgroundTransferEngineTests: XCTestCase {
+    func testRetriesSubmitBackgroundDeadlinesForOneThreeAndNineSeconds() async throws {
+        let fixture = try await makeFixture(totalBytes: 10, uploadID: nil)
+        let scheduler = FakeManualUploadScheduler()
+        let engine = makeEngine(fixture: fixture, scheduler: scheduler)
+        let descriptor = ManualUploadTaskDescriptor(
+            batchID: fixture.batch.id, jobID: fixture.job.id, operation: .single
+        )
+        for (index, delay) in [1.0, 3.0, 9.0].enumerated() {
+            let before = Date()
+            await engine.taskCompleted(descriptor, response: .status(503), body: Data(), error: nil)
+            let after = Date()
+            let scheduled = await scheduler.recorded()
+            XCTAssertEqual(scheduled.count, index + 1)
+            let notBefore = try XCTUnwrap(scheduled.last?.notBefore)
+            XCTAssertGreaterThanOrEqual(notBefore, before.addingTimeInterval(delay))
+            XCTAssertLessThanOrEqual(notBefore, after.addingTimeInterval(delay))
+            let persisted = try await fixture.store.load()
+            XCTAssertEqual(persisted.jobs.first?.stage, .retrying)
+        }
+        await engine.taskCompleted(descriptor, response: .status(503), body: Data(), error: nil)
+        let scheduled = await scheduler.recorded()
+        XCTAssertEqual(scheduled.count, 3)
+        let final = try await fixture.store.load()
+        XCTAssertEqual(final.batches.first?.failedCount, 1)
+        XCTAssertTrue(final.jobs.isEmpty)
+    }
+
     func testSuspendedRetryDelayDoesNotBlockUnrelatedCompletionOrSystemHandler() async throws {
         let retrying = try await makeFixture(totalBytes: 10, uploadID: nil)
         let successful = try await makeFixture(totalBytes: 10, uploadID: nil)
         try await retrying.store.replace(.init(
             batches: [retrying.batch, successful.batch], jobs: [retrying.job, successful.job]
         ))
-        let sleeper = PausedManualRetrySleeper()
-        addTeardownBlock { await sleeper.release() }
         let credentials = InMemoryCredentialStore()
         try credentials.save("test-secret")
+        let scheduler = FakeManualUploadScheduler()
         let engine = ManualBackgroundTransferEngine(
-            scheduler: FakeManualUploadScheduler(), jobStore: retrying.store,
-            credentialStore: credentials, sleep: { _ in await sleeper.pause() }
+            scheduler: scheduler, jobStore: retrying.store,
+            credentialStore: credentials
         )
         let registry = BackgroundSessionCompletionRegistry()
         let session = BackgroundManualUploadSession(completionRegistry: registry)
@@ -39,6 +65,7 @@ final class ManualBackgroundTransferEngineTests: XCTestCase {
         failedTask.taskDescription = try ManualUploadTaskDescriptor(
             batchID: retrying.batch.id, jobID: retrying.job.id, operation: .single
         ).encodedTaskDescription()
+        let retryRequestedAt = Date()
         session.urlSession(URLSession.shared, task: failedTask, didCompleteWithError: URLError(.timedOut))
         await fulfillment(of: [retryRecorded], timeout: 5)
 
@@ -62,8 +89,11 @@ final class ManualBackgroundTransferEngineTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: successful.job.exportedFileURL.path))
         XCTAssertEqual(state.jobs.first(where: { $0.id == retrying.job.id })?.stage, .retrying)
 
-        await sleeper.release()
         await fulfillment(of: [drained], timeout: 5)
+        let scheduled = await scheduler.recorded()
+        let retry = try XCTUnwrap(scheduled.first(where: { $0.descriptor.jobID == retrying.job.id }))
+        let notBefore = try XCTUnwrap(retry.notBefore)
+        XCTAssertGreaterThanOrEqual(notBefore, retryRequestedAt.addingTimeInterval(1))
     }
 
     func testRetryMarkerAndQueuedJobPersistTogether() async throws {
@@ -131,7 +161,7 @@ final class ManualBackgroundTransferEngineTests: XCTestCase {
         defer { credentials.release() }
         let pausedEngine = ManualBackgroundTransferEngine(
             scheduler: FakeManualUploadScheduler(), jobStore: first.store,
-            credentialStore: credentials, sleep: { _ in }
+            credentialStore: credentials
         )
         let restoration = Task { await pausedEngine.restore() }
         await fulfillment(of: [entered], timeout: 5)
@@ -483,8 +513,7 @@ final class ManualBackgroundTransferEngineTests: XCTestCase {
         return ManualBackgroundTransferEngine(
             scheduler: scheduler,
             jobStore: fixture.store,
-            credentialStore: credentials,
-            sleep: { _ in }
+            credentialStore: credentials
         )
     }
 
@@ -559,23 +588,6 @@ private final class SuccessfulManualUploadTask: URLSessionTask, @unchecked Senda
     override var response: URLResponse? { HTTPURLResponse.success() }
 }
 
-private actor PausedManualRetrySleeper {
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var released = false
-
-    func pause() async {
-        guard !released else { return }
-        await withCheckedContinuation { continuation in
-            self.continuation = continuation
-        }
-    }
-    func release() {
-        released = true
-        continuation?.resume()
-        continuation = nil
-    }
-}
-
 private final class PausedManualCredentialStore: CredentialStore, @unchecked Sendable {
     private let lock = NSLock()
     private var hasPaused = false
@@ -607,7 +619,7 @@ private actor PausedManualCancellationScheduler: ManualUploadTaskScheduling {
     private var continuation: CheckedContinuation<Void, Never>?
 
     init(entered: XCTestExpectation) { self.entered = entered }
-    func schedule(_ descriptor: ManualUploadTaskDescriptor, request: URLRequest, fileURL: URL) async throws {}
+    func schedule(_ descriptor: ManualUploadTaskDescriptor, request: URLRequest, fileURL: URL, notBefore: Date?) async throws {}
     func existingDescriptors() async -> Set<ManualUploadTaskDescriptor> { [] }
     func cancel(jobID: UUID) async {
         await withCheckedContinuation { continuation in
@@ -633,6 +645,7 @@ private actor FakeManualUploadScheduler: ManualUploadTaskScheduling {
         let descriptor: ManualUploadTaskDescriptor
         let request: URLRequest
         let fileURL: URL
+        let notBefore: Date?
     }
 
     private let existing: Set<ManualUploadTaskDescriptor>
@@ -646,9 +659,10 @@ private actor FakeManualUploadScheduler: ManualUploadTaskScheduling {
     func schedule(
         _ descriptor: ManualUploadTaskDescriptor,
         request: URLRequest,
-        fileURL: URL
+        fileURL: URL,
+        notBefore: Date?
     ) async throws {
-        scheduled.append(.init(descriptor: descriptor, request: request, fileURL: fileURL))
+        scheduled.append(.init(descriptor: descriptor, request: request, fileURL: fileURL, notBefore: notBefore))
     }
 
     func existingDescriptors() async -> Set<ManualUploadTaskDescriptor> {

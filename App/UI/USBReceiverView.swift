@@ -46,10 +46,10 @@ struct USBReceiverView: View {
         .sheet(item: $model.previewFile) { file in
             StoredFilePreview(file: file, onClose: { model.previewFile = nil })
         }
-        .sheet(item: $model.sharingFile) { file in
-            StoredFileShareSheet(file: file, onFinish: model.finishSharingStoredFile)
-        }
-        .sheet(item: $model.sharingSelection) { selection in
+        .sheet(item: Binding(
+            get: { model.sharingSelection ?? model.sharingFile.map { StoredFileShareSelection(files: [$0]) } },
+            set: { if $0 == nil { model.sharingFile = nil; model.sharingSelection = nil } }
+        )) { selection in
             StoredFileShareSheet(files: selection.files, onFinish: model.finishSharingStoredFile)
         }
         .sheet(item: $model.zipContentsFile) { file in

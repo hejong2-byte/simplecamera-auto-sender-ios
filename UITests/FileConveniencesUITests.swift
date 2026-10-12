@@ -25,7 +25,14 @@ final class FileConveniencesUITests: XCTestCase {
         XCTAssertTrue(share.isEnabled)
         share.tap()
         let sheet = app.navigationBars["UIActivityContentView"]
-        XCTAssertTrue(sheet.waitForExistence(timeout: 30))
+        let appeared = sheet.waitForExistence(timeout: 30)
+        if !appeared {
+            keepScreenshot("multi-share-sheet-missing", app: app)
+            let closeExists = app.buttons["header.closeButton"].exists
+            print("MULTI_SHARE_DIAGNOSTICS shareEnabled=\(share.isEnabled) closeExists=\(closeExists)")
+            print(app.debugDescription)
+        }
+        XCTAssertTrue(appeared)
         sheet.buttons["header.closeButton"].tap()
         for name in ["받은 문서.pdf", "받은 사진.png"] {
             XCTAssertTrue(app.buttons["stored-file-\(name)"].exists)

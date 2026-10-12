@@ -116,6 +116,7 @@ private struct ZIPExportResumeManifest: Codable {
 private struct ZIPCommittedRoots: Codable {
     let jobID: UUID
     var names: Set<String>
+    var pendingNames: Set<String>? = nil
 }
 
 final class IPhoneUSBDeletionDecisionStore: @unchecked Sendable {
@@ -837,7 +838,7 @@ actor IPhoneUSBExportService {
         return try withCoordinatedDestination(destination) {
         let topLevelNames = Set((extraction.directories + extraction.files.map(\.relativePath))
             .compactMap { $0.split(separator: "/").first.map(String.init) }).sorted()
-        func checkRootConflicts(committedNames: Set<String>) throws {
+        func checkRootConflicts(permittedNames: Set<String>) throws {
             for name in topLevelNames {
                 if name == Self.partialDirectoryName {
                     throw IPhoneUSBExportError.destinationNotWritable
@@ -850,7 +851,7 @@ actor IPhoneUSBExportService {
                 fileManager: fileManager
             )
             if !overwriteExisting, conflicts.contains(where: {
-                $0.split(separator: "/").first.map { !committedNames.contains(String($0)) } ?? true
+                $0.split(separator: "/").first.map { !permittedNames.contains(String($0)) } ?? true
             }) {
                 throw IPhoneUSBExportError.overwriteConfirmationRequired
             }
@@ -896,11 +897,13 @@ actor IPhoneUSBExportService {
         }
 
         var finalizedTopLevelNames: Set<String> = []
+        var pendingTopLevelNames: Set<String> = []
         let committedRootsURL = extractionRoot.appendingPathComponent(".simplecamera-committed.json")
         if isResumingUSBPartial,
            let data = try? Data(contentsOf: committedRootsURL),
            let committed = try? JSONDecoder().decode(ZIPCommittedRoots.self, from: data),
            committed.jobID == resumeIdentifier {
+            pendingTopLevelNames = (committed.pendingNames ?? []).intersection(Set(topLevelNames))
             for name in topLevelNames where committed.names.contains(name) {
                 let target = destination.url.appendingPathComponent(name)
                 guard fileManager.fileExists(atPath: target.path) else { continue }
@@ -910,7 +913,7 @@ actor IPhoneUSBExportService {
                 finalizedTopLevelNames.insert(name)
             }
         }
-        try checkRootConflicts(committedNames: finalizedTopLevelNames)
+        try checkRootConflicts(permittedNames: finalizedTopLevelNames.union(pendingTopLevelNames))
 
         var existingOffsets: [String: Int64] = [:]
         var rejectedPartials: [URL] = []
@@ -1084,6 +1087,13 @@ actor IPhoneUSBExportService {
             guard fileManager.fileExists(atPath: staged.path) else {
                 throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
             }
+            // Persist permission to retry this attempted install before moving.
+            // A move can take effect and still report interruption. Pending roots
+            // are reprocessed, never counted as committed or deducted from space.
+            pendingTopLevelNames.insert(name)
+            try JSONEncoder().encode(ZIPCommittedRoots(jobID: resumeIdentifier,
+                names: finalizedTopLevelNames, pendingNames: pendingTopLevelNames))
+                .write(to: committedRootsURL, options: .atomic)
             if fileManager.fileExists(atPath: target.path) {
                 let directories = extraction.directories.filter { topLevelName($0) == name }
                 let files = extraction.files
@@ -1107,7 +1117,9 @@ actor IPhoneUSBExportService {
             // Only this job's successful commit proves completion. A crash before
             // this atomic record is written causes safe reprocessing on retry.
             finalizedTopLevelNames.insert(name)
-            try JSONEncoder().encode(ZIPCommittedRoots(jobID: resumeIdentifier, names: finalizedTopLevelNames))
+            pendingTopLevelNames.remove(name)
+            try JSONEncoder().encode(ZIPCommittedRoots(jobID: resumeIdentifier,
+                names: finalizedTopLevelNames, pendingNames: pendingTopLevelNames))
                 .write(to: committedRootsURL, options: .atomic)
         }
         // Cleanup trouble must not turn successfully placed data into a copy

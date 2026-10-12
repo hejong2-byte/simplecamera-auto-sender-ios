@@ -19,8 +19,8 @@ struct IPhoneReceiveStatus: Sendable, Equatable {
 }
 
 struct StoredFileShareSelection: Identifiable {
-    let id = UUID()
     let files: [IPhoneStoredFile]
+    var id: [String] { files.map(\.id) }
 }
 
 @MainActor
@@ -582,7 +582,7 @@ final class USBReceiverViewModel: ObservableObject {
     var sortedStorageEntries: [USBStorageFileEntry] { storageSort.sorted(storageEntries) }
 
     func showZIPContents(_ file: IPhoneStoredFile) async {
-        guard canShareStoredFile(file), Self.isZIP(file) else { return }
+        guard canShareStoredFile(file), !isPerformingReceive, Self.isZIP(file) else { return }
         zipContentsGeneration += 1
         let generation = zipContentsGeneration
         zipContentsFile = file
@@ -622,11 +622,21 @@ final class USBReceiverViewModel: ObservableObject {
 
     func selectAllZIPEntries() { selectedZIPPaths = Set(zipEntries.map(\.path)) }
 
+    private var canStartStoredFileExport: Bool {
+        !isExportingToUSB && !isReceivingFile && !isPerformingReceive
+            && !isDeletingStoredFiles && !needsStoredFileDeletionConfirmation && !isCleaningUSBFolder
+    }
+
+    var canExportSelectedZIPContents: Bool {
+        zipContentsFile != nil && !selectedZIPPaths.isEmpty && !isLoadingZIPContents
+            && canStartStoredFileExport
+    }
+
     func exportSelectedZIPContents() async {
-        guard let file = zipContentsFile, !selectedZIPPaths.isEmpty, !isLoadingZIPContents else { return }
+        guard canExportSelectedZIPContents, let file = zipContentsFile else { return }
         let selections = selectedZIPPaths == Set(zipEntries.map(\.path)) ? [:] : [file.id: selectedZIPPaths]
-        zipContentsFile = nil
-        await exportStoredFiles([file], archiveMode: .extract, zipSelections: selections)
+        await exportStoredFiles([file], archiveMode: .extract, zipSelections: selections,
+                                dismissZIPContents: true)
     }
 
     func refresh() async {
@@ -973,6 +983,7 @@ final class USBReceiverViewModel: ObservableObject {
 
     func pollOnce() async {
         guard !isExportingToUSB, !isPerformingReceive, !isChoosingUSBFolder,
+              zipContentsFile == nil,
               !needsLocalFallbackDecision, !needsDeletionDecision,
               !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation,
               !isCleaningUSBFolder, !needsUSBReceiveOverwriteConfirmation,
@@ -1343,11 +1354,10 @@ final class USBReceiverViewModel: ObservableObject {
         _ selected: [IPhoneStoredFile],
         archiveMode: IPhoneReceiveArchiveMode,
         overwriteExisting: Bool = false,
-        zipSelections: [String: Set<String>] = [:]
+        zipSelections: [String: Set<String>] = [:],
+        dismissZIPContents: Bool = false
     ) async {
-        guard !isExportingToUSB, !isReceivingFile,
-              !isDeletingStoredFiles, !needsStoredFileDeletionConfirmation,
-              !isCleaningUSBFolder else { return }
+        guard canStartStoredFileExport else { return }
         guard zipSelections.isEmpty || selectedExportFiles != nil else {
             lastUSBExportError = "선택한 ZIP 내용을 내보낼 수 없습니다. 다시 선택해 주세요."
             return
@@ -1360,6 +1370,7 @@ final class USBReceiverViewModel: ObservableObject {
         )
         currentExportRequest = request
         isExportingToUSB = true
+        if dismissZIPContents { zipContentsFile = nil }
         usbCopyBackgroundExpired = false
         if let beginSelectedExportProgress {
             beginSelectedExportProgress(selected.first?.name, selected.count, selected.map(\.id), archiveMode, zipSelections)
