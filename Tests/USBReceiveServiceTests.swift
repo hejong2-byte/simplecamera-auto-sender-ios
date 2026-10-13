@@ -740,7 +740,8 @@ final class USBReceiveServiceTests: XCTestCase {
         let extractionCount = fileManager.extractionCount
         fileManager.stagedZIP = fixture.stagedZIP
 
-        let resumed = try await fixture.service.runOnce()
+        let reopenedService = try fixture.reopenService()
+        let resumed = try await reopenedService.runOnce()
 
         XCTAssertEqual(resumed.completed, 1)
         let afterRanges = await fixture.client.requestedRanges()
@@ -815,9 +816,8 @@ final class USBReceiveServiceTests: XCTestCase {
             responseMode: responseMode,
             ackFailures: ackFailures
         )
-        let ledger = try USBReceiveLedger(
-            fileURL: temporaryDirectory().appendingPathComponent("ledger.json")
-        )
+        let ledgerURL = temporaryDirectory().appendingPathComponent("ledger.json")
+        let ledger = try USBReceiveLedger(fileURL: ledgerURL)
         let credentials = IPhoneReceiverCredentials(
             identity: IPhoneReceiverIdentity(
                 receiverID: UUID(),
@@ -845,37 +845,40 @@ final class USBReceiveServiceTests: XCTestCase {
         } else {
             sharedZIPExporter = nil
         }
-        let service = USBReceiveService(
-            client: client,
-            ledger: ledger,
-            credentials: { credentials },
-            destination: {
-                USBBookmarkDestination(
-                    url: destination,
-                    volumeID: "test-volume",
-                    displayName: "TEST USB",
-                    isStale: destinationIsStale
-                )
-            },
-            chunkSize: chunkSize,
-            volumeIdentity: { _ in currentVolumeID },
-            startAccessing: { _ in canAccessSecurityScope },
-            stopAccessing: { _ in },
-            fileManager: receiveFileManager,
-            progressStore: progressStore,
-            receiveDecision: { _, deliveryID in
-                deliveryID == delivery.deliveryID
-                    ? IPhoneReceiveDecision(
-                        destination: .usb,
-                        archiveMode: archiveMode,
-                        overwriteExisting: overwriteExisting
+        let makeService: @Sendable (USBReceiveLedger) -> USBReceiveService = { ledger in
+            USBReceiveService(
+                client: client,
+                ledger: ledger,
+                credentials: { credentials },
+                destination: {
+                    USBBookmarkDestination(
+                        url: destination,
+                        volumeID: "test-volume",
+                        displayName: "TEST USB",
+                        isStale: destinationIsStale
                     )
-                    : nil
-            },
-            zipStagingDirectory: zipStagingDirectory,
-            zipExporter: sharedZIPExporter,
-            capacityQuery: capacityQuery
-        )
+                },
+                chunkSize: chunkSize,
+                volumeIdentity: { _ in currentVolumeID },
+                startAccessing: { _ in canAccessSecurityScope },
+                stopAccessing: { _ in },
+                fileManager: receiveFileManager,
+                progressStore: progressStore,
+                receiveDecision: { _, deliveryID in
+                    deliveryID == delivery.deliveryID
+                        ? IPhoneReceiveDecision(
+                            destination: .usb,
+                            archiveMode: archiveMode,
+                            overwriteExisting: overwriteExisting
+                        )
+                        : nil
+                },
+                zipStagingDirectory: zipStagingDirectory,
+                zipExporter: sharedZIPExporter,
+                capacityQuery: capacityQuery
+            )
+        }
+        let service = makeService(ledger)
         return Fixture(
             client: client,
             ledger: ledger,
@@ -886,7 +889,8 @@ final class USBReceiveServiceTests: XCTestCase {
             progressStore: progressStore,
             stagedZIP: zipStagingDirectory.appendingPathComponent(
                 delivery.deliveryID.uuidString.lowercased() + ".zip.partial"
-            )
+            ),
+            reopenService: { makeService(try USBReceiveLedger(fileURL: ledgerURL)) }
         )
     }
 
@@ -994,6 +998,7 @@ private struct Fixture {
     let payload: Data
     let progressStore: USBReceiveProgressStore
     let stagedZIP: URL
+    let reopenService: @Sendable () throws -> USBReceiveService
 }
 
 private actor StubReceiverClient: IPhoneReceiverServing {
