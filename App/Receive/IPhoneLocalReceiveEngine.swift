@@ -165,7 +165,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
             return
         }
         publish(stage: .discovering, job: nil)
-        var job = IPhoneLocalReceiveJob(
+        let job = IPhoneLocalReceiveJob(
             id: delivery.deliveryID,
             delivery: delivery,
             stage: .scheduled,
@@ -177,29 +177,14 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         )
         try jobStore.save(job)
         do {
-            _ = try await client.lease(
-                receiverID: credentials.identity.receiverID,
-                deliveryID: delivery.deliveryID,
-                receiveSecret: credentials.secret,
-                mode: .background
-            )
-            let request = try client.downloadRequest(
-                receiverID: credentials.identity.receiverID,
-                deliveryID: delivery.deliveryID,
-                receiveSecret: credentials.secret
-            )
-            try await scheduler.schedule(
-                deliveryID: delivery.deliveryID,
-                request: request
-            )
-            job.stage = .downloading
-            try jobStore.save(job)
-            publish(stage: .downloading, job: job)
+            try await reschedule(job)
         } catch {
-            job.lastError = IPhoneReceiveErrorMessage.message(error)
-            try? jobStore.save(job)
-            emitOutcome(IPhoneReceiveErrorMessage.isCancellation(error) ? .paused : .failed, job: job)
-            throw error
+            if let latest = jobStore.job(for: delivery.deliveryID),
+               [.scheduled, .downloading].contains(latest.stage),
+               !finalizationsInFlight.contains(delivery.deliveryID) {
+                await markFailed(latest, error: error)
+                throw error
+            }
         }
     }
 
@@ -232,8 +217,11 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
             await finalize(finalizing, stagingURL: catalog.stagingDirectory.appendingPathComponent(stagingName))
             return
         }
-        if let active = jobs.first(where: { [.scheduled, .downloading].contains($0.stage) }) {
+        if let candidate = jobs.first(where: { [.scheduled, .downloading].contains($0.stage) }) {
             let existing = await scheduler.existingDeliveryIDs()
+            guard let active = jobStore.job(for: candidate.delivery.deliveryID),
+                  [.scheduled, .downloading].contains(active.stage),
+                  !finalizationsInFlight.contains(active.delivery.deliveryID) else { return }
             if existing.contains(active.delivery.deliveryID) { return }
             let staging = catalog.stagingDirectory.appendingPathComponent(
                 active.delivery.deliveryID.uuidString.lowercased() + ".download")
@@ -263,7 +251,14 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
                 return
             }
             do { try await reschedule(requested) }
-            catch { await markFailed(requested, error: error); throw error }
+            catch {
+                if let latest = jobStore.job(for: requested.delivery.deliveryID),
+                   [.scheduled, .downloading].contains(latest.stage),
+                   !finalizationsInFlight.contains(latest.delivery.deliveryID) {
+                    await markFailed(latest, error: error)
+                    throw error
+                }
+            }
         }
     }
 
@@ -459,33 +454,56 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
     }
 
     private func reschedule(_ initial: IPhoneLocalReceiveJob) async throws {
-        var job = initial
+        let deliveryID = initial.delivery.deliveryID
+        guard let current = jobStore.job(for: deliveryID),
+              [.scheduled, .downloading].contains(current.stage),
+              !finalizationsInFlight.contains(deliveryID) else { return }
         let credentials = try requiredCredentials()
-        _ = try await client.lease(
-            receiverID: credentials.identity.receiverID,
-            deliveryID: job.delivery.deliveryID,
-            receiveSecret: credentials.secret,
-            mode: .background
-        )
-        let request = try client.downloadRequest(
-            receiverID: credentials.identity.receiverID,
-            deliveryID: job.delivery.deliveryID,
-            receiveSecret: credentials.secret
-        )
-        try await scheduler.schedule(
-            deliveryID: job.delivery.deliveryID,
-            request: request
-        )
-        job.stage = .downloading
-        job.lastError = nil
-        try jobStore.save(job)
-        publish(stage: .downloading, job: job)
+        do {
+            _ = try await client.lease(
+                receiverID: credentials.identity.receiverID,
+                deliveryID: deliveryID,
+                receiveSecret: credentials.secret,
+                mode: .background
+            )
+            guard let leased = jobStore.job(for: deliveryID),
+                  [.scheduled, .downloading].contains(leased.stage),
+                  !finalizationsInFlight.contains(deliveryID) else { return }
+            let request = try client.downloadRequest(
+                receiverID: credentials.identity.receiverID,
+                deliveryID: deliveryID,
+                receiveSecret: credentials.secret
+            )
+            try await scheduler.schedule(deliveryID: deliveryID, request: request)
+            guard var scheduled = jobStore.job(for: deliveryID),
+                  [.scheduled, .downloading].contains(scheduled.stage),
+                  !finalizationsInFlight.contains(deliveryID) else {
+                await scheduler.cancel(deliveryID: deliveryID)
+                return
+            }
+            scheduled.stage = .downloading
+            scheduled.lastError = nil
+            try jobStore.save(scheduled)
+            publish(stage: .downloading, job: scheduled)
+        } catch {
+            guard let latest = jobStore.job(for: deliveryID),
+                  [.scheduled, .downloading].contains(latest.stage),
+                  !finalizationsInFlight.contains(deliveryID) else {
+                await scheduler.cancel(deliveryID: deliveryID)
+                return
+            }
+            throw error
+        }
     }
 
     private func markFailed(_ initial: IPhoneLocalReceiveJob, error: Error) async {
         var job = initial
         job.stage = .failed
         job.failureIsRetryable = error is URLError || error is CancellationError
+        if case let IPhoneReceiverClientError.server(statusCode, _) = error {
+            job.failureIsRetryable = [408, 425, 429].contains(statusCode)
+                || (500...599).contains(statusCode)
+        }
         job.retryRequested = false
         job.lastError = IPhoneReceiveErrorMessage.message(error)
         try? jobStore.save(job)

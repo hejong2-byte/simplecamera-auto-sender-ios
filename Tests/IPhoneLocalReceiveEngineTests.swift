@@ -97,8 +97,23 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: context.catalog.receivedDirectory.appendingPathComponent("photo.jpg")), payload)
     }
 
-    func testHTTPTransientDelegateFailureAcceptsExplicitRetryButPermanentFailureDoesNot() async throws {
-        for status in [503, 429, 404, 410] {
+    func testHTTP503DelegateFailureAcceptsExplicitRetry() async throws {
+        try await assertHTTPDelegateRetry(status: 503, retryAllowed: true)
+    }
+
+    func testHTTP429DelegateFailureAcceptsExplicitRetry() async throws {
+        try await assertHTTPDelegateRetry(status: 429, retryAllowed: true)
+    }
+
+    func testHTTP404DelegateFailureDoesNotAcceptRetry() async throws {
+        try await assertHTTPDelegateRetry(status: 404, retryAllowed: false)
+    }
+
+    func testHTTP410DelegateFailureDoesNotAcceptRetry() async throws {
+        try await assertHTTPDelegateRetry(status: 410, retryAllowed: false)
+    }
+
+    private func assertHTTPDelegateRetry(status: Int, retryAllowed: Bool) async throws {
             let context = try makeContext(payloads: ["retry.txt": Data("retry".utf8)])
             try await context.engine.discoverAndSchedule()
             let delivery = try XCTUnwrap(context.client.deliveries().first)
@@ -112,6 +127,7 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
             let session = URLSession(configuration: .ephemeral)
             let task = HTTPFailureReceiveDownloadTask()
             task.status = status
+            XCTAssertEqual((task.response as? HTTPURLResponse)?.statusCode, status)
             task.taskDescription = try IPhoneReceiveTaskDescriptor(deliveryID: delivery.deliveryID).encodedTaskDescription()
             let staging = context.catalog.stagingDirectory.appendingPathComponent("http.download")
             try Data("server error".utf8).write(to: staging)
@@ -120,6 +136,10 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
             await fulfillment(of: [handled], timeout: 2)
             session.invalidateAndCancel()
             XCTAssertEqual(context.jobs.job(for: delivery.deliveryID)?.stage, .failed)
+            if retryAllowed {
+                XCTAssertTrue(context.jobs.job(for: delivery.deliveryID)?.lastError?.contains("HTTP \(status)") == true,
+                    "The actual delegate must deliver the intended transient HTTP error")
+            }
             try await context.engine.discoverAndSchedule()
             let beforeApproval = await context.scheduler.scheduledIDs()
             XCTAssertTrue(beforeApproval.isEmpty, "HTTP failures still require an explicit retry decision")
@@ -127,7 +147,7 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
             try await context.engine.retryFailedDelivery(deliveryID: delivery.deliveryID)
 
             let scheduled = await context.scheduler.scheduledIDs()
-            if status == 503 || status == 429 {
+            if retryAllowed {
                 XCTAssertEqual(scheduled, [delivery.deliveryID])
                 XCTAssertEqual(context.jobs.job(for: delivery.deliveryID)?.stage, .downloading)
             } else {
@@ -136,7 +156,6 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
             }
             XCTAssertTrue(context.client.acks().isEmpty)
             XCTAssertTrue(try context.catalog.refresh().isEmpty)
-        }
     }
 
     func testLateDownloadCallbacksDoNotDowngradeVerifiedCompletedJob() async throws {
