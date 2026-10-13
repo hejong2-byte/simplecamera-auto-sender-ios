@@ -74,16 +74,26 @@ struct DiagnosticsReportService {
     }
 
     private func safeError(_ message: String) -> (domain: String, code: Int)? {
+        let provider = "저장 위치에 접근할 수 없습니다. USB·SD 연결을 확인하고 폴더를 다시 선택해 주세요. (NSFileProviderErrorDomain · -2001)"
+        if message == provider { return ("NSFileProviderErrorDomain", -2001) }
+        let networkPattern = "^네트워크 오류 · 인터넷 연결을 확인해 주세요\\. \\((-?[0-9]+)\\)$"
+        if let code = errorCode(message, pattern: networkPattern) { return (NSURLErrorDomain, code) }
         let domains = ["NSURLErrorDomain", "NSCocoaErrorDomain", "NSPOSIXErrorDomain", "NSFileProviderErrorDomain"]
         for domain in domains {
-            for pattern in ["^Error Domain=\(domain) Code=(-?[0-9]+)(?:\\s|$)", "^\(domain) · (-?[0-9]+)$"] {
-                guard let expression = try? NSRegularExpression(pattern: pattern),
-                      let match = expression.firstMatch(in: message, range: NSRange(message.startIndex..., in: message)),
-                      let range = Range(match.range(at: 1), in: message), let code = Int(message[range]) else { continue }
-                return (domain, code)
+            for pattern in ["^Error Domain=\(domain) Code=(-?[0-9]+)(?:\\s|$)",
+                            "^\(domain) · (-?[0-9]+)$",
+                            "^수신 오류 \\(\(domain) · (-?[0-9]+)\\) · 연결과 저장 위치를 확인해 주세요\\.$"] {
+                if let code = errorCode(message, pattern: pattern) { return (domain, code) }
             }
         }
         return nil
+    }
+
+    private func errorCode(_ message: String, pattern: String) -> Int? {
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(in: message, range: NSRange(message.startIndex..., in: message)),
+              let range = Range(match.range(at: 1), in: message) else { return nil }
+        return Int(message[range])
     }
 
     func create(_ snapshot: DiagnosticsSnapshot) throws -> DiagnosticsReportFile {

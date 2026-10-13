@@ -10,7 +10,7 @@ final class SettingsSupportUITests: XCTestCase {
         XCTAssertTrue(app.buttons["check-app-update"].exists)
     }
 
-    func testDiagnosticsCanBeSharedAndCancelledWithoutChangingOriginals() {
+    func testDiagnosticsShareCanBeCancelledAndActionRemainsEnabled() {
         let app = openSettings()
         let share = app.buttons["share-diagnostics"]
         reveal(share, in: app)
