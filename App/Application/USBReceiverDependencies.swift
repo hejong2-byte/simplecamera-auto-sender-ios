@@ -382,11 +382,14 @@ final class USBReceiverDependencies: @unchecked Sendable {
                 }
                 return IPhoneIncomingSnapshot(receiverID: receiverID, files: newFiles)
             },
-            approveFiles: { [approvalStore, registrationStore] receiverID, ids, decision in
+            approveFiles: { [approvalStore, registrationStore, jobStore] receiverID, ids, decision in
                 guard try registrationStore.load()?.identity.receiverID == receiverID else {
                     throw USBReceiveServiceError.missingRegistration
                 }
                 try approvalStore.approve(ids, receiverID: receiverID, decision: decision)
+                if decision.destination == .iphoneLocal {
+                    for id in ids { try jobStore.requestRetry(deliveryID: id) }
+                }
             }
         )
     }

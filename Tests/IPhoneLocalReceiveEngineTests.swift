@@ -11,6 +11,56 @@ private final class LocalReceiveNotificationEventRecorder: @unchecked Sendable {
 }
 
 final class IPhoneLocalReceiveEngineTests: XCTestCase {
+    func testLateDownloadCallbacksDoNotDowngradeVerifiedCompletedJob() async throws {
+        let payload = Data("verified".utf8)
+        let context = try makeContext(payloads: ["verified.txt": payload])
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        let staging = context.catalog.stagingDirectory.appendingPathComponent("verified.download")
+        try payload.write(to: staging)
+        await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+        let completed = try XCTUnwrap(context.jobs.job(for: delivery.deliveryID))
+        await context.engine.downloadFailed(deliveryID: delivery.deliveryID, error: URLError(.cancelled))
+        XCTAssertEqual(context.jobs.job(for: delivery.deliveryID), completed)
+        let duplicate = context.catalog.stagingDirectory.appendingPathComponent("duplicate.download")
+        try payload.write(to: duplicate)
+        await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: duplicate)
+        XCTAssertEqual(context.jobs.job(for: delivery.deliveryID), completed)
+        XCTAssertEqual(context.client.acks().count, 1)
+        XCTAssertEqual(try Data(contentsOf: context.catalog.receivedDirectory.appendingPathComponent("verified.txt")), payload)
+    }
+
+    func testForegroundPumpDoesNotReenterDeliveredCallbackWhilePhotoImportIsSuspended() async throws {
+        let firstEntered = expectation(description: "Photo import entered")
+        let secondBoundary = LocalReceiveTestSignal(expectation(description: "Poll returns or duplicate import enters"))
+        let gate = LocalReceiveAckGate(firstEntered: firstEntered, secondBoundary: secondBoundary)
+        let payload = Data("photo".utf8)
+        let context = try makeContext(payloads: ["photo.jpg": payload],
+            saveReceivedMedia: { _, _ in await gate.wait(); return true })
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        let staging = context.catalog.stagingDirectory.appendingPathComponent("photo.download")
+        try payload.write(to: staging)
+        let callback = Task {
+            await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+        }
+        await fulfillment(of: [firstEntered], timeout: 2)
+        let poll = Task {
+            try await context.engine.discoverAndSchedule()
+            await context.engine.restore()
+            secondBoundary.fulfill()
+        }
+        await fulfillment(of: [secondBoundary.expectation], timeout: 2)
+        let importCount = await gate.enteredCount()
+        XCTAssertEqual(importCount, 1, "A delivered callback owns finalization while its photo import is suspended")
+        await gate.open()
+        await callback.value
+        try await poll.value
+        XCTAssertEqual(context.client.acks().count, 1)
+        XCTAssertEqual(context.jobs.job(for: delivery.deliveryID)?.stage, .completed)
+        XCTAssertEqual(try Data(contentsOf: context.catalog.receivedDirectory.appendingPathComponent("photo.jpg")), payload)
+    }
+
     func testConcurrentRestoreAndForegroundPollSerializePendingAcknowledgement() async throws {
         let payload = Data("pending ack".utf8)
         let context = try makeContext(payloads: ["ack.txt": payload], ackFailures: 1)

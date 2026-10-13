@@ -65,6 +65,7 @@ final class BackgroundIPhoneReceiveSession: NSObject,
     private let fileManager: FileManager
     private let lock = NSLock()
     private weak var sink: (any IPhoneReceiveDownloadSink)?
+    private var pendingCallbacks: [UUID: Task<Void, Never>] = [:]
 
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.background(
@@ -136,6 +137,20 @@ final class BackgroundIPhoneReceiveSession: NSObject,
     private func currentSink() -> (any IPhoneReceiveDownloadSink)? {
         lock.withLock { sink }
     }
+
+    private func deliver(_ callback: @escaping @Sendable () async -> Void) {
+        lock.withLock {
+            let id = UUID()
+            pendingCallbacks[id] = Task { [weak self] in
+                await callback()
+                self?.removeDeliveredCallback(id)
+            }
+        }
+    }
+
+    private func removeDeliveredCallback(_ id: UUID) {
+        lock.withLock { _ = pendingCallbacks.removeValue(forKey: id) }
+    }
 }
 
 extension BackgroundIPhoneReceiveSession: URLSessionDownloadDelegate {
@@ -148,7 +163,7 @@ extension BackgroundIPhoneReceiveSession: URLSessionDownloadDelegate {
     ) {
         guard let descriptor = Self.descriptor(for: downloadTask) else { return }
         let sink = currentSink()
-        Task {
+        deliver {
             await sink?.downloadProgress(
                 deliveryID: descriptor.deliveryID,
                 received: totalBytesWritten,
@@ -181,14 +196,14 @@ extension BackgroundIPhoneReceiveSession: URLSessionDownloadDelegate {
                 throw BackgroundIPhoneReceiveError.stagingFileExists
             }
             try fileManager.moveItem(at: location, to: destination)
-            Task {
+            deliver {
                 await sink?.downloadFinished(
                     deliveryID: descriptor.deliveryID,
                     stagingURL: destination
                 )
             }
         } catch {
-            Task {
+            deliver {
                 await sink?.downloadFailed(
                     deliveryID: descriptor.deliveryID,
                     error: error
@@ -205,16 +220,20 @@ extension BackgroundIPhoneReceiveSession: URLSessionDownloadDelegate {
         guard let error,
               let descriptor = Self.descriptor(for: task) else { return }
         let sink = currentSink()
-        Task {
+        deliver {
             await sink?.downloadFailed(deliveryID: descriptor.deliveryID, error: error)
         }
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-        DispatchQueue.main.async { [completionRegistry] in
-            completionRegistry.finish(
-                identifier: AppConfiguration.receiverBackgroundSessionIdentifier
-            )
+        let delivered = lock.withLock { Array(pendingCallbacks.values) }
+        Task { [completionRegistry] in
+            for callback in delivered { await callback.value }
+            await MainActor.run {
+                completionRegistry.finish(
+                    identifier: AppConfiguration.receiverBackgroundSessionIdentifier
+                )
+            }
         }
     }
 }

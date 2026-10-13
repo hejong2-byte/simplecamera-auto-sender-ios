@@ -82,6 +82,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
     private var progressDeliveryID: UUID?
     private var progressStartedAt: Date?
     private var isDiscovering = false
+    private var progressCheckpoints: [UUID: Date] = [:]
 
     init(
         client: any IPhoneLocalReceiveNetworking,
@@ -116,6 +117,11 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         guard !isDiscovering else { return }
         isDiscovering = true
         defer { isDiscovering = false }
+        try await recoverPendingJob()
+        try await discoverNewAndSchedule(force: force)
+    }
+
+    private func discoverNewAndSchedule(force: Bool) async throws {
         guard force || automaticDiscoveryAllowed() else { return }
         let current = try jobStore.load().jobs
         if current.contains(where: { ![.completed, .failed, .savedWithoutReceipt].contains($0.stage) }) {
@@ -197,38 +203,12 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
     }
 
     func retryFailedDelivery(deliveryID: UUID) async throws {
-        // Behavior is supplied after the explicit retry regression is observed RED.
+        try jobStore.requestRetry(deliveryID: deliveryID)
+        try await discoverAndSchedule(force: true)
     }
 
     func restore() async {
         do {
-            let jobs = try jobStore.load().jobs
-            if let pending = jobs.first(where: { $0.stage == .ackPending }) {
-                await retryAcknowledgement(pending)
-                return
-            }
-            if let finalizing = jobs.first(where: {
-                [.downloaded, .verifying, .finalizing].contains($0.stage)
-            }), let stagingName = finalizing.stagingFileName {
-                await finalize(
-                    finalizing,
-                    stagingURL: catalog.stagingDirectory
-                        .appendingPathComponent(stagingName)
-                )
-                return
-            }
-            if let active = jobs.first(where: {
-                [.scheduled, .downloading].contains($0.stage)
-            }) {
-                let existing = await scheduler.existingDeliveryIDs()
-                if existing.contains(active.delivery.deliveryID) { return }
-                do { try await reschedule(active) }
-                catch {
-                    emitOutcome(IPhoneReceiveErrorMessage.isCancellation(error) ? .paused : .failed, job: active)
-                    throw error
-                }
-                return
-            }
             try await discoverAndSchedule()
         } catch let error where IPhoneReceiveErrorMessage.isCancellation(error) {
             return
@@ -237,13 +217,64 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         }
     }
 
+    private func recoverPendingJob() async throws {
+        let jobs = try jobStore.load().jobs
+        if let pending = jobs.first(where: { $0.stage == .ackPending }) {
+            await retryAcknowledgement(pending)
+            return
+        }
+        if let finalizing = jobs.first(where: {
+            [.downloaded, .verifying, .finalizing].contains($0.stage)
+        }), let stagingName = finalizing.stagingFileName {
+            await finalize(finalizing, stagingURL: catalog.stagingDirectory.appendingPathComponent(stagingName))
+            return
+        }
+        if let active = jobs.first(where: { [.scheduled, .downloading].contains($0.stage) }) {
+            let existing = await scheduler.existingDeliveryIDs()
+            if existing.contains(active.delivery.deliveryID) { return }
+            let staging = catalog.stagingDirectory.appendingPathComponent(
+                active.delivery.deliveryID.uuidString.lowercased() + ".download")
+            if fileManager.fileExists(atPath: staging.path) {
+                await downloadFinished(deliveryID: active.delivery.deliveryID, stagingURL: staging)
+                return
+            }
+            do { try await reschedule(active) }
+            catch {
+                emitOutcome(IPhoneReceiveErrorMessage.isCancellation(error) ? .paused : .failed, job: active)
+                throw error
+            }
+            return
+        }
+        if var requested = jobs.first(where: {
+            $0.stage == .failed && $0.retryRequested == true && $0.failureIsRetryable == true
+        }) {
+            requested.stage = .scheduled
+            requested.retryRequested = false
+            requested.lastError = nil
+            requested.retryCount += 1
+            try jobStore.save(requested)
+            let staging = catalog.stagingDirectory.appendingPathComponent(
+                requested.delivery.deliveryID.uuidString.lowercased() + ".download")
+            if fileManager.fileExists(atPath: staging.path) {
+                await downloadFinished(deliveryID: requested.delivery.deliveryID, stagingURL: staging)
+                return
+            }
+            do { try await reschedule(requested) }
+            catch { await markFailed(requested, error: error); throw error }
+        }
+    }
+
     func downloadProgress(deliveryID: UUID, received: Int64, expected: Int64) async {
-        guard var job = jobStore.job(for: deliveryID) else { return }
-        job.stage = .downloading
-        job.bytesReceived = max(0, received)
-        job.lastError = nil
-        try? jobStore.save(job)
-        publish(stage: .downloading, job: job)
+        guard let job = jobStore.job(for: deliveryID) else { return }
+        let instant = now()
+        let checkpoint = progressCheckpoints[deliveryID].map { instant.timeIntervalSince($0) >= 1 } ?? true
+        do {
+            guard let updated = try jobStore.updateProgress(deliveryID: deliveryID, bytes: max(0, received), checkpoint: checkpoint) else { return }
+            if checkpoint { progressCheckpoints[deliveryID] = instant }
+            publish(stage: .downloading, job: updated)
+        } catch {
+            publish(stage: .downloading, job: job)
+        }
     }
 
     func downloadFinished(deliveryID: UUID, stagingURL: URL) async {
@@ -445,6 +476,8 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
     private func markFailed(_ initial: IPhoneLocalReceiveJob, error: Error) async {
         var job = initial
         job.stage = .failed
+        job.failureIsRetryable = error is URLError || error is CancellationError
+        job.retryRequested = false
         job.lastError = IPhoneReceiveErrorMessage.message(error)
         try? jobStore.save(job)
         progressStore.publishFailure(job.lastError ?? "receive failed")

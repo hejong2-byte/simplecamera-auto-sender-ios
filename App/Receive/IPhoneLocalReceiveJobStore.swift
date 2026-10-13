@@ -23,6 +23,8 @@ struct IPhoneLocalReceiveJob: Codable, Equatable, Sendable, Identifiable {
     var lastError: String?
     var mediaLibraryAdded: Bool? = nil
     var mediaLibraryMessage: String? = nil
+    var failureIsRetryable: Bool? = nil
+    var retryRequested: Bool? = nil
 }
 
 struct IPhoneLocalReceiveJobState: Codable, Equatable, Sendable {
@@ -74,6 +76,33 @@ final class IPhoneLocalReceiveJobStore: @unchecked Sendable {
             next.jobs.removeAll { $0.delivery.deliveryID == deliveryID }
             try persist(next)
             state = next
+        }
+    }
+
+    func requestRetry(deliveryID: UUID) throws {
+        try lock.withLock {
+            guard let index = state.jobs.firstIndex(where: { $0.delivery.deliveryID == deliveryID }),
+                  state.jobs[index].stage == .failed else { return }
+            let job = state.jobs[index]
+            let legacyDownloadFailure = job.failureIsRetryable == nil
+                && job.stagingFileName == nil && job.finalFileName == nil
+            guard job.failureIsRetryable == true || legacyDownloadFailure else { return }
+            var next = state
+            next.jobs[index].failureIsRetryable = true
+            next.jobs[index].retryRequested = true
+            try persist(next)
+            state = next
+        }
+    }
+
+    func updateProgress(deliveryID: UUID, bytes: Int64, checkpoint: Bool) throws -> IPhoneLocalReceiveJob? {
+        try lock.withLock {
+            guard let index = state.jobs.firstIndex(where: { $0.delivery.deliveryID == deliveryID }) else { return nil }
+            var next = state
+            next.jobs[index].bytesReceived = bytes
+            if checkpoint { try persist(next) }
+            state = next
+            return next.jobs[index]
         }
     }
 

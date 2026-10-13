@@ -3,6 +3,57 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class IPhoneLocalReceiveJobStoreTests: XCTestCase {
+    func testLegacyFailedJobWithoutNewKeysRequiresExplicitDurableRetryRequest() throws {
+        for stagingName in [nil, "corrupt.download"] as [String?] {
+            let root = temporaryDirectory()
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let stateURL = root.appendingPathComponent("jobs.json")
+            let file = delivery()
+            let job = IPhoneLocalReceiveJob(id: file.deliveryID, delivery: file, stage: .failed,
+                stagingFileName: stagingName, finalFileName: nil, bytesReceived: 4,
+                retryCount: 0, lastError: "legacy failure")
+            let encoded = try JSONEncoder().encode(IPhoneLocalReceiveJobState(version: 1, jobs: [job]))
+            var document = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+            var jobs = try XCTUnwrap(document["jobs"] as? [[String: Any]])
+            jobs[0].removeValue(forKey: "failureIsRetryable")
+            jobs[0].removeValue(forKey: "retryRequested")
+            document["jobs"] = jobs
+            try JSONSerialization.data(withJSONObject: document).write(to: stateURL)
+            let store = try IPhoneLocalReceiveJobStore(fileURL: stateURL)
+            XCTAssertNil(store.job(for: file.deliveryID)?.retryRequested)
+
+            try store.requestRetry(deliveryID: file.deliveryID)
+
+            let reopened = try IPhoneLocalReceiveJobStore(fileURL: stateURL)
+            let requested = try XCTUnwrap(reopened.job(for: file.deliveryID))
+            XCTAssertEqual(requested.stage, .failed, "Approval queues a durable request without racing a download")
+            if stagingName == nil {
+                XCTAssertEqual(requested.retryRequested, true)
+                XCTAssertEqual(requested.failureIsRetryable, true)
+            } else {
+                XCTAssertNil(requested.retryRequested, "Legacy integrity evidence must not be silently retried")
+                XCTAssertEqual(requested.stagingFileName, stagingName)
+            }
+        }
+    }
+
+    func testRetryRequestPersistenceFailureDoesNotMutateLiveJob() throws {
+        let root = temporaryDirectory()
+        let stateURL = root.appendingPathComponent("jobs.json")
+        let store = try IPhoneLocalReceiveJobStore(fileURL: stateURL)
+        let file = delivery()
+        var job = IPhoneLocalReceiveJob(id: file.deliveryID, delivery: file, stage: .failed,
+            stagingFileName: nil, finalFileName: nil, bytesReceived: 4, retryCount: 0, lastError: "timeout")
+        job.failureIsRetryable = true
+        try store.save(job)
+        try FileManager.default.removeItem(at: stateURL)
+        try FileManager.default.createDirectory(at: stateURL, withIntermediateDirectories: false)
+
+        XCTAssertThrowsError(try store.requestRetry(deliveryID: file.deliveryID))
+
+        XCTAssertEqual(store.job(for: file.deliveryID), job)
+    }
+
     func testJobRoundTripPreservesAckPendingStateAndProgress() throws {
         let root = temporaryDirectory()
         let stateURL = root.appendingPathComponent("local-receive-jobs.json")
