@@ -3,6 +3,38 @@ import XCTest
 @testable import SimpleCameraAutoSender
 
 final class BackgroundIPhoneReceiveSessionTests: XCTestCase {
+    func testSystemCompletionWaitsForDeliveredFailureCallbackToFinish() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let registry = BackgroundSessionCompletionRegistry()
+        let receiver = try BackgroundIPhoneReceiveSession(stagingDirectory: directory, completionRegistry: registry)
+        let entered = expectation(description: "Failure callback entered")
+        let completed = expectation(description: "System completion")
+        let sink = BlockingReceiveFailureSink(entered: entered)
+        let state = ReceiveCompletionFlag()
+        receiver.bind(sink: sink)
+        registry.store(identifier: AppConfiguration.receiverBackgroundSessionIdentifier) {
+            state.markCompleted()
+            completed.fulfill()
+        }
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.downloadTask(with: URL(string: "https://example.invalid/download")!)
+        task.taskDescription = try IPhoneReceiveTaskDescriptor(deliveryID: UUID()).encodedTaskDescription()
+        receiver.urlSession(session, task: task, didCompleteWithError: URLError(.timedOut))
+        await fulfillment(of: [entered], timeout: 2)
+
+        receiver.urlSessionDidFinishEvents(forBackgroundURLSession: session)
+        // A main-queue barrier observes the system completion dispatch while the sink is blocked.
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertFalse(state.completed, "System completion must wait for delivered callback durability")
+        await sink.release()
+        await fulfillment(of: [completed], timeout: 2)
+        XCTAssertTrue(state.completed)
+    }
+
     func testDescriptorRoundTripKeepsDeliveryIdentity() throws {
         let descriptor = IPhoneReceiveTaskDescriptor(deliveryID: UUID())
 
@@ -36,5 +68,31 @@ final class BackgroundIPhoneReceiveSessionTests: XCTestCase {
             AppConfiguration.receiverBackgroundSessionIdentifier,
             AppConfiguration.manualBackgroundSessionIdentifier
         )
+    }
+}
+
+private final class ReceiveCompletionFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var completed: Bool { lock.withLock { value } }
+    func markCompleted() { lock.withLock { value = true } }
+}
+
+private actor BlockingReceiveFailureSink: IPhoneReceiveDownloadSink {
+    let entered: XCTestExpectation
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    init(entered: XCTestExpectation) { self.entered = entered }
+    func downloadProgress(deliveryID: UUID, received: Int64, expected: Int64) async {}
+    func downloadFinished(deliveryID: UUID, stagingURL: URL) async {}
+    func downloadFailed(deliveryID: UUID, error: Error) async {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            entered.fulfill()
+        }
+    }
+    func release() {
+        continuation?.resume()
+        continuation = nil
     }
 }

@@ -11,6 +11,81 @@ private final class LocalReceiveNotificationEventRecorder: @unchecked Sendable {
 }
 
 final class IPhoneLocalReceiveEngineTests: XCTestCase {
+    func testForegroundPollRetriesPendingAckWithoutRedownloadOrDuplicatePhotoImport() async throws {
+        let payload = Data("photo".utf8)
+        let recorder = ReceivedMediaSaveRecorder()
+        let context = try makeContext(payloads: ["photo.jpg": payload], ackFailures: 1,
+            saveReceivedMedia: { url, contentType in
+                await recorder.record(url: url, contentType: contentType)
+                return true
+            })
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        let staging = context.catalog.stagingDirectory.appendingPathComponent("photo.download")
+        try payload.write(to: staging)
+        await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+        XCTAssertEqual(context.jobs.job(for: delivery.deliveryID)?.stage, .ackPending)
+        let scheduledBefore = await context.scheduler.scheduledIDs()
+
+        try await context.engine.discoverAndSchedule()
+
+        XCTAssertEqual(context.jobs.job(for: delivery.deliveryID)?.stage, .completed)
+        XCTAssertEqual(context.client.acks().count, 1)
+        let scheduledAfter = await context.scheduler.scheduledIDs()
+        let imported = await recorder.values()
+        XCTAssertEqual(scheduledAfter, scheduledBefore)
+        XCTAssertEqual(imported.count, 1)
+        XCTAssertEqual(try Data(contentsOf: context.catalog.receivedDirectory.appendingPathComponent("photo.jpg")), payload)
+    }
+
+    func testRestoreConsumesDeliveredStagingBeforeReschedulingInterruptedJob() async throws {
+        let payload = Data("orphaned download".utf8)
+        let context = try makeContext(payloads: ["orphan.txt": payload])
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        await context.scheduler.cancel(deliveryID: delivery.deliveryID)
+        let staging = context.catalog.stagingDirectory.appendingPathComponent(
+            delivery.deliveryID.uuidString.lowercased() + ".download")
+        try payload.write(to: staging)
+
+        await context.engine.restore()
+
+        XCTAssertEqual(context.jobs.job(for: delivery.deliveryID)?.stage, .completed)
+        XCTAssertEqual(context.client.acks().count, 1)
+        let scheduled = await context.scheduler.scheduledIDs()
+        XCTAssertTrue(scheduled.isEmpty, "A complete staging file must be verified before another download is scheduled")
+        XCTAssertEqual(try Data(contentsOf: context.catalog.receivedDirectory.appendingPathComponent("orphan.txt")), payload)
+    }
+
+    func testProgressBurstIsLiveButDoesNotPersistEveryCallbackAndFailureFlushesLatestBytes() async throws {
+        let clock = LocalReceiveTestClock()
+        let context = try makeContext(payloads: ["progress.bin": Data(repeating: 1, count: 100)],
+            now: { clock.date() })
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        let diskURL = context.catalog.stagingDirectory.deletingLastPathComponent().appendingPathComponent("jobs.json")
+        var durableChanges = 0
+        var previousBytes = try IPhoneLocalReceiveJobStore(fileURL: diskURL).job(for: delivery.deliveryID)?.bytesReceived
+        for received in 1...50 {
+            await context.engine.downloadProgress(deliveryID: delivery.deliveryID, received: Int64(received), expected: 100)
+            let durableBytes = try IPhoneLocalReceiveJobStore(fileURL: diskURL).job(for: delivery.deliveryID)?.bytesReceived
+            if durableBytes != previousBytes { durableChanges += 1 }
+            previousBytes = durableBytes
+        }
+        var updates = context.progress.updates().makeAsyncIterator()
+        let latest = await updates.next()
+        XCTAssertEqual(latest?.bytesReceived, 50)
+        XCTAssertLessThanOrEqual(durableChanges, 1, "Callbacks sharing one instant should coalesce into a bounded checkpoint")
+        clock.advance()
+        await context.engine.downloadProgress(deliveryID: delivery.deliveryID, received: 60, expected: 100)
+        XCTAssertEqual(try IPhoneLocalReceiveJobStore(fileURL: diskURL).job(for: delivery.deliveryID)?.bytesReceived, 60)
+        await context.engine.downloadProgress(deliveryID: delivery.deliveryID, received: 70, expected: 100)
+        await context.engine.downloadFailed(deliveryID: delivery.deliveryID, error: URLError(.timedOut))
+        let terminal = try IPhoneLocalReceiveJobStore(fileURL: diskURL).job(for: delivery.deliveryID)
+        XCTAssertEqual(terminal?.stage, .failed)
+        XCTAssertEqual(terminal?.bytesReceived, 70, "Terminal state must immediately flush the latest live progress")
+    }
+
     func testCancelledDiscoveryDoesNotPublishReceiveFailure() async throws {
         for cancelDuringFeatureUpdate in [false, true] {
             let context = try makeContext(payloads: [:])

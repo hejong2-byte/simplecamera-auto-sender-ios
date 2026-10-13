@@ -698,6 +698,57 @@ final class USBReceiveServiceTests: XCTestCase {
         XCTAssertTrue(remaining.contains { (try? Data(contentsOf: $0)) == original })
     }
 
+    func testRegularDirectReceiveReportsBackupWhenInstallAndRollbackFail() async throws {
+        let fileManager = RecoveryFailureFileManager()
+        let fixture = try makeFixture(payload: Data("replacement".utf8), fileName: "root.txt",
+            contentType: "text/plain", chunkSize: 4, overwriteExisting: true,
+            receiveFileManager: fileManager)
+        let original = Data("irreplaceable original".utf8)
+        try original.write(to: fixture.destination.appendingPathComponent("root.txt"))
+
+        do {
+            _ = try await fixture.service.runOnce()
+            XCTFail("Expected installation and restoration failure")
+        } catch {
+            XCTAssertTrue(error is USBCommitRecoveryError, "Both failures must report the retained backup: \(error)")
+            XCTAssertTrue(IPhoneReceiveErrorMessage.message(error).contains(".backup"))
+        }
+        XCTAssertTrue(fileManager.installFailed)
+        XCTAssertTrue(fileManager.rollbackFailed)
+        let remaining = (FileManager.default.enumerator(at: fixture.destination, includingPropertiesForKeys: nil)?.allObjects as? [URL]) ?? []
+        XCTAssertTrue(remaining.contains { $0.pathExtension == "backup" && (try? Data(contentsOf: $0)) == original })
+        let acknowledgements = await fixture.client.acknowledgedIDs()
+        XCTAssertTrue(acknowledgements.isEmpty)
+    }
+
+    func testInterruptedSharedZIPExportResumesWithoutRewritingVerifiedArchive() async throws {
+        let fileManager = InterruptFirstSharedZIPCopyFileManager()
+        let fixture = try makeFixture(payload: validZIPData(), chunkSize: 64, archiveMode: .extract,
+            useSharedZIPExporter: true, exportFileManager: fileManager)
+        XCTAssertNotEqual(fixture.payload.count % 64, 0, "The ZIP must have a partial final download chunk")
+        let first = Task { try await fixture.service.runOnce() }
+        do {
+            _ = try await first.value
+            XCTFail("Expected interruption during shared USB copying")
+        } catch { }
+        XCTAssertTrue(fileManager.interrupted)
+        XCTAssertEqual(try Data(contentsOf: fixture.stagedZIP), fixture.payload)
+        let beforeRanges = await fixture.client.requestedRanges()
+        let timestamp = try fixture.stagedZIP.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        let extractionCount = fileManager.extractionCount
+        fileManager.stagedZIP = fixture.stagedZIP
+
+        let resumed = try await fixture.service.runOnce()
+
+        XCTAssertEqual(resumed.completed, 1)
+        let afterRanges = await fixture.client.requestedRanges()
+        XCTAssertEqual(afterRanges, beforeRanges, "A verified ZIP must not request its tail again")
+        XCTAssertEqual(fileManager.observedStagedModificationDate, timestamp, "Shared export must see the unchanged verified source")
+        XCTAssertEqual(fileManager.extractionCount, extractionCount, "Reuse the existing extracted job")
+        XCTAssertEqual(try Data(contentsOf: fixture.destination.appendingPathComponent("docs/report.txt")), Data("report-data".utf8))
+        XCTAssertEqual(try Data(contentsOf: fixture.destination.appendingPathComponent("root.txt")), Data("root-data".utf8))
+    }
+
     private func makeFixture(
         payload: Data,
         fileName: String = "업무.zip",
@@ -713,6 +764,7 @@ final class USBReceiveServiceTests: XCTestCase {
         overwriteExisting: Bool = false,
         useSharedZIPExporter: Bool = false,
         exportFileManager: FileManager = .default,
+        receiveFileManager: FileManager = .default,
         capacityQuery: @escaping StorageCapacityPreflight.Query = { try StorageCapacityPreflight.system($0) }
     ) throws -> Fixture {
         let destination = temporaryDirectory()
@@ -779,6 +831,7 @@ final class USBReceiveServiceTests: XCTestCase {
             volumeIdentity: { _ in currentVolumeID },
             startAccessing: { _ in canAccessSecurityScope },
             stopAccessing: { _ in },
+            fileManager: receiveFileManager,
             progressStore: progressStore,
             receiveDecision: { _, deliveryID in
                 deliveryID == delivery.deliveryID
@@ -867,6 +920,32 @@ private final class RecoveryFailureFileManager: FileManager, @unchecked Sendable
             throw CocoaError(.fileWriteNoPermission)
         }
         try super.moveItem(at: srcURL, to: dstURL)
+    }
+}
+
+private final class InterruptFirstSharedZIPCopyFileManager: FileManager, @unchecked Sendable {
+    private(set) var interrupted = false
+    var stagedZIP: URL?
+    private(set) var observedStagedModificationDate: Date?
+    private(set) var extractionCount = 0
+
+    override func createDirectory(at url: URL, withIntermediateDirectories createIntermediates: Bool,
+                                  attributes: [FileAttributeKey: Any]? = nil) throws {
+        if url.lastPathComponent.hasPrefix("extract-") { extractionCount += 1 }
+        try super.createDirectory(at: url, withIntermediateDirectories: createIntermediates, attributes: attributes)
+    }
+
+    override func createFile(atPath path: String, contents data: Data?, attributes attr: [FileAttributeKey: Any]? = nil) -> Bool {
+        let created = super.createFile(atPath: path, contents: data, attributes: attr)
+        if path.contains("export-"), path.contains(".partial/") {
+            if !interrupted {
+                interrupted = true
+                withUnsafeCurrentTask { $0?.cancel() }
+            } else if let stagedZIP {
+                observedStagedModificationDate = try? stagedZIP.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            }
+        }
+        return created
     }
 }
 

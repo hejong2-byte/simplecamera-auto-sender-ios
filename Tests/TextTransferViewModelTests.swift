@@ -3,6 +3,55 @@ import XCTest
 
 @MainActor
 final class TextTransferViewModelTests: XCTestCase {
+    func testSuccessfulSendPreservesNextDraftEditedWhileAwaitingResponse() async {
+        let gate = TextOperationGate()
+        let probe = TextViewModelProbe(sendGate: gate)
+        let model = makeModel(probe: probe)
+        model.recipient = "123456"
+        model.text = "first message"
+        let sending = Task { await model.send() }
+        await gate.waitUntilEntered()
+        model.recipient = "234567"
+        model.text = "  next draft\n"
+        await gate.release()
+        await sending.value
+
+        XCTAssertEqual(model.text, "  next draft\n")
+        XCTAssertEqual(model.recipient, "234567")
+        let draft = await probe.savedDraft()
+        XCTAssertEqual(draft, TextDraft(recipient: "234567", text: "  next draft\n"))
+        XCTAssertEqual(model.messages.first?.envelope.text, "first message")
+    }
+
+    func testSuccessfulSendPreservesDraftWhenOnlyRecipientChanges() async {
+        let gate = TextOperationGate()
+        let probe = TextViewModelProbe(sendGate: gate)
+        let model = makeModel(probe: probe)
+        model.recipient = "123456"
+        model.text = "same body"
+        let sending = Task { await model.send() }
+        await gate.waitUntilEntered()
+        model.recipient = "234567"
+        await gate.release()
+        await sending.value
+
+        XCTAssertEqual(model.text, "same body")
+        let draft = await probe.savedDraft()
+        XCTAssertEqual(draft, TextDraft(recipient: "234567", text: "same body"))
+    }
+
+    func testSuccessfulSendClearsUnchangedSentDraft() async {
+        let probe = TextViewModelProbe()
+        let model = makeModel(probe: probe)
+        model.recipient = "123456"
+        model.text = "sent message"
+        await model.send()
+
+        XCTAssertEqual(model.text, "")
+        let draft = await probe.savedDraft()
+        XCTAssertEqual(draft, TextDraft(recipient: "123456", text: ""))
+    }
+
     func testActivationRefreshesImmediatelyRepeatsEveryFiveSecondsAndStops() async {
         let probe = TextViewModelProbe()
         let clock = TextPollClock()

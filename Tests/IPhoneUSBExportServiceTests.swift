@@ -5,6 +5,47 @@ import ZIPFoundation
 @testable import SimpleCameraAutoSender
 
 final class IPhoneUSBExportServiceTests: XCTestCase {
+    func testRegularFileLateCollisionRequiresConsentAndPreservesBothOriginals() async throws {
+        let collision = LateRegularCollision()
+        let context = try makeContext(coordinateWrite: { url, body in
+            collision.calls += 1
+            if collision.calls == 2 {
+                try Data("late original".utf8).write(to: url.appendingPathComponent("late.txt"))
+            }
+            try body(url)
+        })
+        let source = Data("incoming original".utf8)
+        let file = try makeStoredFile(name: "late.txt", data: source, in: context.sourceDirectory)
+
+        let result = await context.service.export([file], to: context.destination)
+
+        XCTAssertGreaterThanOrEqual(collision.calls, 2)
+        XCTAssertEqual(result.failed.map(\.error), [.overwriteConfirmationRequired])
+        XCTAssertTrue(result.verified.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: context.usbDirectory.appendingPathComponent("late.txt")), Data("late original".utf8))
+        XCTAssertEqual(try Data(contentsOf: file.url), source)
+    }
+
+    func testRegularExportReportsBackupWhenInstallAndRollbackFail() async throws {
+        let fileManager = FailingExportInstallAndRollbackFileManager()
+        let context = try makeContext(fileManager: fileManager)
+        let source = Data("replacement".utf8)
+        let file = try makeStoredFile(name: "root.txt", data: source, in: context.sourceDirectory)
+        let original = Data("irreplaceable original".utf8)
+        try original.write(to: context.usbDirectory.appendingPathComponent("root.txt"))
+
+        let result = await context.service.export([file], to: context.destination, overwriteExisting: true)
+
+        XCTAssertTrue(fileManager.installFailed)
+        XCTAssertTrue(fileManager.rollbackFailed)
+        XCTAssertEqual(result.failed.count, 1)
+        XCTAssertTrue(result.verified.isEmpty)
+        XCTAssertTrue(result.errorMessage?.contains(".backup") == true, "Report the retained recovery path")
+        let remaining = (FileManager.default.enumerator(at: context.usbDirectory, includingPropertiesForKeys: nil)?.allObjects as? [URL]) ?? []
+        XCTAssertTrue(remaining.contains { $0.pathExtension == "backup" && (try? Data(contentsOf: $0)) == original })
+        XCTAssertEqual(try Data(contentsOf: file.url), source)
+    }
+
     func testNestedArchiveAndSDCardWrappersAreRemovedFromUSBRoot() async throws {
         let context = try makeContext()
         let fixture = temporaryDirectory()
@@ -1310,6 +1351,10 @@ private final class CancelOnlyFirstExportFileFileManager: FileManager, @unchecke
         if shouldCancel { withUnsafeCurrentTask { $0?.cancel() } }
         return created
     }
+}
+
+private final class LateRegularCollision: @unchecked Sendable {
+    var calls = 0
 }
 
 private final class CancelAfterFirstRootMoveFileManager: FileManager, @unchecked Sendable {

@@ -4,6 +4,44 @@ import XCTest
 
 @MainActor
 final class USBStorageFileSelectionTests: XCTestCase {
+    func testBusyManualTransferRejectsSecondExplorerSendAndPreservesSelection() async throws {
+        let root = temporaryDirectory()
+        try Data("one".utf8).write(to: root.appendingPathComponent("one.bin"))
+        try Data("two".utf8).write(to: root.appendingPathComponent("two.bin"))
+        let model = try makeModel(root: root)
+        let credentials = InMemoryCredentialStore()
+        try credentials.save("Bearer test")
+        let calls = StorageSendLog(scope: SelectionScopeLog())
+        let transfer = ContentViewModel(
+            credentialStore: credentials,
+            ledger: try UploadLedger(fileURL: temporaryDirectory().appendingPathComponent("ledger.json")),
+            uploader: SelectionUploader(), now: Date.init,
+            send: { _ in .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
+            manualFileEnqueue: { urls, code in
+                await calls.record(urls: urls, code: code)
+                return .init(selected: urls.count, uploaded: 0, failed: 0, failureCategories: [])
+            }, photoAuthorizationStatus: .denied
+        )
+        await transfer.refresh()
+        await model.refreshStorageFiles()
+        model.toggleStorageFileSelection("one.bin")
+        await model.sendSelectedStorageFiles(to: "709592") { urls, code in
+            await transfer.sendSelectedFiles(urls, recipientCode: code)
+        }
+        XCTAssertFalse(model.hasStorageFileSelection)
+        XCTAssertTrue(transfer.isManualTransferWorking)
+
+        model.toggleStorageFileSelection("two.bin")
+        await model.sendSelectedStorageFiles(to: "709592") { urls, code in
+            await transfer.sendSelectedFiles(urls, recipientCode: code)
+        }
+
+        let count = await calls.callCount()
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(model.selectedStorageFilePaths, ["two.bin"])
+        XCTAssertNotNil(model.storageExplorerError)
+    }
+
     func testRefreshesSelectedStorageRootAndNavigatesFolders() async throws {
         let root = temporaryDirectory()
         let nested = root.appendingPathComponent("MAP", isDirectory: true)
@@ -204,6 +242,13 @@ private struct SelectionBookmarkCodec: USBBookmarkCoding {
     func resolve(_ data: Data) throws -> USBBookmarkResolution {
         USBBookmarkResolution(url: url, isStale: isStale)
     }
+}
+
+private final class SelectionUploader: UploadCoordinating, @unchecked Sendable {
+    func upload(assetID: String, fileURL: URL,
+                onProgress: @escaping @Sendable (Int64, Int64) -> Void) async throws {}
+    func authenticationBlocked() -> Bool { false }
+    func credentialDidChange() {}
 }
 
 private actor SelectionReceiverRegistrar: IPhoneReceiverRegistering {

@@ -6,6 +6,72 @@ import ZIPFoundation
 
 @MainActor
 final class USBReceiverStoredFileSharingTests: XCTestCase {
+    func testZIPDeselectOneFileFromOneThousandEntriesPreservesOtherFiles() async throws {
+        try await assertLargeZIPDeselection(count: 1_000)
+    }
+
+    func testZIPDeselectOneFileFromTenThousandEntriesPreservesOtherFiles() async throws {
+        try await assertLargeZIPDeselection(count: 10_000)
+    }
+
+    private func assertLargeZIPDeselection(count: Int) async throws {
+        let fixture = try makeFixture(names: [])
+        let url = fixture.catalog.receivedDirectory.appendingPathComponent("large.zip")
+        do {
+            let archive = try Archive(url: url, accessMode: .create)
+            for index in 0..<count {
+                try archive.addEntry(with: "file-\(index).bin", type: .file, uncompressedSize: 1) { _, _ in
+                    Data([1])
+                }
+            }
+        }
+        await fixture.model.refresh()
+        let file = try XCTUnwrap(fixture.model.storedFiles.first)
+        await fixture.model.showZIPContents(file)
+        XCTAssertEqual(fixture.model.zipEntries.count, count)
+        let entry = try XCTUnwrap(fixture.model.zipEntries.first)
+
+        fixture.model.toggleZIPEntry(entry)
+
+        XCTAssertEqual(fixture.model.selectedZIPPaths.count, count - 1)
+        XCTAssertFalse(fixture.model.selectedZIPPaths.contains(entry.path))
+        fixture.model.toggleZIPEntry(entry)
+        XCTAssertEqual(fixture.model.selectedZIPPaths.count, count)
+    }
+
+    func testZIPDeselectNestedFileClearsOnlyAncestorDirectoriesAndKeepsSiblingFolder() async throws {
+        let fixture = try makeFixture(names: [])
+        let source = fixture.catalog.stagingDirectory.appendingPathComponent("tree", isDirectory: true)
+        let nested = source.appendingPathComponent("chosen/nested", isDirectory: true)
+        let sibling = source.appendingPathComponent("chosen-other", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+        try Data([1]).write(to: nested.appendingPathComponent("remove.bin"))
+        try Data([2]).write(to: nested.appendingPathComponent("keep.bin"))
+        try Data([3]).write(to: sibling.appendingPathComponent("sibling.bin"))
+        try FileManager.default.zipItem(at: source,
+            to: fixture.catalog.receivedDirectory.appendingPathComponent("tree.zip"))
+        await fixture.model.refresh()
+        await fixture.model.showZIPContents(try XCTUnwrap(fixture.model.storedFiles.first))
+        let entry = try XCTUnwrap(fixture.model.zipEntries.first { $0.path.hasSuffix("remove.bin") })
+        let original = fixture.model.selectedZIPPaths
+        let ancestors = Set(fixture.model.zipEntries.filter {
+            $0.isDirectory && entry.path.hasPrefix($0.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/")
+        }.map(\.path))
+
+        fixture.model.toggleZIPEntry(entry)
+
+        XCTAssertEqual(fixture.model.selectedZIPPaths, original.subtracting(ancestors).subtracting([entry.path]))
+        let folder = try XCTUnwrap(fixture.model.zipEntries.first {
+            $0.isDirectory && $0.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).hasSuffix("chosen")
+        })
+        fixture.model.toggleZIPEntry(folder)
+        XCTAssertTrue(fixture.model.selectedZIPPaths.contains(entry.path))
+        fixture.model.toggleZIPEntry(folder)
+        XCTAssertFalse(fixture.model.selectedZIPPaths.contains(entry.path))
+        XCTAssertTrue(fixture.model.selectedZIPPaths.contains { $0.hasSuffix("sibling.bin") })
+    }
+
     func testZIPPickerBlocksNewReceivePolling() async throws {
         let calls = ZIPSelectionCalls()
         let fixture = try makeFixture(names: ["자료.zip"], receiveLocalOnce: {

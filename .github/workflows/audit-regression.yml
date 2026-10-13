@@ -1,0 +1,53 @@
+name: iOS audit regression
+
+on:
+  push:
+    branches: ["codex/received-file-sharing"]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - name: Build and run unit regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodegen generate
+          DEVICE_ID="$(xcrun simctl list devices available -j | /usr/bin/python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for ds in data["devices"].values() for d in ds if d["name"].startswith("iPhone")))')"
+          echo "DEVICE_ID=${DEVICE_ID}" >> "$GITHUB_ENV"
+          xcodebuild test -project SimpleCameraAutoSender.xcodeproj -scheme SimpleCameraAutoSender \
+            -destination "platform=iOS Simulator,id=${DEVICE_ID}" -parallel-testing-enabled NO \
+            -resultBundlePath build/AuditUnitTests.xcresult -only-testing:SimpleCameraAutoSenderTests \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/audit-unit.log
+      - name: Settings support UI regressions
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild test-without-building -project SimpleCameraAutoSender.xcodeproj -scheme SimpleCameraAutoSender \
+            -destination "platform=iOS Simulator,id=${DEVICE_ID}" -parallel-testing-enabled NO \
+            -resultBundlePath build/AuditUITests.xcresult -only-testing:SimpleCameraAutoSenderUITests/SettingsSupportUITests \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/audit-ui.log
+      - name: Export UI screenshots
+        if: always()
+        run: |
+          if [ -d build/AuditUITests.xcresult ]; then
+            xcrun xcresulttool export attachments --path build/AuditUITests.xcresult --output-path build/audit-ui-attachments
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iOS-audit-regression-results
+          path: |
+            build/audit-unit.log
+            build/audit-ui.log
+            build/audit-ui-attachments
+            build/AuditUnitTests.xcresult
+            build/AuditUITests.xcresult
+          retention-days: 3
