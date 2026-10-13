@@ -29,7 +29,7 @@ final class USBStorageFileSelectionTests: XCTestCase {
         let transfer = ContentViewModel(
             credentialStore: credentials,
             ledger: try UploadLedger(fileURL: temporaryDirectory().appendingPathComponent("ledger.json")),
-            uploader: SelectionUploader(), now: Date.init,
+            uploader: SelectionUploader(), now: { Date() },
             send: { _ in .init(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
             manualFileEnqueue: { urls, code in
                 await calls.record(urls: urls, code: code)
