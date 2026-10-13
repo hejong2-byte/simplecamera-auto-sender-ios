@@ -694,6 +694,9 @@ actor IPhoneUSBExportService {
             )
             try fileManager.moveItem(at: partialURL, to: finalURL)
         } else {
+            guard overwriteExisting else {
+                throw IPhoneUSBExportError.overwriteConfirmationRequired
+            }
             changeSummary = USBTransferChangeSummary(
                 totalFiles: 1,
                 newFiles: 0,
@@ -1265,10 +1268,14 @@ actor IPhoneUSBExportService {
             try fileManager.moveItem(at: staged, to: destination)
             try? fileManager.removeItem(at: backup)
         } catch {
-            if fileManager.fileExists(atPath: destination.path) {
-                try? fileManager.removeItem(at: destination)
+            do {
+                if fileManager.fileExists(atPath: destination.path) {
+                    try fileManager.removeItem(at: destination)
+                }
+                try fileManager.moveItem(at: backup, to: destination)
+            } catch {
+                throw USBCommitRecoveryError(recoveryPaths: [backup.path])
             }
-            try? fileManager.moveItem(at: backup, to: destination)
             throw error
         }
     }

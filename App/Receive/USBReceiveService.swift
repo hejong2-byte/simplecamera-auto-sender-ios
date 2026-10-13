@@ -660,11 +660,11 @@ actor USBReceiveService {
                 try coordinatedMove(from: partialURL, to: finalURL)
             }
         }
-        guard try fileMatches(finalURL, size: delivery.size, sha256: delivery.sha256) else {
+        guard try fileSize(finalURL) == delivery.size else {
             try? fileManager.removeItem(at: finalURL)
             checkpoint.state = .failed
             try ledger.save(checkpoint)
-            throw USBReceiveServiceError.shaMismatch
+            throw USBReceiveServiceError.sizeMismatch
         }
 
         checkpoint.confirmedOffset = delivery.size
@@ -1180,10 +1180,14 @@ actor USBReceiveService {
             try coordinatedMove(from: staged, to: destination)
             try? fileManager.removeItem(at: backup)
         } catch {
-            if fileManager.fileExists(atPath: destination.path) {
-                try? fileManager.removeItem(at: destination)
+            do {
+                if fileManager.fileExists(atPath: destination.path) {
+                    try fileManager.removeItem(at: destination)
+                }
+                try fileManager.moveItem(at: backup, to: destination)
+            } catch {
+                throw USBCommitRecoveryError(recoveryPaths: [backup.path])
             }
-            try? fileManager.moveItem(at: backup, to: destination)
             throw error
         }
     }
