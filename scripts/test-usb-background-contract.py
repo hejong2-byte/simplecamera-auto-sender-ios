@@ -44,6 +44,15 @@ class USBBackgroundContract(unittest.TestCase):
         self.assertNotIn('copyAndHash(', commit)
         self.assertEqual(commit.count('layoutSizes(at:'), 1)
 
+    def test_normal_direct_receive_does_not_reread_committed_usb_for_sha(self):
+        source = (ROOT / 'App/Receive/USBReceiveService.swift').read_text(encoding='utf-8')
+        receive = source.split('private func receive(')[1].split('private func receiveExtractedZIP(')[0]
+        finalization = receive.split('let calculatedSHA = Self.hex(hasher.finalize())')[1]
+        self.assertIn('hasher.update(data: chunk.data)', receive)
+        self.assertIn('calculatedSHA == delivery.sha256.lowercased()', finalization)
+        self.assertNotIn('fileMatches(', finalization)
+        self.assertNotIn('hashFile(', finalization)
+
     def test_direct_receive_temporary_files_share_cleanup_button(self):
         service = (ROOT / 'App/Receive/USBReceiveService.swift').read_text(encoding='utf-8')
         dependencies = (ROOT / 'App/Application/USBReceiverDependencies.swift').read_text(encoding='utf-8')

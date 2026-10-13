@@ -11,6 +11,57 @@ private final class LocalReceiveNotificationEventRecorder: @unchecked Sendable {
 }
 
 final class IPhoneLocalReceiveEngineTests: XCTestCase {
+    func testConcurrentRestoreAndForegroundPollSerializePendingAcknowledgement() async throws {
+        let payload = Data("pending ack".utf8)
+        let context = try makeContext(payloads: ["ack.txt": payload], ackFailures: 1)
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        let staging = context.catalog.stagingDirectory.appendingPathComponent("ack.download")
+        try payload.write(to: staging)
+        await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+        let firstEntered = expectation(description: "First ACK entered")
+        let secondBoundary = LocalReceiveTestSignal(expectation(description: "Second pump reached its boundary"))
+        let gate = LocalReceiveAckGate(firstEntered: firstEntered, secondBoundary: secondBoundary)
+        context.client.setAcknowledgementGate(gate)
+        let first = Task { await context.engine.restore() }
+        await fulfillment(of: [firstEntered], timeout: 2)
+        let second = Task {
+            try await context.engine.discoverAndSchedule()
+            await context.engine.restore()
+            secondBoundary.fulfill()
+        }
+        await fulfillment(of: [secondBoundary.expectation], timeout: 2)
+        let enteredCount = await gate.enteredCount()
+        XCTAssertEqual(enteredCount, 1, "Actor reentrancy must not allow another ACK while the first is awaiting transport")
+        await gate.open()
+        await first.value
+        try await second.value
+        XCTAssertEqual(context.client.acks().count, 1)
+        XCTAssertEqual(context.jobs.job(for: delivery.deliveryID)?.stage, .completed)
+    }
+
+    func testDelayedProgressCannotResurrectTerminalOrReceiptPendingJobs() async throws {
+        for ackFailures in [0, 1] {
+            let payload = Data("complete".utf8)
+            let context = try makeContext(payloads: ["done.txt": payload], ackFailures: ackFailures)
+            try await context.engine.discoverAndSchedule()
+            let delivery = try XCTUnwrap(context.client.deliveries().first)
+            let staging = context.catalog.stagingDirectory.appendingPathComponent("done.download")
+            try payload.write(to: staging)
+            await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+            let before = try XCTUnwrap(context.jobs.job(for: delivery.deliveryID))
+            await context.engine.downloadProgress(deliveryID: delivery.deliveryID, received: 1, expected: delivery.size)
+            XCTAssertEqual(context.jobs.job(for: delivery.deliveryID), before)
+        }
+        let context = try makeContext(payloads: ["failed.txt": Data("failed".utf8)])
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        await context.engine.downloadFailed(deliveryID: delivery.deliveryID, error: URLError(.timedOut))
+        let before = try XCTUnwrap(context.jobs.job(for: delivery.deliveryID))
+        await context.engine.downloadProgress(deliveryID: delivery.deliveryID, received: 1, expected: delivery.size)
+        XCTAssertEqual(context.jobs.job(for: delivery.deliveryID), before)
+    }
+
     func testExplicitRetryAfterTimeoutSchedulesSameDeliveryAndCompletes() async throws {
         let payload = Data("retry me".utf8)
         let context = try makeContext(payloads: ["retry.txt": payload])
@@ -671,6 +722,7 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
     private let ackError: IPhoneReceiverClientError?
     private var featureUpdateFailure: URLError.Code?
     private var listingFailure: URLError.Code?
+    private var acknowledgementGate: LocalReceiveAckGate?
 
     init(deliveries: [IPhoneDelivery], ackFailures: Int, ackError: IPhoneReceiverClientError? = nil) {
         availableDeliveries = deliveries
@@ -748,6 +800,8 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
         storageLocation: IPhoneStorageLocation,
         storedName: String
     ) async throws {
+        let gate = lock.withLock { acknowledgementGate }
+        await gate?.wait()
         try lock.withLock {
             if remainingAckFailures > 0 {
                 remainingAckFailures -= 1
@@ -764,11 +818,54 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
     }
 
     func deliveries() -> [IPhoneDelivery] { availableDeliveries }
+    func setAcknowledgementGate(_ gate: LocalReceiveAckGate) {
+        lock.withLock { acknowledgementGate = gate }
+    }
     func featureUpdates() -> [IPhoneReceiveFeatures] {
         lock.withLock { advertisedFeatures }
     }
     func leaseModes() -> [IPhoneReceiveLeaseMode] { lock.withLock { modes } }
     func acks() -> [LocalReceiveAck] { lock.withLock { successfulAcks } }
+}
+
+private final class LocalReceiveTestSignal: @unchecked Sendable {
+    let expectation: XCTestExpectation
+    private let lock = NSLock()
+    private var fulfilled = false
+    init(_ expectation: XCTestExpectation) { self.expectation = expectation }
+    func fulfill() {
+        lock.withLock {
+            guard !fulfilled else { return }
+            fulfilled = true
+            expectation.fulfill()
+        }
+    }
+}
+
+private actor LocalReceiveAckGate {
+    private let firstEntered: XCTestExpectation
+    private let secondBoundary: LocalReceiveTestSignal
+    private var count = 0
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    init(firstEntered: XCTestExpectation, secondBoundary: LocalReceiveTestSignal) {
+        self.firstEntered = firstEntered
+        self.secondBoundary = secondBoundary
+    }
+    func wait() async {
+        count += 1
+        if count == 1 { firstEntered.fulfill() }
+        else { secondBoundary.fulfill() }
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func enteredCount() -> Int { count }
+    func open() {
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
 }
 
 private enum LocalReceiveTestError: Error {

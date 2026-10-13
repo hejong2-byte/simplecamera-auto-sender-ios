@@ -723,9 +723,11 @@ final class USBReceiveServiceTests: XCTestCase {
 
     func testInterruptedSharedZIPExportResumesWithoutRewritingVerifiedArchive() async throws {
         let fileManager = InterruptFirstSharedZIPCopyFileManager()
-        let fixture = try makeFixture(payload: validZIPData(), chunkSize: 64, archiveMode: .extract,
+        let payload = validZIPData()
+        let chunkSize = Int64(payload.count - 1)
+        let fixture = try makeFixture(payload: payload, chunkSize: chunkSize, archiveMode: .extract,
             useSharedZIPExporter: true, exportFileManager: fileManager)
-        XCTAssertNotEqual(fixture.payload.count % 64, 0, "The ZIP must have a partial final download chunk")
+        XCTAssertEqual(Int64(fixture.payload.count) % chunkSize, 1, "The ZIP must have a partial final download chunk")
         let first = Task { try await fixture.service.runOnce() }
         do {
             _ = try await first.value
@@ -747,6 +749,34 @@ final class USBReceiveServiceTests: XCTestCase {
         XCTAssertEqual(fileManager.extractionCount, extractionCount, "Reuse the existing extracted job")
         XCTAssertEqual(try Data(contentsOf: fixture.destination.appendingPathComponent("docs/report.txt")), Data("report-data".utf8))
         XCTAssertEqual(try Data(contentsOf: fixture.destination.appendingPathComponent("root.txt")), Data("root-data".utf8))
+    }
+
+    func testInterruptedSharedZIPExportRejectsChangedStagedArchive() async throws {
+        let fileManager = InterruptFirstSharedZIPCopyFileManager()
+        let payload = validZIPData()
+        let fixture = try makeFixture(payload: payload, chunkSize: Int64(payload.count - 1), archiveMode: .extract,
+            useSharedZIPExporter: true, exportFileManager: fileManager)
+        let first = Task { try await fixture.service.runOnce() }
+        do {
+            _ = try await first.value
+            XCTFail("Expected interruption during shared USB copying")
+        } catch { }
+        XCTAssertTrue(fileManager.interrupted)
+        XCTAssertEqual(try Data(contentsOf: fixture.stagedZIP), fixture.payload)
+        let timestamp = try fixture.stagedZIP.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        var changed = fixture.payload
+        changed[8] ^= 1
+        try changed.write(to: fixture.stagedZIP)
+        if let timestamp {
+            try FileManager.default.setAttributes([.modificationDate: timestamp.addingTimeInterval(10)], ofItemAtPath: fixture.stagedZIP.path)
+        }
+        let extractionCount = fileManager.extractionCount
+
+        await assertFailure(.shaMismatch, fixture: fixture)
+
+        XCTAssertEqual(fileManager.extractionCount, extractionCount, "Changed staging must never reuse or create an extraction job")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.destination.appendingPathComponent("root.txt").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.destination.appendingPathComponent("docs/report.txt").path))
     }
 
     private func makeFixture(

@@ -17,14 +17,7 @@ final class USBReceiverStoredFileSharingTests: XCTestCase {
     private func assertLargeZIPDeselection(count: Int) async throws {
         let fixture = try makeFixture(names: [])
         let url = fixture.catalog.receivedDirectory.appendingPathComponent("large.zip")
-        do {
-            let archive = try Archive(url: url, accessMode: .create)
-            for index in 0..<count {
-                try archive.addEntry(with: "file-\(index).bin", type: .file, uncompressedSize: Int64(1)) { _, _ in
-                    Data([1])
-                }
-            }
-        }
+        try writeLargeZIPFixture(count: count, to: url)
         await fixture.model.refresh()
         let file = try XCTUnwrap(fixture.model.storedFiles.first)
         await fixture.model.showZIPContents(file)
@@ -37,6 +30,45 @@ final class USBReceiverStoredFileSharingTests: XCTestCase {
         XCTAssertFalse(fixture.model.selectedZIPPaths.contains(entry.path))
         fixture.model.toggleZIPEntry(entry)
         XCTAssertEqual(fixture.model.selectedZIPPaths.count, count)
+    }
+
+    private func writeLargeZIPFixture(count: Int, to url: URL) throws {
+        // Append the central directory once: repeated Archive.addEntry rewrites it per file.
+        var contents = Data()
+        var directory = Data()
+        func append(_ value: UInt32, bytes: Int, to data: inout Data) {
+            for shift in 0..<bytes { data.append(UInt8(truncatingIfNeeded: value >> (shift * 8))) }
+        }
+        let crc: UInt32 = 0xa505df1b // CRC32 of the single stored byte 0x01.
+        for index in 0..<count {
+            let name = Data("file-\(index).bin".utf8)
+            let offset = UInt32(contents.count)
+            append(0x04034b50, bytes: 4, to: &contents)
+            for value in [UInt32(20), 0, 0, 0, 0] { append(value, bytes: 2, to: &contents) }
+            for value in [crc, 1, 1] { append(value, bytes: 4, to: &contents) }
+            append(UInt32(name.count), bytes: 2, to: &contents)
+            append(0, bytes: 2, to: &contents)
+            contents.append(name)
+            contents.append(1)
+
+            append(0x02014b50, bytes: 4, to: &directory)
+            for value in [UInt32(20), 20, 0, 0, 0, 0] { append(value, bytes: 2, to: &directory) }
+            for value in [crc, 1, 1] { append(value, bytes: 4, to: &directory) }
+            for value in [UInt32(name.count), 0, 0, 0, 0] { append(value, bytes: 2, to: &directory) }
+            append(0, bytes: 4, to: &directory)
+            append(offset, bytes: 4, to: &directory)
+            directory.append(name)
+        }
+        let directoryOffset = UInt32(contents.count)
+        contents.append(directory)
+        append(0x06054b50, bytes: 4, to: &contents)
+        for value in [UInt32(0), 0, UInt32(count), UInt32(count)] {
+            append(value, bytes: 2, to: &contents)
+        }
+        append(UInt32(directory.count), bytes: 4, to: &contents)
+        append(directoryOffset, bytes: 4, to: &contents)
+        append(0, bytes: 2, to: &contents)
+        try contents.write(to: url)
     }
 
     func testZIPDeselectNestedFileClearsOnlyAncestorDirectoriesAndKeepsSiblingFolder() async throws {
