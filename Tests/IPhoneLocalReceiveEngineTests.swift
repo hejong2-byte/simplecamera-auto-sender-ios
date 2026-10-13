@@ -11,6 +11,107 @@ private final class LocalReceiveNotificationEventRecorder: @unchecked Sendable {
 }
 
 final class IPhoneLocalReceiveEngineTests: XCTestCase {
+    func testRecoveryPreservesCompletionDuringLeaseOrScheduleAwait() async throws {
+        for pauseAtLease in [true, false] {
+            let payload = Data("completed during recovery".utf8)
+            let context = try makeContext(payloads: ["done.txt": payload])
+            try await context.engine.discoverAndSchedule()
+            let delivery = try XCTUnwrap(context.client.deliveries().first)
+            await context.scheduler.cancel(deliveryID: delivery.deliveryID)
+            let entered = expectation(description: pauseAtLease ? "Lease entered" : "Schedule entered")
+            let gate = LocalReceiveEnumerationGate(entered: entered)
+            if pauseAtLease { context.client.setLeaseGate(gate) }
+            else { await context.scheduler.setScheduleGate(gate) }
+            let poll = Task { try await context.engine.discoverAndSchedule() }
+            await fulfillment(of: [entered], timeout: 2)
+            let staging = context.catalog.stagingDirectory.appendingPathComponent("done.download")
+            try payload.write(to: staging)
+            await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+            let completed = try XCTUnwrap(context.jobs.job(for: delivery.deliveryID))
+            XCTAssertEqual(completed.stage, .completed)
+            await gate.open()
+            try await poll.value
+
+            XCTAssertEqual(context.jobs.job(for: delivery.deliveryID), completed)
+            let scheduled = await context.scheduler.scheduledIDs()
+            XCTAssertTrue(scheduled.isEmpty, "Recovery must not retain a task for a delivery completed during its awaited operation")
+            XCTAssertEqual(context.client.acks().count, 1)
+            XCTAssertEqual(try Data(contentsOf: context.catalog.receivedDirectory.appendingPathComponent("done.txt")), payload)
+        }
+    }
+
+    func testRecoveryDoesNotRescheduleAJobCompletedWhileEnumeratingSystemTasks() async throws {
+        let payload = Data("completed during enumeration".utf8)
+        let recorder = ReceivedMediaSaveRecorder()
+        let context = try makeContext(payloads: ["photo.jpg": payload],
+            saveReceivedMedia: { url, type in await recorder.record(url: url, contentType: type); return true })
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        await context.scheduler.cancel(deliveryID: delivery.deliveryID)
+        let entered = expectation(description: "System task enumeration entered")
+        let gate = LocalReceiveEnumerationGate(entered: entered)
+        await context.scheduler.setEnumerationGate(gate)
+        let poll = Task { try await context.engine.discoverAndSchedule() }
+        await fulfillment(of: [entered], timeout: 2)
+        let staging = context.catalog.stagingDirectory.appendingPathComponent("photo.download")
+        try payload.write(to: staging)
+        await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+        let completed = try XCTUnwrap(context.jobs.job(for: delivery.deliveryID))
+        XCTAssertEqual(completed.stage, .completed)
+        await gate.open()
+        try await poll.value
+
+        XCTAssertEqual(context.jobs.job(for: delivery.deliveryID), completed)
+        let scheduled = await context.scheduler.scheduledIDs()
+        let imports = await recorder.values()
+        XCTAssertTrue(scheduled.isEmpty, "Recovery must reread durable state after awaiting system task enumeration")
+        XCTAssertEqual(imports.count, 1)
+        XCTAssertEqual(context.client.acks().count, 1)
+        XCTAssertEqual(try Data(contentsOf: context.catalog.receivedDirectory.appendingPathComponent("photo.jpg")), payload)
+    }
+
+    func testHTTPTransientDelegateFailureAcceptsExplicitRetryButPermanentFailureDoesNot() async throws {
+        for status in [503, 429, 404, 410] {
+            let context = try makeContext(payloads: ["retry.txt": Data("retry".utf8)])
+            try await context.engine.discoverAndSchedule()
+            let delivery = try XCTUnwrap(context.client.deliveries().first)
+            await context.scheduler.cancel(deliveryID: delivery.deliveryID)
+            let registry = BackgroundSessionCompletionRegistry()
+            let background = try BackgroundIPhoneReceiveSession(
+                stagingDirectory: context.catalog.stagingDirectory, completionRegistry: registry)
+            background.bind(sink: context.engine)
+            let handled = expectation(description: "HTTP failure is durable for \(status)")
+            registry.store(identifier: AppConfiguration.receiverBackgroundSessionIdentifier) { handled.fulfill() }
+            let session = URLSession(configuration: .ephemeral)
+            let task = HTTPFailureReceiveDownloadTask()
+            task.status = status
+            task.taskDescription = try IPhoneReceiveTaskDescriptor(deliveryID: delivery.deliveryID).encodedTaskDescription()
+            let staging = context.catalog.stagingDirectory.appendingPathComponent("http.download")
+            try Data("server error".utf8).write(to: staging)
+            background.urlSession(session, downloadTask: task, didFinishDownloadingTo: staging)
+            background.urlSessionDidFinishEvents(forBackgroundURLSession: session)
+            await fulfillment(of: [handled], timeout: 2)
+            session.invalidateAndCancel()
+            XCTAssertEqual(context.jobs.job(for: delivery.deliveryID)?.stage, .failed)
+            try await context.engine.discoverAndSchedule()
+            let beforeApproval = await context.scheduler.scheduledIDs()
+            XCTAssertTrue(beforeApproval.isEmpty, "HTTP failures still require an explicit retry decision")
+
+            try await context.engine.retryFailedDelivery(deliveryID: delivery.deliveryID)
+
+            let scheduled = await context.scheduler.scheduledIDs()
+            if status == 503 || status == 429 {
+                XCTAssertEqual(scheduled, [delivery.deliveryID])
+                XCTAssertEqual(context.jobs.job(for: delivery.deliveryID)?.stage, .downloading)
+            } else {
+                XCTAssertTrue(scheduled.isEmpty)
+                XCTAssertEqual(context.jobs.job(for: delivery.deliveryID)?.stage, .failed)
+            }
+            XCTAssertTrue(context.client.acks().isEmpty)
+            XCTAssertTrue(try context.catalog.refresh().isEmpty)
+        }
+    }
+
     func testLateDownloadCallbacksDoNotDowngradeVerifiedCompletedJob() async throws {
         let payload = Data("verified".utf8)
         let context = try makeContext(payloads: ["verified.txt": payload])
@@ -773,6 +874,7 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
     private var featureUpdateFailure: URLError.Code?
     private var listingFailure: URLError.Code?
     private var acknowledgementGate: LocalReceiveAckGate?
+    private var leaseGate: LocalReceiveEnumerationGate?
 
     init(deliveries: [IPhoneDelivery], ackFailures: Int, ackError: IPhoneReceiverClientError? = nil) {
         availableDeliveries = deliveries
@@ -821,6 +923,8 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
         mode: IPhoneReceiveLeaseMode
     ) async throws -> IPhoneDelivery {
         lock.withLock { modes.append(mode) }
+        let gate = lock.withLock { leaseGate }
+        await gate?.wait()
         return availableDeliveries.first { $0.deliveryID == deliveryID }!
     }
 
@@ -870,6 +974,9 @@ private final class FakeLocalReceiveClient: IPhoneLocalReceiveNetworking,
     func deliveries() -> [IPhoneDelivery] { availableDeliveries }
     func setAcknowledgementGate(_ gate: LocalReceiveAckGate) {
         lock.withLock { acknowledgementGate = gate }
+    }
+    func setLeaseGate(_ gate: LocalReceiveEnumerationGate) {
+        lock.withLock { leaseGate = gate }
     }
     func featureUpdates() -> [IPhoneReceiveFeatures] {
         lock.withLock { advertisedFeatures }
@@ -927,17 +1034,26 @@ private actor FakeLocalReceiveScheduler: IPhoneReceiveTaskScheduling {
     private let jobStore: IPhoneLocalReceiveJobStore
     private var scheduled: [UUID] = []
     private var durableAtSchedule = false
+    private var enumerationGate: LocalReceiveEnumerationGate?
+    private var scheduleGate: LocalReceiveEnumerationGate?
 
     init(jobStore: IPhoneLocalReceiveJobStore) {
         self.jobStore = jobStore
     }
 
     func schedule(deliveryID: UUID, request: URLRequest) async throws {
+        await scheduleGate?.wait()
         durableAtSchedule = jobStore.job(for: deliveryID) != nil
         scheduled.append(deliveryID)
     }
 
-    func existingDeliveryIDs() async -> Set<UUID> { Set(scheduled) }
+    func existingDeliveryIDs() async -> Set<UUID> {
+        await enumerationGate?.wait()
+        return Set(scheduled)
+    }
+
+    func setEnumerationGate(_ gate: LocalReceiveEnumerationGate) { enumerationGate = gate }
+    func setScheduleGate(_ gate: LocalReceiveEnumerationGate) { scheduleGate = gate }
 
     func cancel(deliveryID: UUID) async {
         scheduled.removeAll { $0 == deliveryID }
@@ -945,4 +1061,31 @@ private actor FakeLocalReceiveScheduler: IPhoneReceiveTaskScheduling {
 
     func scheduledIDs() -> [UUID] { scheduled }
     func hadDurableJobWhenScheduled() -> Bool { durableAtSchedule }
+}
+
+private actor LocalReceiveEnumerationGate {
+    private let entered: XCTestExpectation
+    private var isOpen = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    init(entered: XCTestExpectation) { self.entered = entered }
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation {
+            continuation = $0
+            entered.fulfill()
+        }
+    }
+    func open() {
+        isOpen = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private final class HTTPFailureReceiveDownloadTask: URLSessionDownloadTask, @unchecked Sendable {
+    var status = 503
+    override var response: URLResponse? {
+        HTTPURLResponse(url: URL(string: "https://example.invalid/download")!,
+            statusCode: status, httpVersion: nil, headerFields: nil)
+    }
 }

@@ -33,7 +33,7 @@ jobs:
           path: build/audit-unit.log
           retention-days: 3
       - name: Settings support UI regressions
-        if: ${{ !cancelled() }}
+        if: success()
         shell: bash
         run: |
           set -euo pipefail

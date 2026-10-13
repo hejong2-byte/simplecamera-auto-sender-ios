@@ -8,6 +8,10 @@ final class SettingsSupportUITests: XCTestCase {
         XCTAssertTrue(version.exists, "Settings must show the installed version and build")
         XCTAssertTrue(version.label.contains("빌드"))
         XCTAssertTrue(app.buttons["check-app-update"].exists)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Settings app information"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 
     func testDiagnosticsShareCanBeCancelledAndActionRemainsEnabled() {
@@ -18,6 +22,10 @@ final class SettingsSupportUITests: XCTestCase {
         share.tap()
         let close = app.buttons["header.closeButton"]
         XCTAssertTrue(close.waitForExistence(timeout: 30))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Explicit diagnostics share sheet"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
         close.tap()
         XCTAssertTrue(share.waitForExistence(timeout: 5))
         XCTAssertTrue(share.isEnabled)
