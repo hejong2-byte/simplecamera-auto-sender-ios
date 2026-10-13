@@ -66,6 +66,24 @@ final class DiagnosticsReportServiceTests: XCTestCase {
         XCTAssertFalse(unknown.contains("\"errorCode\""))
     }
 
+    func testActualReceiveErrorFormatterPreservesOnlyKnownDomainAndCode() throws {
+        for (domain, code) in [("NSFileProviderErrorDomain", -2001), (NSCocoaErrorDomain, 256), (NSURLErrorDomain, -1001)] {
+            let error = NSError(domain: domain, code: code,
+                userInfo: [NSLocalizedDescriptionKey: "secret-token /private/name.hwp message-body"])
+            let message = IPhoneReceiveErrorMessage.message(error)
+            let data = try DiagnosticsReportService().encode(snapshot(error: message))
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let operations = try XCTUnwrap(json["operations"] as? [[String: Any]])
+            let receive = try XCTUnwrap(operations.first { $0["operation"] as? String == "receive" })
+            XCTAssertEqual(receive["errorDomain"] as? String, domain)
+            XCTAssertEqual(receive["errorCode"] as? Int, code)
+            let text = String(decoding: data, as: UTF8.self)
+            for canary in ["secret-token", "name.hwp", "message-body", "연결과 저장 위치", "폴더를 다시"] {
+                XCTAssertFalse(text.contains(canary))
+            }
+        }
+    }
+
     func testUniqueShareFolderCleanupPreservesOtherReportsAndOriginals() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

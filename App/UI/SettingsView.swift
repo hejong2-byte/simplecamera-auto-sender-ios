@@ -18,6 +18,7 @@ struct SettingsView: View {
                 automationCard
                 receiverSettingsCard
                 storageManagementCard
+                AppSupportView(model: model, receiverModel: receiverModel)
             }
             .padding()
         }
