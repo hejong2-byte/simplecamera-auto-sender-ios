@@ -369,7 +369,39 @@ final class ForegroundReceiveUITests: XCTestCase {
         recipient.tap()
 
         XCTAssertTrue(send.waitForExistence(timeout: 10))
+        let cleared = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == false"), object: send
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 10), .completed)
         XCTAssertFalse(send.isEnabled, "Prepared files must clear the finished selection")
+        XCTAssertTrue(app.staticTexts["선택 0개"].exists)
+    }
+
+    func testStorageExplorerRejectedEnqueuePreservesSelectedFiles() {
+        let app = launchSimulation(
+            delay: 3_600, outcome: "file-enqueue-rejected",
+            withSavedTextRecipient: true, withStorageManagement: true
+        )
+        let settings = app.buttons["open-settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 20))
+        reveal(settings, in: app)
+        settings.tap()
+        let storage = app.buttons["storage-management"]
+        reveal(storage, in: app)
+        storage.tap()
+        let file = app.buttons["storage-entry-visible.bin"]
+        XCTAssertTrue(file.waitForExistence(timeout: 10))
+        file.tap()
+        let send = app.buttons["storage-file-send"]
+        reveal(send, in: app)
+        send.tap()
+        XCTAssertTrue(app.navigationBars["전송할 컴퓨터 선택"].waitForExistence(timeout: 10))
+        app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "행정망 PC")
+        ).firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["파일 전송을 접수하지 못했습니다. 진행 중인 전송과 전송 설정을 확인해 주세요."].waitForExistence(timeout: 10))
+        XCTAssertTrue(send.isEnabled, "Rejected files must remain selected for retry")
+        XCTAssertTrue(app.staticTexts["선택 1개"].exists)
     }
 
     func testMainScreenCriticalActionsAreHittableWithoutInitialScroll() {

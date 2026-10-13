@@ -203,7 +203,16 @@ final class ForegroundReceiveSimulation {
             ledger: try UploadLedger(fileURL: root.appendingPathComponent("upload-ledger.json")),
             uploader: SimulationUploader(),
             now: Date.init,
-            send: { _ in SyncTransferSummary(discovered: 0, matched: 0, uploaded: 0, failed: 0) }
+            send: { _ in SyncTransferSummary(discovered: 0, matched: 0, uploaded: 0, failed: 0) },
+            manualFileEnqueue: { urls, _ in
+                // Simulate preparation acceptance without contacting the relay.
+                let rejected = outcome == "file-enqueue-rejected"
+                return ManualMediaTransferSummary(
+                    selected: urls.count, uploaded: 0,
+                    failed: rejected ? urls.count : 0,
+                    failureCategories: rejected ? [.storage] : []
+                )
+            }
         )
         let bookmarkStore = USBBookmarkStore(
             fileURL: root.appendingPathComponent("destination.json"),
