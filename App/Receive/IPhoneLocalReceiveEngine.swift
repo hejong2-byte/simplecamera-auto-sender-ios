@@ -83,6 +83,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
     private var progressStartedAt: Date?
     private var isDiscovering = false
     private var progressCheckpoints: [UUID: Date] = [:]
+    private var finalizationsInFlight: Set<UUID> = []
 
     init(
         client: any IPhoneLocalReceiveNetworking,
@@ -220,12 +221,14 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
     private func recoverPendingJob() async throws {
         let jobs = try jobStore.load().jobs
         if let pending = jobs.first(where: { $0.stage == .ackPending }) {
+            guard !finalizationsInFlight.contains(pending.delivery.deliveryID) else { return }
             await retryAcknowledgement(pending)
             return
         }
         if let finalizing = jobs.first(where: {
             [.downloaded, .verifying, .finalizing].contains($0.stage)
         }), let stagingName = finalizing.stagingFileName {
+            guard !finalizationsInFlight.contains(finalizing.delivery.deliveryID) else { return }
             await finalize(finalizing, stagingURL: catalog.stagingDirectory.appendingPathComponent(stagingName))
             return
         }
@@ -265,7 +268,8 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
     }
 
     func downloadProgress(deliveryID: UUID, received: Int64, expected: Int64) async {
-        guard let job = jobStore.job(for: deliveryID) else { return }
+        guard let job = jobStore.job(for: deliveryID),
+              [.scheduled, .downloading].contains(job.stage) else { return }
         let instant = now()
         let checkpoint = progressCheckpoints[deliveryID].map { instant.timeIntervalSince($0) >= 1 } ?? true
         do {
@@ -284,6 +288,7 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
             )
             return
         }
+        guard [.scheduled, .downloading].contains(job.stage) else { return }
         do {
             job.stage = .downloaded
             job.stagingFileName = stagingURL.lastPathComponent
@@ -297,7 +302,8 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
     }
 
     func downloadFailed(deliveryID: UUID, error: Error) async {
-        guard let job = jobStore.job(for: deliveryID) else { return }
+        guard let job = jobStore.job(for: deliveryID),
+              [.scheduled, .downloading].contains(job.stage) else { return }
         await markFailed(job, error: error)
     }
 
@@ -305,6 +311,9 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         _ initial: IPhoneLocalReceiveJob,
         stagingURL: URL
     ) async {
+        let deliveryID = initial.delivery.deliveryID
+        guard finalizationsInFlight.insert(deliveryID).inserted else { return }
+        defer { finalizationsInFlight.remove(deliveryID) }
         var job = initial
         do {
             job.stage = .verifying
