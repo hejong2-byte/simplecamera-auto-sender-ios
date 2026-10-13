@@ -4,6 +4,20 @@ import XCTest
 
 @MainActor
 final class USBStorageFileSelectionTests: XCTestCase {
+    func testRejectedEnqueuePreservesExplorerSelectionAndShowsError() async throws {
+        let root = temporaryDirectory()
+        try Data([1]).write(to: root.appendingPathComponent("retry.bin"))
+        let model = try makeModel(root: root)
+        await model.refreshStorageFiles()
+        model.toggleStorageFileSelection("retry.bin")
+
+        await model.sendSelectedStorageFiles(to: "709592") { _, _ in false }
+
+        XCTAssertEqual(model.selectedStorageFilePaths, ["retry.bin"])
+        XCTAssertNotNil(model.storageExplorerError)
+        XCTAssertFalse(model.isSendingStorageFiles)
+    }
+
     func testBusyManualTransferRejectsSecondExplorerSendAndPreservesSelection() async throws {
         let root = temporaryDirectory()
         try Data("one".utf8).write(to: root.appendingPathComponent("one.bin"))
@@ -162,6 +176,7 @@ final class USBStorageFileSelectionTests: XCTestCase {
         model.storageEntries.forEach { model.toggleStorageFileSelection($0.relativePath) }
         await model.sendSelectedStorageFiles(to: "709592") { urls, code in
             await sendLog.record(urls: urls, code: code)
+            return true
         }
 
         let result = await sendLog.result()
@@ -181,6 +196,7 @@ final class USBStorageFileSelectionTests: XCTestCase {
         await model.refreshStorageFiles()
         await model.sendSelectedStorageFiles(to: "709592") { urls, code in
             await sendLog.record(urls: urls, code: code)
+            return true
         }
 
         XCTAssertEqual(model.storageExplorerError, "저장장치 폴더 권한이 만료되었습니다. 다시 선택해 주세요.")

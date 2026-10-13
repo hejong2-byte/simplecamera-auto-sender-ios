@@ -229,11 +229,13 @@ final class ContentViewModel: ObservableObject {
         await refresh()
     }
 
-    func sendSelectedFiles(_ urls: [URL], recipientCode: String) async {
-        guard !urls.isEmpty, !isManualTransferWorking else { return }
+    @discardableResult
+    func sendSelectedFiles(_ urls: [URL], recipientCode: String) async -> Bool {
+        guard !urls.isEmpty else { return false }
+        guard !isManualTransferWorking else { return false }
         guard fileTransferReadinessMessage == nil else {
             manualTransferMessage = fileTransferReadinessMessage
-            return
+            return false
         }
         manualProgress = nil
         lastManualSummary = nil
@@ -250,6 +252,7 @@ final class ContentViewModel: ObservableObject {
             finishManualEnqueue(summary, kind: .file)
         }
         await refresh()
+        return summary.selected > summary.failed
     }
 
     private func finishManualEnqueue(_ summary: ManualMediaTransferSummary, kind: ManualMediaKind) {

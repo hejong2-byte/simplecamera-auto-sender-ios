@@ -60,7 +60,7 @@ final class USBReceiverViewModel: ObservableObject {
         USBFolderContentsSummary,
         @Sendable (FileDeletionProgress) -> Void
     ) async throws -> USBFolderDeletionSummary
-    typealias SendStorageFiles = @Sendable ([URL], String) async -> Void
+    typealias SendStorageFiles = @Sendable ([URL], String) async -> Bool
     typealias RefreshFeatures = @Sendable () async throws -> Void
     typealias ProgressUpdates = @Sendable () -> AsyncStream<USBReceiveProgress>
     typealias LoadOutcome = @Sendable (UUID) -> IPhoneReceiveOutcome?
@@ -611,10 +611,12 @@ final class USBReceiverViewModel: ObservableObject {
         if paths.isSubset(of: selectedZIPPaths) {
             selectedZIPPaths.subtract(paths)
             // A selected ancestor implies every descendant; clear it when one is deselected.
-            selectedZIPPaths = selectedZIPPaths.filter { selected in
-                !zipEntries.contains { $0.path == selected && $0.isDirectory
-                    && entry.path.hasPrefix(selected.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/") }
-            }
+            let ancestors = zipEntries.lazy.filter {
+                $0.isDirectory && entry.path.hasPrefix(
+                    $0.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/"
+                )
+            }.map(\.path)
+            selectedZIPPaths.subtract(ancestors)
         } else {
             selectedZIPPaths.formUnion(paths)
         }
@@ -935,13 +937,17 @@ final class USBReceiverViewModel: ObservableObject {
                     $0.kind == .file && selectedStorageFilePaths.contains($0.relativePath)
                 }
                 .map(\.relativePath)
-            try await storageExplorer.withFiles(
+            let accepted = try await storageExplorer.withFiles(
                 destination: destination,
                 relativePaths: selected
             ) { urls in
                 await send(urls, code)
             }
-            selectedStorageFilePaths = []
+            if accepted {
+                selectedStorageFilePaths.subtract(selected)
+            } else {
+                storageExplorerError = "파일 전송을 접수하지 못했습니다. 진행 중인 전송과 전송 설정을 확인해 주세요."
+            }
         } catch {
             storageExplorerError = Self.storageExplorerMessage(for: error)
         }

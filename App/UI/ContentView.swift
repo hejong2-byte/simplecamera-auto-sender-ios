@@ -136,7 +136,7 @@ struct ContentView: View {
                         guard let recipientCode = selectedFileRecipientCode else { return nil }
                         selectedFileRecipientCode = nil
                         return {
-                            await model.sendSelectedFiles(
+                            _ = await model.sendSelectedFiles(
                                 selected,
                                 recipientCode: recipientCode
                             )

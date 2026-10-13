@@ -352,7 +352,8 @@ struct USBStorageManagementView: View {
     }
 
     private var isBusy: Bool {
-        model.isExportingToUSB
+        transferModel.isManualTransferWorking
+            || model.isExportingToUSB
             || model.isPerformingReceive
             || model.isReceivingFile
             || model.isDeletingStoredFiles

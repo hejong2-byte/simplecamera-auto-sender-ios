@@ -169,8 +169,10 @@ final class TextTransferViewModel: ObservableObject {
             try await persistDraft(draft)
             _ = try await sendMessage(draft.recipient, draft.text)
             messages = try await loadHistory()
-            text = ""
-            try await persistDraft(TextDraft(recipient: recipient, text: ""))
+            if recipient == draft.recipient, text == draft.text {
+                text = ""
+            }
+            try await persistDraft(TextDraft(recipient: recipient, text: text))
             statusMessage = "서버 전달 완료"
         } catch {
             record(error)
