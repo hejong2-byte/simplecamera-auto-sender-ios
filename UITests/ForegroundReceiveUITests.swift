@@ -369,10 +369,7 @@ final class ForegroundReceiveUITests: XCTestCase {
         recipient.tap()
 
         XCTAssertTrue(send.waitForExistence(timeout: 10))
-        let cleared = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "enabled == false"), object: send
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 10), .completed)
+        XCTAssertTrue(app.staticTexts["선택 0개"].waitForExistence(timeout: 10))
         XCTAssertFalse(send.isEnabled, "Prepared files must clear the finished selection")
         XCTAssertTrue(app.staticTexts["선택 0개"].exists)
     }
