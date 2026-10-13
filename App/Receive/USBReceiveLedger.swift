@@ -19,6 +19,7 @@ struct USBReceiveCheckpoint: Codable, Equatable, Sendable {
     var finalFileName: String
     var state: USBReceiveState
     var archiveMode: IPhoneReceiveArchiveMode
+    var verifiedStagedModificationDate: Date?
 
     init(
         deliveryID: UUID,
@@ -40,6 +41,7 @@ struct USBReceiveCheckpoint: Codable, Equatable, Sendable {
         self.finalFileName = finalFileName
         self.state = state
         self.archiveMode = archiveMode
+        self.verifiedStagedModificationDate = nil
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -52,6 +54,7 @@ struct USBReceiveCheckpoint: Codable, Equatable, Sendable {
         case finalFileName
         case state
         case archiveMode
+        case verifiedStagedModificationDate
     }
 
     init(from decoder: Decoder) throws {
@@ -68,6 +71,10 @@ struct USBReceiveCheckpoint: Codable, Equatable, Sendable {
             IPhoneReceiveArchiveMode.self,
             forKey: .archiveMode
         ) ?? .keepArchive
+        verifiedStagedModificationDate = try container.decodeIfPresent(
+            Date.self,
+            forKey: .verifiedStagedModificationDate
+        )
     }
 
     static func safeResumeOffset(

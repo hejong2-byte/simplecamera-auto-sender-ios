@@ -715,118 +715,138 @@ actor USBReceiveService {
             }
         }
         let actualLength = try fileSize(sourceZIP)
-        let resumeOffset = USBReceiveCheckpoint.safeResumeOffset(
-            actualLength: actualLength,
-            confirmedOffset: checkpoint.confirmedOffset,
-            chunkSize: chunkSize
-        )
-        try truncateAndSynchronize(sourceZIP, to: resumeOffset)
-        checkpoint.confirmedOffset = resumeOffset
-        checkpoint.state = .downloading
-        try ledger.save(checkpoint)
-        publish(
-            .downloading,
-            delivery: delivery,
-            currentIndex: currentIndex,
-            totalCount: totalCount,
-            completedCount: completedCount,
-            bytesReceived: resumeOffset,
-            startedAt: startedAt
-        )
-        try validateCapacity(
-            at: zipStagingDirectory,
-            requiredBytes: delivery.size - resumeOffset,
-            destination: .iphoneLocal
-        )
+        let stagedModificationDate = try fileManager.attributesOfItem(atPath: sourceZIP.path)[.modificationDate] as? Date
+        var reuseVerifiedArchive = false
+        if actualLength == delivery.size, checkpoint.confirmedOffset == delivery.size {
+            if let verifiedDate = checkpoint.verifiedStagedModificationDate,
+               stagedModificationDate == verifiedDate {
+                reuseVerifiedArchive = true
+            } else {
+                checkpoint.verifiedStagedModificationDate = nil
+                guard try fileMatches(sourceZIP, size: delivery.size, sha256: delivery.sha256) else {
+                    checkpoint.state = .failed
+                    try ledger.save(checkpoint)
+                    throw USBReceiveServiceError.shaMismatch
+                }
+                reuseVerifiedArchive = true
+            }
+        }
+        if !reuseVerifiedArchive {
+            checkpoint.verifiedStagedModificationDate = nil
+            let resumeOffset = USBReceiveCheckpoint.safeResumeOffset(
+                actualLength: actualLength,
+                confirmedOffset: checkpoint.confirmedOffset,
+                chunkSize: chunkSize
+            )
+            try truncateAndSynchronize(sourceZIP, to: resumeOffset)
+            checkpoint.confirmedOffset = resumeOffset
+            checkpoint.state = .downloading
+            try ledger.save(checkpoint)
+            publish(
+                .downloading,
+                delivery: delivery,
+                currentIndex: currentIndex,
+                totalCount: totalCount,
+                completedCount: completedCount,
+                bytesReceived: resumeOffset,
+                startedAt: startedAt
+            )
+            try validateCapacity(
+                at: zipStagingDirectory,
+                requiredBytes: delivery.size - resumeOffset,
+                destination: .iphoneLocal
+            )
 
-        var hasher = SHA256()
-        try hashPrefix(of: sourceZIP, length: resumeOffset, into: &hasher)
-        let handle = try FileHandle(forWritingTo: sourceZIP)
-        do {
-            try handle.seek(toOffset: UInt64(resumeOffset))
-            var offset = resumeOffset
-            var lastLease = now()
-            while offset < delivery.size {
-                try Task.checkCancellation()
-                if now().timeIntervalSince(lastLease) >= 120 {
-                    _ = try await client.lease(
+            var hasher = SHA256()
+            try hashPrefix(of: sourceZIP, length: resumeOffset, into: &hasher)
+            let handle = try FileHandle(forWritingTo: sourceZIP)
+            do {
+                try handle.seek(toOffset: UInt64(resumeOffset))
+                var offset = resumeOffset
+                var lastLease = now()
+                while offset < delivery.size {
+                    try Task.checkCancellation()
+                    if now().timeIntervalSince(lastLease) >= 120 {
+                        _ = try await client.lease(
+                            receiverID: credentials.identity.receiverID,
+                            deliveryID: delivery.deliveryID,
+                            receiveSecret: credentials.secret,
+                            mode: .foreground
+                        )
+                        lastLease = now()
+                    }
+                    let end = min(offset + chunkSize - 1, delivery.size - 1)
+                    let chunk = try await client.range(
                         receiverID: credentials.identity.receiverID,
                         deliveryID: delivery.deliveryID,
                         receiveSecret: credentials.secret,
-                        mode: .foreground
+                        start: offset,
+                        end: end
                     )
-                    lastLease = now()
-                }
-                let end = min(offset + chunkSize - 1, delivery.size - 1)
-                let chunk = try await client.range(
-                    receiverID: credentials.identity.receiverID,
-                    deliveryID: delivery.deliveryID,
-                    receiveSecret: credentials.secret,
-                    start: offset,
-                    end: end
-                )
-                guard chunk.statusCode == 206 else {
-                    try handle.truncate(atOffset: 0)
+                    guard chunk.statusCode == 206 else {
+                        try handle.truncate(atOffset: 0)
+                        try handle.synchronize()
+                        checkpoint.confirmedOffset = 0
+                        try ledger.save(checkpoint)
+                        throw USBReceiveServiceError.unexpectedRangeStatus(chunk.statusCode)
+                    }
+                    try USBReceiveIntegrity.validateRange(
+                        statusCode: chunk.statusCode,
+                        contentRange: chunk.contentRange,
+                        contentLength: chunk.contentLength,
+                        expectedStart: offset,
+                        expectedEnd: end,
+                        totalBytes: delivery.size
+                    )
+                    guard Int64(chunk.data.count) == end - offset + 1 else {
+                        throw USBReceiveServiceError.sizeMismatch
+                    }
+                    try handle.write(contentsOf: chunk.data)
                     try handle.synchronize()
-                    checkpoint.confirmedOffset = 0
+                    hasher.update(data: chunk.data)
+                    offset += Int64(chunk.data.count)
+                    checkpoint.confirmedOffset = offset
                     try ledger.save(checkpoint)
-                    throw USBReceiveServiceError.unexpectedRangeStatus(chunk.statusCode)
+                    publish(
+                        .downloading,
+                        delivery: delivery,
+                        currentIndex: currentIndex,
+                        totalCount: totalCount,
+                        completedCount: completedCount,
+                        bytesReceived: offset,
+                        startedAt: startedAt
+                    )
                 }
-                try USBReceiveIntegrity.validateRange(
-                    statusCode: chunk.statusCode,
-                    contentRange: chunk.contentRange,
-                    contentLength: chunk.contentLength,
-                    expectedStart: offset,
-                    expectedEnd: end,
-                    totalBytes: delivery.size
-                )
-                guard Int64(chunk.data.count) == end - offset + 1 else {
-                    throw USBReceiveServiceError.sizeMismatch
-                }
-                try handle.write(contentsOf: chunk.data)
-                try handle.synchronize()
-                hasher.update(data: chunk.data)
-                offset += Int64(chunk.data.count)
-                checkpoint.confirmedOffset = offset
-                try ledger.save(checkpoint)
-                publish(
-                    .downloading,
-                    delivery: delivery,
-                    currentIndex: currentIndex,
-                    totalCount: totalCount,
-                    completedCount: completedCount,
-                    bytesReceived: offset,
-                    startedAt: startedAt
-                )
+                try handle.close()
+            } catch {
+                try? handle.close()
+                throw error
             }
-            try handle.close()
-        } catch {
-            try? handle.close()
-            throw error
+
+            checkpoint.state = .verifying
+            try ledger.save(checkpoint)
+            publish(
+                .verifying,
+                delivery: delivery,
+                currentIndex: currentIndex,
+                totalCount: totalCount,
+                completedCount: completedCount,
+                bytesReceived: delivery.size,
+                startedAt: startedAt
+            )
+            guard try fileSize(sourceZIP) == delivery.size else {
+                checkpoint.state = .failed
+                try ledger.save(checkpoint)
+                throw USBReceiveServiceError.sizeMismatch
+            }
+            guard Self.hex(hasher.finalize()) == delivery.sha256.lowercased() else {
+                checkpoint.state = .failed
+                try ledger.save(checkpoint)
+                throw USBReceiveServiceError.shaMismatch
+            }
         }
 
-        checkpoint.state = .verifying
-        try ledger.save(checkpoint)
-        publish(
-            .verifying,
-            delivery: delivery,
-            currentIndex: currentIndex,
-            totalCount: totalCount,
-            completedCount: completedCount,
-            bytesReceived: delivery.size,
-            startedAt: startedAt
-        )
-        guard try fileSize(sourceZIP) == delivery.size else {
-            checkpoint.state = .failed
-            try ledger.save(checkpoint)
-            throw USBReceiveServiceError.sizeMismatch
-        }
-        guard Self.hex(hasher.finalize()) == delivery.sha256.lowercased() else {
-            checkpoint.state = .failed
-            try ledger.save(checkpoint)
-            throw USBReceiveServiceError.shaMismatch
-        }
-
+        checkpoint.verifiedStagedModificationDate = try fileManager.attributesOfItem(atPath: sourceZIP.path)[.modificationDate] as? Date
         checkpoint.state = .finalizing
         try ledger.save(checkpoint)
         let commit: USBZIPCommit

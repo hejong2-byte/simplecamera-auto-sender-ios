@@ -8,7 +8,7 @@ final class USBReceiveLedgerTests: XCTestCase {
             .appendingPathComponent("usb-receive-ledger.json")
         let ledger = try USBReceiveLedger(fileURL: fileURL)
         let deliveryID = UUID()
-        let checkpoint = USBReceiveCheckpoint(
+        var checkpoint = USBReceiveCheckpoint(
             deliveryID: deliveryID,
             fileName: "업무자료.zip",
             sha256: String(repeating: "a", count: 64),
@@ -18,6 +18,7 @@ final class USBReceiveLedgerTests: XCTestCase {
             finalFileName: "업무자료.zip",
             state: .downloading
         )
+        checkpoint.verifiedStagedModificationDate = Date(timeIntervalSince1970: 123)
 
         try ledger.save(checkpoint)
         let reopened = try USBReceiveLedger(fileURL: fileURL)
@@ -94,6 +95,9 @@ final class USBReceiveLedgerTests: XCTestCase {
         XCTAssertEqual(
             try USBReceiveLedger(fileURL: legacyURL).allCheckpoints().first?.archiveMode,
             .keepArchive
+        )
+        XCTAssertNil(
+            try USBReceiveLedger(fileURL: legacyURL).allCheckpoints().first?.verifiedStagedModificationDate
         )
     }
 
