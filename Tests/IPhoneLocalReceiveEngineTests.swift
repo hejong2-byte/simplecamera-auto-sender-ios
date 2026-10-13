@@ -11,6 +11,33 @@ private final class LocalReceiveNotificationEventRecorder: @unchecked Sendable {
 }
 
 final class IPhoneLocalReceiveEngineTests: XCTestCase {
+    func testInitialSchedulingPreservesCompletionDuringLeaseOrScheduleAwait() async throws {
+        for pauseAtLease in [true, false] {
+            let payload = Data("completed during initial scheduling".utf8)
+            let context = try makeContext(payloads: ["initial.txt": payload])
+            let delivery = try XCTUnwrap(context.client.deliveries().first)
+            let entered = expectation(description: pauseAtLease ? "Initial lease entered" : "Initial schedule entered")
+            let gate = LocalReceiveEnumerationGate(entered: entered)
+            if pauseAtLease { context.client.setLeaseGate(gate) }
+            else { await context.scheduler.setScheduleGate(gate) }
+            let discovery = Task { try await context.engine.discoverAndSchedule() }
+            await fulfillment(of: [entered], timeout: 2)
+            let staging = context.catalog.stagingDirectory.appendingPathComponent("initial.download")
+            try payload.write(to: staging)
+            await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+            let completed = try XCTUnwrap(context.jobs.job(for: delivery.deliveryID))
+            XCTAssertEqual(completed.stage, .completed)
+            await gate.open()
+            try await discovery.value
+
+            XCTAssertEqual(context.jobs.job(for: delivery.deliveryID), completed)
+            let scheduled = await context.scheduler.scheduledIDs()
+            XCTAssertTrue(scheduled.isEmpty, "Initial scheduling must preserve callback advancement across its awaits")
+            XCTAssertEqual(context.client.acks().count, 1)
+            XCTAssertEqual(try Data(contentsOf: context.catalog.receivedDirectory.appendingPathComponent("initial.txt")), payload)
+        }
+    }
+
     func testRecoveryPreservesCompletionDuringLeaseOrScheduleAwait() async throws {
         for pauseAtLease in [true, false] {
             let payload = Data("completed during recovery".utf8)
