@@ -20,7 +20,7 @@ final class USBReceiverStoredFileSharingTests: XCTestCase {
         do {
             let archive = try Archive(url: url, accessMode: .create)
             for index in 0..<count {
-                try archive.addEntry(with: "file-\(index).bin", type: .file, uncompressedSize: 1) { _, _ in
+                try archive.addEntry(with: "file-\(index).bin", type: .file, uncompressedSize: Int64(1)) { _, _ in
                     Data([1])
                 }
             }

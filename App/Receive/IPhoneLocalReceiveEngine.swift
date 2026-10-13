@@ -196,6 +196,10 @@ actor IPhoneLocalReceiveEngine: IPhoneReceiveDownloadSink {
         }
     }
 
+    func retryFailedDelivery(deliveryID: UUID) async throws {
+        // Behavior is supplied after the explicit retry regression is observed RED.
+    }
+
     func restore() async {
         do {
             let jobs = try jobStore.load().jobs

@@ -11,6 +11,52 @@ private final class LocalReceiveNotificationEventRecorder: @unchecked Sendable {
 }
 
 final class IPhoneLocalReceiveEngineTests: XCTestCase {
+    func testExplicitRetryAfterTimeoutSchedulesSameDeliveryAndCompletes() async throws {
+        let payload = Data("retry me".utf8)
+        let context = try makeContext(payloads: ["retry.txt": payload])
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        await context.scheduler.cancel(deliveryID: delivery.deliveryID)
+        await context.engine.downloadFailed(deliveryID: delivery.deliveryID, error: URLError(.timedOut))
+        XCTAssertEqual(context.jobs.job(for: delivery.deliveryID)?.stage, .failed)
+        try await context.engine.discoverAndSchedule()
+        let automatic = await context.scheduler.scheduledIDs()
+        XCTAssertTrue(automatic.isEmpty, "A transient failed job still requires an explicit retry")
+
+        try await context.engine.retryFailedDelivery(deliveryID: delivery.deliveryID)
+
+        let retried = await context.scheduler.scheduledIDs()
+        XCTAssertEqual(retried, [delivery.deliveryID])
+        XCTAssertEqual(context.jobs.job(for: delivery.deliveryID)?.stage, .downloading)
+        let staging = context.catalog.stagingDirectory.appendingPathComponent("retry.download")
+        try payload.write(to: staging)
+        await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+        XCTAssertEqual(context.jobs.job(for: delivery.deliveryID)?.stage, .completed)
+        XCTAssertEqual(context.client.acks().count, 1)
+        XCTAssertEqual(try Data(contentsOf: context.catalog.receivedDirectory.appendingPathComponent("retry.txt")), payload)
+    }
+
+    func testIntegrityFailureRemainsFailedAcrossForegroundPollAndRestore() async throws {
+        let context = try makeContext(payloads: ["sha.txt": Data("good".utf8)])
+        try await context.engine.discoverAndSchedule()
+        let delivery = try XCTUnwrap(context.client.deliveries().first)
+        await context.scheduler.cancel(deliveryID: delivery.deliveryID)
+        let staging = context.catalog.stagingDirectory.appendingPathComponent("bad.download")
+        let corrupt = Data("evil".utf8)
+        try corrupt.write(to: staging)
+        await context.engine.downloadFinished(deliveryID: delivery.deliveryID, stagingURL: staging)
+
+        try await context.engine.discoverAndSchedule()
+        await context.engine.restore()
+
+        XCTAssertEqual(context.jobs.job(for: delivery.deliveryID)?.stage, .failed)
+        let scheduled = await context.scheduler.scheduledIDs()
+        XCTAssertTrue(scheduled.isEmpty)
+        XCTAssertTrue(context.client.acks().isEmpty)
+        XCTAssertEqual(try Data(contentsOf: staging), corrupt)
+        XCTAssertTrue(try context.catalog.refresh().isEmpty)
+    }
+
     func testForegroundPollRetriesPendingAckWithoutRedownloadOrDuplicatePhotoImport() async throws {
         let payload = Data("photo".utf8)
         let recorder = ReceivedMediaSaveRecorder()
@@ -54,7 +100,7 @@ final class IPhoneLocalReceiveEngineTests: XCTestCase {
         XCTAssertEqual(context.client.acks().count, 1)
         let scheduled = await context.scheduler.scheduledIDs()
         XCTAssertTrue(scheduled.isEmpty, "A complete staging file must be verified before another download is scheduled")
-        XCTAssertEqual(try Data(contentsOf: context.catalog.receivedDirectory.appendingPathComponent("orphan.txt")), payload)
+        XCTAssertEqual(try? Data(contentsOf: context.catalog.receivedDirectory.appendingPathComponent("orphan.txt")), payload)
     }
 
     func testProgressBurstIsLiveButDoesNotPersistEveryCallbackAndFailureFlushesLatestBytes() async throws {

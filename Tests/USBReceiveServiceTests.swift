@@ -929,6 +929,14 @@ private final class InterruptFirstSharedZIPCopyFileManager: FileManager, @unchec
     private(set) var observedStagedModificationDate: Date?
     private(set) var extractionCount = 0
 
+    override func attributesOfItem(atPath path: String) throws -> [FileAttributeKey: Any] {
+        let attributes = try super.attributesOfItem(atPath: path)
+        if path == stagedZIP?.path {
+            observedStagedModificationDate = attributes[.modificationDate] as? Date
+        }
+        return attributes
+    }
+
     override func createDirectory(at url: URL, withIntermediateDirectories createIntermediates: Bool,
                                   attributes: [FileAttributeKey: Any]? = nil) throws {
         if url.lastPathComponent.hasPrefix("extract-") { extractionCount += 1 }
@@ -941,8 +949,6 @@ private final class InterruptFirstSharedZIPCopyFileManager: FileManager, @unchec
             if !interrupted {
                 interrupted = true
                 withUnsafeCurrentTask { $0?.cancel() }
-            } else if let stagedZIP {
-                observedStagedModificationDate = try? stagedZIP.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
             }
         }
         return created

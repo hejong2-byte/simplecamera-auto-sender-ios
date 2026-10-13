@@ -25,6 +25,13 @@ jobs:
             -destination "platform=iOS Simulator,id=${DEVICE_ID}" -parallel-testing-enabled NO \
             -resultBundlePath build/AuditUnitTests.xcresult -only-testing:SimpleCameraAutoSenderTests \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/audit-unit.log
+      - name: Upload unit log immediately
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iOS-audit-unit-log
+          path: build/audit-unit.log
+          retention-days: 3
       - name: Settings support UI regressions
         if: ${{ !cancelled() }}
         shell: bash
